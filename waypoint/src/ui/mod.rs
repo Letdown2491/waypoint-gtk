@@ -32,9 +32,9 @@ pub struct MainWindow {
     snapshot_manager: Rc<RefCell<SnapshotManager>>,
     snapshot_list: ListBox,
     compare_btn: Button,
-    search_entry: SearchEntry,
-    match_label: Label,
-    date_filter: Rc<RefCell<DateFilter>>,
+    _search_entry: SearchEntry,
+    _match_label: Label,
+    _date_filter: Rc<RefCell<DateFilter>>,
 }
 
 impl MainWindow {
@@ -152,9 +152,9 @@ impl MainWindow {
             snapshot_manager: snapshot_manager.clone(),
             snapshot_list: snapshot_list.clone(),
             compare_btn: compare_btn.clone(),
-            search_entry: search_entry.clone(),
-            match_label: match_label.clone(),
-            date_filter: date_filter.clone(),
+            _search_entry: search_entry.clone(),
+            _match_label: match_label.clone(),
+            _date_filter: date_filter.clone(),
         };
 
         // Load snapshots and update button states
