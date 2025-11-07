@@ -1,0 +1,225 @@
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+
+use crate::packages::Package;
+
+/// Metadata for a snapshot
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub id: String,
+    pub name: String,
+    pub timestamp: DateTime<Utc>,
+    pub path: PathBuf,
+    pub description: Option<String>,
+    pub kernel_version: Option<String>,
+    pub package_count: Option<usize>,
+    pub size_bytes: Option<u64>,
+    /// List of installed packages at time of snapshot
+    #[serde(default)]
+    pub packages: Vec<Package>,
+    /// List of subvolumes included in this snapshot (mount points)
+    #[serde(default)]
+    pub subvolumes: Vec<PathBuf>,
+}
+
+impl Snapshot {
+    /// Create a new snapshot with timestamp-based ID
+    #[allow(dead_code)]
+    pub fn new(name: String, path: PathBuf) -> Self {
+        let timestamp = Utc::now();
+        let id = format!("snapshot-{}", timestamp.format("%Y%m%d-%H%M%S"));
+
+        Self {
+            id,
+            name,
+            timestamp,
+            path,
+            description: None,
+            kernel_version: Self::get_kernel_version(),
+            package_count: None,
+            size_bytes: None,
+            packages: Vec::new(),
+            subvolumes: vec![PathBuf::from("/")],
+        }
+    }
+
+    /// Set the packages for this snapshot
+    #[allow(dead_code)]
+    pub fn with_packages(mut self, packages: Vec<Package>) -> Self {
+        self.package_count = Some(packages.len());
+        self.packages = packages;
+        self
+    }
+
+    /// Get current kernel version
+    #[allow(dead_code)]
+    fn get_kernel_version() -> Option<String> {
+        fs::read_to_string("/proc/version")
+            .ok()
+            .and_then(|v| v.split_whitespace().nth(2).map(String::from))
+    }
+
+    /// Format timestamp for display
+    pub fn format_timestamp(&self) -> String {
+        self.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
+    }
+
+    /// Format size for display
+    #[allow(dead_code)]
+    pub fn format_size(&self) -> String {
+        match self.size_bytes {
+            Some(bytes) => format_bytes(bytes),
+            None => "Unknown".to_string(),
+        }
+    }
+}
+
+/// Format bytes to human-readable string
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+
+    format!("{:.2} {}", size, UNITS[unit_idx])
+}
+
+/// Manage snapshot metadata persistence
+pub struct SnapshotManager {
+    data_dir: PathBuf,
+}
+
+impl SnapshotManager {
+    /// Create a new snapshot manager
+    pub fn new() -> Result<Self> {
+        let data_dir = dirs::data_local_dir()
+            .context("Failed to get local data directory")?
+            .join("waypoint");
+
+        fs::create_dir_all(&data_dir)
+            .context("Failed to create data directory")?;
+
+        Ok(Self { data_dir })
+    }
+
+    /// Get path to snapshots metadata file
+    fn metadata_path(&self) -> PathBuf {
+        self.data_dir.join("snapshots.json")
+    }
+
+    /// Load all snapshots from disk
+    pub fn load_snapshots(&self) -> Result<Vec<Snapshot>> {
+        let path = self.metadata_path();
+
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = fs::read_to_string(&path)
+            .context("Failed to read snapshots metadata")?;
+
+        let snapshots: Vec<Snapshot> = serde_json::from_str(&content)
+            .context("Failed to parse snapshots metadata")?;
+
+        Ok(snapshots)
+    }
+
+    /// Save snapshots to disk
+    #[allow(dead_code)]
+    pub fn save_snapshots(&self, snapshots: &[Snapshot]) -> Result<()> {
+        let path = self.metadata_path();
+        let content = serde_json::to_string_pretty(snapshots)
+            .context("Failed to serialize snapshots")?;
+
+        fs::write(&path, content)
+            .context("Failed to write snapshots metadata")?;
+
+        Ok(())
+    }
+
+    /// Add a new snapshot
+    #[allow(dead_code)]
+    pub fn add_snapshot(&self, snapshot: Snapshot) -> Result<()> {
+        let mut snapshots = self.load_snapshots()?;
+        snapshots.push(snapshot);
+        self.save_snapshots(&snapshots)
+    }
+
+    /// Remove a snapshot by ID
+    #[allow(dead_code)]
+    pub fn remove_snapshot(&self, id: &str) -> Result<()> {
+        let mut snapshots = self.load_snapshots()?;
+        snapshots.retain(|s| s.id != id);
+        self.save_snapshots(&snapshots)
+    }
+
+    /// Get snapshot by ID
+    pub fn get_snapshot(&self, id: &str) -> Result<Option<Snapshot>> {
+        let snapshots = self.load_snapshots()?;
+        Ok(snapshots.into_iter().find(|s| s.id == id))
+    }
+
+    /// Apply retention policy and get list of snapshots that should be deleted
+    pub fn get_snapshots_to_cleanup(&self) -> Result<Vec<String>> {
+        use crate::retention::RetentionPolicy;
+
+        let policy = RetentionPolicy::load()?;
+        let snapshots = self.load_snapshots()?;
+        let to_delete = policy.apply(&snapshots);
+
+        Ok(to_delete)
+    }
+
+    /// Get summary statistics about snapshots
+    pub fn get_statistics(&self) -> Result<SnapshotStatistics> {
+        let snapshots = self.load_snapshots()?;
+
+        let total_count = snapshots.len();
+        let total_size = snapshots.iter()
+            .filter_map(|s| s.size_bytes)
+            .sum();
+
+        // Calculate age of oldest snapshot
+        let oldest_age_days = snapshots.iter()
+            .map(|s| {
+                let age = chrono::Utc::now().signed_duration_since(s.timestamp);
+                age.num_days()
+            })
+            .max()
+            .unwrap_or(0);
+
+        Ok(SnapshotStatistics {
+            total_count,
+            total_size,
+            oldest_age_days,
+        })
+    }
+}
+
+/// Statistics about all snapshots
+#[derive(Debug, Clone)]
+pub struct SnapshotStatistics {
+    pub total_count: usize,
+    pub total_size: u64,
+    pub oldest_age_days: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(512), "512.00 B");
+        assert_eq!(format_bytes(1024), "1.00 KiB");
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MiB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GiB");
+    }
+}

@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=com.voidlinux.waypoint
+Exec=/usr/bin/waypoint-helper
+User=root
+SystemdService=waypoint-helper.service

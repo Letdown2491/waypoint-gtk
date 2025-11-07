@@ -1,0 +1,161 @@
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Information about a Btrfs subvolume
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SubvolumeInfo {
+    /// Mount point (e.g., "/", "/home")
+    pub mount_point: PathBuf,
+    /// Subvolume path relative to btrfs root (e.g., "@", "@home")
+    pub subvol_path: String,
+    /// Subvolume ID
+    pub id: u64,
+    /// User-friendly name for display
+    pub display_name: String,
+}
+
+impl SubvolumeInfo {
+    pub fn new(mount_point: PathBuf, subvol_path: String, id: u64) -> Self {
+        let display_name = if mount_point == Path::new("/") {
+            "Root filesystem (/)".to_string()
+        } else {
+            format!("{} ({})",
+                mount_point.display(),
+                mount_point.display()
+            )
+        };
+
+        Self {
+            mount_point,
+            subvol_path,
+            id,
+            display_name,
+        }
+    }
+}
+
+/// Detect all Btrfs subvolumes mounted on the system
+pub fn detect_mounted_subvolumes() -> Result<Vec<SubvolumeInfo>> {
+    let mut subvolumes = Vec::new();
+
+    // Read /proc/mounts to find btrfs mounts
+    let mounts = std::fs::read_to_string("/proc/mounts")
+        .context("Failed to read /proc/mounts")?;
+
+    for line in mounts.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 4 {
+            continue;
+        }
+
+        let mount_point = parts[1];
+        let fs_type = parts[2];
+        let options = parts[3];
+
+        // Only process btrfs filesystems
+        if fs_type != "btrfs" {
+            continue;
+        }
+
+        // Extract subvolume path from mount options
+        let subvol_path = options
+            .split(',')
+            .find_map(|opt| {
+                if opt.starts_with("subvol=") {
+                    Some(opt.trim_start_matches("subvol=").to_string())
+                } else if opt.starts_with("subvolid=") {
+                    None // We'll get the path via btrfs command
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "/".to_string());
+
+        // Get subvolume ID
+        if let Ok(id) = get_subvolume_id(Path::new(mount_point)) {
+            let subvol_info = SubvolumeInfo::new(
+                PathBuf::from(mount_point),
+                subvol_path,
+                id,
+            );
+            subvolumes.push(subvol_info);
+        }
+    }
+
+    // Sort by mount point for consistent ordering
+    subvolumes.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
+
+    Ok(subvolumes)
+}
+
+/// Get the subvolume ID for a given path
+fn get_subvolume_id(path: &Path) -> Result<u64> {
+    let output = Command::new("btrfs")
+        .arg("subvolume")
+        .arg("show")
+        .arg(path)
+        .output()
+        .context("Failed to run btrfs subvolume show")?;
+
+    if !output.status.success() {
+        anyhow::bail!("btrfs subvolume show failed");
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+
+    // Look for line like "Subvolume ID: 256"
+    for line in output_str.lines() {
+        if line.trim().starts_with("Subvolume ID:") {
+            if let Some(id_str) = line.split(':').nth(1) {
+                let id: u64 = id_str.trim().parse()
+                    .context("Failed to parse subvolume ID")?;
+                return Ok(id);
+            }
+        }
+    }
+
+    anyhow::bail!("Could not find subvolume ID in btrfs output")
+}
+
+/// List all subvolumes in a Btrfs filesystem (for reference/debugging)
+#[allow(dead_code)]
+pub fn list_all_subvolumes(path: &Path) -> Result<Vec<String>> {
+    let output = Command::new("btrfs")
+        .arg("subvolume")
+        .arg("list")
+        .arg(path)
+        .output()
+        .context("Failed to run btrfs subvolume list")?;
+
+    if !output.status.success() {
+        anyhow::bail!("btrfs subvolume list failed");
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let subvolumes: Vec<String> = output_str
+        .lines()
+        .filter_map(|line| {
+            // Format: "ID 256 gen 123 top level 5 path @"
+            line.split_whitespace()
+                .last()
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    Ok(subvolumes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_subvolume_display_name() {
+        let root = SubvolumeInfo::new(PathBuf::from("/"), "@".to_string(), 256);
+        assert_eq!(root.display_name, "Root filesystem (/)");
+
+        let home = SubvolumeInfo::new(PathBuf::from("/home"), "@home".to_string(), 257);
+        assert!(home.display_name.contains("/home"));
+    }
+}

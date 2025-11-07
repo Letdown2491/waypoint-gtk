@@ -1,0 +1,28 @@
+[package]
+name = "waypoint-helper"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Privileged helper for Waypoint snapshot operations"
+
+[[bin]]
+name = "waypoint-helper"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+
+# D-Bus service and Polkit authorization
+zbus = { version = "4.0", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+# System utilities
+libc = "0.2"
+
+# Shared types
+waypoint-common = { path = "../waypoint-common" }
