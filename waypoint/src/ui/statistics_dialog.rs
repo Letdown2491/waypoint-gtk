@@ -149,6 +149,22 @@ pub fn show_statistics_dialog(parent: &adw::ApplicationWindow, manager: &Rc<RefC
     policy_row.set_subtitle(&retention.description());
     let policy_icon = gtk::Image::from_icon_name("emblem-system-symbolic");
     policy_row.add_prefix(&policy_icon);
+
+    // Add Edit Policy button
+    let edit_policy_btn = Button::with_label("Edit Policy");
+    edit_policy_btn.set_valign(gtk::Align::Center);
+    edit_policy_btn.add_css_class("flat");
+
+    let parent_for_edit = parent.clone();
+    let manager_for_edit = manager.clone();
+    let dialog_for_edit = dialog.clone();
+    edit_policy_btn.connect_clicked(move |_| {
+        // Close the statistics dialog and open the editor
+        dialog_for_edit.close();
+        super::retention_editor_dialog::show_retention_editor(&parent_for_edit, &manager_for_edit);
+    });
+
+    policy_row.add_suffix(&edit_policy_btn);
     retention_group.add(&policy_row);
 
     // Show which snapshots would be cleaned up

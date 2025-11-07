@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Makefile for building and installation
   - Desktop entry file
   - Polkit policy file (infrastructure)
-  - GPL-3.0 license
+  - MIT license
   - Comprehensive README and DEVELOPMENT guides
 
 ### Architecture

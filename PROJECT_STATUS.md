@@ -52,7 +52,7 @@ waypoint-gtk/
 │   └── PROJECT_STATUS.md    # This file
 ├── Cargo.toml               # Dependencies
 ├── Makefile                 # Build automation
-└── LICENSE                  # GPL-3.0
+└── LICENSE                  # MIT
 
 Total: ~979 lines of Rust code + documentation
 ```
@@ -214,7 +214,7 @@ Each row displays:
 - **Issues**: Report bugs or request features
 - **Contributions**: PRs welcome!
 - **Documentation**: Comprehensive guides included
-- **License**: GPL-3.0-or-later
+- **License**: MIT
 
 ---
 

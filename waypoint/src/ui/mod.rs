@@ -4,6 +4,7 @@ mod package_diff_dialog;
 pub mod preferences;
 mod statistics_dialog;
 mod create_snapshot_dialog;
+mod retention_editor_dialog;
 
 use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
