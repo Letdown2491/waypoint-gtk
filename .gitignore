@@ -1,16 +1,26 @@
-# Rust
+# Rust build artifacts
 /target/
 Cargo.lock
 **/*.rs.bk
 *.pdb
 
-# IDE
+# IDE and editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.bak
+.project
+.classpath
+.settings/
 
-# OS
+# OS specific
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Backup files
+*.orig
+*.backup
+*~
