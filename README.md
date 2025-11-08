@@ -1,14 +1,10 @@
 # Waypoint
 
-A GTK-based snapshot and rollback tool for Btrfs filesystems.
-
-**Version:** 0.4.0
-**Status:** Feature-complete and stable
-**Namespace:** tech.geektoshi.waypoint
+A GTK-based snapshot and rollback tool for Btrfs filesystems on Void Linux.
 
 ## Overview
 
-Waypoint provides a simple, user-friendly interface for creating filesystem snapshots (restore points) and managing them. It's designed for Btrfs filesystems on Linux systems (tested on Void Linux), making it easy to:
+Waypoint provides a simple, user-friendly interface for creating filesystem snapshots (restore points) and managing them. It's designed for Btrfs filesystems, making it easy to:
 
 - Create restore points before system upgrades (manual or automatic)
 - Browse and manage existing snapshots
@@ -266,12 +262,12 @@ Each snapshot card shows:
 - Which subvolumes are included
 
 Available actions:
-- **Browse** 📁: Opens the snapshot directory in your file manager
-- **Restore** 🔄: One-click system rollback
+- **Browse**: Opens the snapshot directory in your file manager
+- **Restore**: One-click system rollback
   - Creates automatic backup before restoring
   - Updates Btrfs default subvolume
   - Prompts for reboot
-- **Delete** 🗑️: Remove snapshot with confirmation
+- **Delete**: Remove snapshot with confirmation
 
 ### Advanced Features
 
@@ -306,107 +302,11 @@ Waypoint uses a **privilege-separated architecture** for security:
 - **D-Bus**: Mediates communication between GUI and helper
 - **Polkit**: Handles authentication and authorization
 
-### Technology Stack
-
-- **Rust**: Type-safe systems programming
-- **GTK4 + libadwaita**: Modern GNOME-style UI
-- **D-Bus (zbus)**: Inter-process communication
-- **Btrfs**: Efficient copy-on-write snapshots
-- **XBPS**: Package manager integration
-
-### Project Structure
-
-```
-waypoint-gtk/
-├── waypoint/                  # Main GUI application
-│   ├── src/
-│   │   ├── main.rs           # Application entry point
-│   │   ├── dbus_client.rs    # D-Bus client for talking to helper
-│   │   ├── snapshot.rs       # Snapshot metadata management
-│   │   ├── packages.rs       # Package tracking and diff logic
-│   │   ├── retention.rs      # Retention policy implementation
-│   │   ├── subvolume.rs      # Subvolume detection
-│   │   └── ui/
-│   │       ├── mod.rs        # Main window
-│   │       ├── snapshot_row.rs        # Snapshot list item
-│   │       ├── create_snapshot_dialog.rs
-│   │       ├── package_diff_dialog.rs # Package comparison UI
-│   │       ├── statistics_dialog.rs   # Storage statistics
-│   │       └── preferences.rs         # Subvolume preferences
-│   └── Cargo.toml
-├── waypoint-helper/           # Privileged D-Bus service
-│   ├── src/
-│   │   ├── main.rs           # D-Bus service implementation
-│   │   ├── btrfs.rs          # Btrfs operations (requires root)
-│   │   └── packages.rs       # Package list capture
-│   └── Cargo.toml
-├── waypoint-common/           # Shared types and definitions
-│   ├── src/lib.rs
-│   └── Cargo.toml
-├── data/
-│   ├── tech.geektoshi.waypoint.desktop  # Desktop entry
-│   ├── tech.geektoshi.waypoint.policy   # Polkit policy
-│   └── dbus-1/
-│       ├── tech.geektoshi.waypoint.service  # D-Bus service file
-│       └── tech.geektoshi.waypoint.conf     # D-Bus policy
-├── hooks/
-│   ├── waypoint-pre-upgrade.sh  # XBPS pre-upgrade hook
-│   └── waypoint.conf            # Hook configuration
-├── Makefile               # Build and installation
-└── Cargo.toml            # Workspace definition
-```
-
-## Development Status
-
-### ✅ Completed Phases
-
-**Phase 1-2: Foundation** (v0.1-0.2)
-- Basic snapshot creation, deletion, and browsing
-- GTK4/libadwaita UI with confirmation dialogs
-- Safety checks and error handling
-
-**Phase 3: System Rollback** (v0.2.5)
-- One-click system restore with automatic backups
-- Package state tracking (xbps integration)
-- Package diff viewer
-
-**Phase 4: D-Bus Architecture** (v0.3.0)
-- Privilege-separated architecture
-- D-Bus system service with polkit
-- Secure IPC between GUI and helper
-
-**Phase 5: Multi-Subvolume Support** (v0.3.5)
-- Snapshot multiple Btrfs subvolumes
-- Subvolume preferences dialog
-- Atomic multi-subvolume operations
-
-**Phase 6: XBPS Integration** (v0.4.0)
-- Pre-upgrade hook for automatic snapshots
-- Configurable hook behavior
-- Retention policy system
-
-**Phase 7: UI Enhancements** (v0.4.0)
-- Search and filter functionality
-- Statistics dashboard
-- Date range filters
-- Enhanced metadata display
-
-### 🚧 Future Enhancements
-
-**Potential Features:**
-- [ ] Retention policy GUI editor
-- [ ] Scheduled automatic snapshots (cron/timer)
-- [ ] Snapshot tagging system
-- [ ] File-level diff viewer
-- [ ] GRUB integration for boot-time recovery
-- [ ] Snapshot export/import
-- [ ] Non-Btrfs fallback (rsync-based)
-
 ## Known Limitations
 
 - **Btrfs Only**: Currently only supports Btrfs filesystems. Non-Btrfs fallback is a potential future enhancement.
 - **Read-Only Snapshots**: Snapshots are created as read-only for safety (by design).
-- **Void Linux Focused**: Designed specifically for Void Linux and XBPS package manager. May work on other distros with Btrfs but untested.
+- **Void Linux Focused**: Designed specifically for Void Linux and XBPS package manager. May work on other distros with Btrfs but would require code updates due to XBPS and runit integrations.
 - **System Reboot Required**: Rollback requires a reboot to boot into the restored snapshot.
 - **No File-Level Restore**: Currently restores entire snapshots, not individual files (you can manually browse and copy files).
 
@@ -453,27 +353,3 @@ If you get "Authorization failed" or "Permission denied" errors:
   ls -l /usr/share/polkit-1/actions/tech.geektoshi.waypoint.policy
   ```
 - Verify your user has admin privileges
-
-### Old Namespace Files
-
-If you're upgrading from an older version, remove old namespace files:
-
-```bash
-sudo rm -f /etc/dbus-1/system.d/com.voidlinux.waypoint.conf
-sudo rm -f /usr/share/polkit-1/actions/com.voidlinux.waypoint.policy
-sudo rm -f /usr/share/dbus-1/system-services/com.voidlinux.waypoint.service
-sudo rm -f /usr/share/applications/com.voidlinux.waypoint.desktop
-sudo sv reload dbus
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Credits
-
-Developed for Void Linux users who want a simple, reliable way to manage system snapshots.
