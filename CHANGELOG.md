@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Unified snapshot list refresh logic
   - Reduced code duplication across refresh functions
 - Updated README with scheduler documentation and CLI examples
+- Replaced Makefile with comprehensive `setup.sh` installation script
+  - Automatic dependency checking and installation
+  - Single-command installation and uninstallation
+  - Better error handling and user feedback
 
 ### Fixed
 - **Security**: Polkit policy now uses correct `auth_admin` action (was `auth_admin_keep`)

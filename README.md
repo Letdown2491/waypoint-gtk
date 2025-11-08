@@ -68,27 +68,17 @@ Waypoint provides a simple, user-friendly interface for creating filesystem snap
   sudo xbps-install -S base-devel pkg-config gtk4-devel libadwaita-devel
   ```
 
-## Building
+## Installation
+
+### Production Installation
 
 ```bash
 # Clone the repository
 git clone <repository-url>
 cd waypoint-gtk
 
-# Build all binaries (waypoint + waypoint-helper)
-make release
-
-# Or using cargo directly
-cargo build --release
-```
-
-## Installation
-
-### Using Make (Recommended)
-
-```bash
-# Build and install everything
-sudo make install
+# Install everything (builds and installs system-wide)
+./setup.sh install
 
 # This installs:
 # - /usr/bin/waypoint (GUI application)
@@ -100,34 +90,27 @@ sudo make install
 # - Runit scheduler service (optional, enable manually)
 ```
 
-### Manual Installation
+### Development Setup
 
 ```bash
+# Install dependencies (Void Linux)
+sudo xbps-install -S base-devel pkg-config gtk4-devel libadwaita-devel
+
+# Build debug version
+cargo build
+
+# Build release version
 cargo build --release
 
-# Install binaries
-sudo install -Dm755 target/release/waypoint /usr/bin/waypoint
-sudo install -Dm755 target/release/waypoint-helper /usr/bin/waypoint-helper
-sudo install -Dm755 waypoint-cli /usr/bin/waypoint-cli
-
-# Install data files
-sudo install -Dm644 data/tech.geektoshi.waypoint.desktop /usr/share/applications/tech.geektoshi.waypoint.desktop
-sudo install -Dm644 data/tech.geektoshi.waypoint.policy /usr/share/polkit-1/actions/tech.geektoshi.waypoint.policy
-sudo install -Dm644 data/dbus-1/tech.geektoshi.waypoint.service /usr/share/dbus-1/system-services/tech.geektoshi.waypoint.service
-sudo install -Dm644 data/dbus-1/tech.geektoshi.waypoint.conf /etc/dbus-1/system.d/tech.geektoshi.waypoint.conf
-
-# Install XBPS hook (optional)
-sudo install -Dm755 hooks/waypoint-pre-upgrade.sh /etc/xbps.d/waypoint-pre-upgrade.sh
-sudo install -Dm644 hooks/waypoint.conf /etc/waypoint/waypoint.conf
-
-# Create metadata directory
-sudo install -dm755 /var/lib/waypoint
+# Run directly (without installing)
+cargo run
 ```
 
 ### Uninstallation
 
 ```bash
-sudo make uninstall
+# Remove Waypoint from the system
+./setup.sh uninstall
 ```
 
 ## Usage
