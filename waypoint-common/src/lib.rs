@@ -77,11 +77,12 @@ impl OperationResult {
 }
 
 /// D-Bus interface constants
-pub const DBUS_SERVICE_NAME: &str = "com.voidlinux.waypoint";
-pub const DBUS_OBJECT_PATH: &str = "/com/voidlinux/waypoint";
-pub const DBUS_INTERFACE_NAME: &str = "com.voidlinux.waypoint.Helper";
+pub const DBUS_SERVICE_NAME: &str = "tech.geektoshi.waypoint";
+pub const DBUS_OBJECT_PATH: &str = "/tech/geektoshi/waypoint";
+pub const DBUS_INTERFACE_NAME: &str = "tech.geektoshi.waypoint.Helper";
 
 /// Polkit action IDs
-pub const POLKIT_ACTION_CREATE: &str = "com.voidlinux.waypoint.create-snapshot";
-pub const POLKIT_ACTION_DELETE: &str = "com.voidlinux.waypoint.delete-snapshot";
-pub const POLKIT_ACTION_RESTORE: &str = "com.voidlinux.waypoint.restore-snapshot";
+pub const POLKIT_ACTION_CREATE: &str = "tech.geektoshi.waypoint.create-snapshot";
+pub const POLKIT_ACTION_DELETE: &str = "tech.geektoshi.waypoint.delete-snapshot";
+pub const POLKIT_ACTION_RESTORE: &str = "tech.geektoshi.waypoint.restore-snapshot";
+pub const POLKIT_ACTION_CONFIGURE: &str = "tech.geektoshi.waypoint.configure-system";

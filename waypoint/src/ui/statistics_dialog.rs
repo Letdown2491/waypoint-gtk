@@ -102,7 +102,11 @@ pub fn show_statistics_dialog(parent: &adw::ApplicationWindow, manager: &Rc<RefC
     let mut sized_snapshots: Vec<_> = snapshots.iter()
         .filter(|s| s.size_bytes.is_some())
         .collect();
-    sized_snapshots.sort_by(|a, b| b.size_bytes.unwrap().cmp(&a.size_bytes.unwrap()));
+    sized_snapshots.sort_by(|a, b| {
+        let a_size = a.size_bytes.unwrap_or(0);
+        let b_size = b.size_bytes.unwrap_or(0);
+        b_size.cmp(&a_size)
+    });
 
     if !sized_snapshots.is_empty() {
         let largest_group = adw::PreferencesGroup::new();
@@ -117,7 +121,7 @@ pub fn show_statistics_dialog(parent: &adw::ApplicationWindow, manager: &Rc<RefC
                 row.set_subtitle(desc);
             }
 
-            let size_label = Label::new(Some(&format_bytes(snapshot.size_bytes.unwrap())));
+            let size_label = Label::new(Some(&format_bytes(snapshot.size_bytes.unwrap_or(0))));
             size_label.add_css_class("dim-label");
             row.add_suffix(&size_label);
 
@@ -197,28 +201,48 @@ pub fn show_statistics_dialog(parent: &adw::ApplicationWindow, manager: &Rc<RefC
     calc_btn.set_valign(gtk::Align::Center);
     calc_btn.add_css_class("suggested-action");
 
+    // Progress spinner (initially hidden)
+    let spinner = gtk::Spinner::new();
+    spinner.set_valign(gtk::Align::Center);
+    spinner.set_visible(false);
+
     // Clone for the button callback
     let dialog_clone = dialog.clone();
     let manager_clone = manager.clone();
+    let spinner_clone = spinner.clone();
+    let calc_button_row_clone = calc_button_row.clone();
     calc_btn.connect_clicked(move |btn| {
-        btn.set_sensitive(false);
-        btn.set_label("Calculating...");
+        btn.set_visible(false);
+        spinner_clone.set_visible(true);
+        spinner_clone.start();
+        calc_button_row_clone.set_subtitle("Calculating disk usage, this may take a while...");
 
-        let btn_clone = btn.clone();
         let dialog_clone2 = dialog_clone.clone();
         let manager_clone2 = manager_clone.clone();
+        let btn_clone = btn.clone();
+        let spinner_clone2 = spinner_clone.clone();
+        let calc_button_row_clone2 = calc_button_row_clone.clone();
 
-        gtk::glib::spawn_future_local(async move {
-            calculate_missing_sizes(&manager_clone2).await;
-            btn_clone.set_sensitive(true);
-            btn_clone.set_label("Calculate");
+        // Run calculation asynchronously
+        glib::spawn_future_local(async move {
+            calculate_missing_sizes_async(&manager_clone2, &calc_button_row_clone2).await;
+
+            // Restore button state
+            spinner_clone2.stop();
+            spinner_clone2.set_visible(false);
+            btn_clone.set_visible(true);
+            calc_button_row_clone2.set_subtitle("Calculate disk usage for snapshots without size data");
 
             // Close and reopen dialog to refresh stats
             dialog_clone2.close();
-            show_statistics_dialog(&dialog_clone2.transient_for().unwrap().downcast().unwrap(), &manager_clone2);
+            if let Some(parent) = dialog_clone2.transient_for()
+                .and_then(|w| w.downcast::<adw::ApplicationWindow>().ok()) {
+                show_statistics_dialog(&parent, &manager_clone2);
+            }
         });
     });
 
+    calc_button_row.add_suffix(&spinner);
     calc_button_row.add_suffix(&calc_btn);
     calc_button_row.set_activatable_widget(Some(&calc_btn));
     maintenance_group.add(&calc_button_row);
@@ -257,8 +281,11 @@ pub fn show_statistics_dialog(parent: &adw::ApplicationWindow, manager: &Rc<RefC
     dialog.present();
 }
 
-/// Calculate sizes for all snapshots that don't have size data
-async fn calculate_missing_sizes(manager: &Rc<RefCell<SnapshotManager>>) {
+/// Calculate sizes for all snapshots that don't have size data (asynchronously)
+async fn calculate_missing_sizes_async(
+    manager: &Rc<RefCell<SnapshotManager>>,
+    progress_row: &adw::ActionRow,
+) {
     let mut snapshots = match manager.borrow().load_snapshots() {
         Ok(s) => s,
         Err(e) => {
@@ -267,23 +294,58 @@ async fn calculate_missing_sizes(manager: &Rc<RefCell<SnapshotManager>>) {
         }
     };
 
+    // Count how many need calculation
+    let total_to_calculate = snapshots.iter().filter(|s| s.size_bytes.is_none()).count();
+
+    if total_to_calculate == 0 {
+        eprintln!("All snapshots already have size data");
+        return;
+    }
+
     let mut updated = false;
     let mut calculated_count = 0;
 
     for snapshot in &mut snapshots {
         if snapshot.size_bytes.is_none() {
             eprintln!("Calculating size for snapshot: {}", snapshot.name);
-            match btrfs::get_snapshot_size(&snapshot.path) {
-                Ok(size) => {
+
+            // Update progress
+            progress_row.set_subtitle(&format!(
+                "Calculating {} ({}/{})...",
+                snapshot.name,
+                calculated_count + 1,
+                total_to_calculate
+            ));
+
+            // Run du command in separate thread to avoid blocking UI
+            let path = snapshot.path.clone();
+            let (sender, receiver) = async_channel::bounded(1);
+
+            std::thread::spawn(move || {
+                let result = btrfs::get_snapshot_size(&path);
+                let _ = sender.send_blocking(result);
+            });
+
+            // Wait for result asynchronously
+            let size_result = receiver.recv().await;
+
+            match size_result {
+                Ok(Ok(size)) => {
                     snapshot.size_bytes = Some(size);
                     updated = true;
                     calculated_count += 1;
                     eprintln!("  Size: {}", format_bytes(size));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     eprintln!("  Failed to calculate size: {}", e);
                 }
+                Err(e) => {
+                    eprintln!("  Channel receive error: {}", e);
+                }
             }
+
+            // Small delay to allow UI updates
+            glib::timeout_future(std::time::Duration::from_millis(10)).await;
         }
     }
 
@@ -293,7 +355,5 @@ async fn calculate_missing_sizes(manager: &Rc<RefCell<SnapshotManager>>) {
         } else {
             eprintln!("Successfully calculated {} snapshot sizes", calculated_count);
         }
-    } else {
-        eprintln!("All snapshots already have size data");
     }
 }

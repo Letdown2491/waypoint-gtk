@@ -5,6 +5,9 @@ pub mod preferences;
 mod statistics_dialog;
 mod create_snapshot_dialog;
 mod retention_editor_dialog;
+mod scheduler_dialog;
+mod toolbar;
+mod snapshot_list;
 
 use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
@@ -13,19 +16,14 @@ use gtk::prelude::*;
 use gtk::{Application, Button, Label, ListBox, Orientation, ScrolledWindow, SearchEntry, ToggleButton};
 use gtk::glib;
 use libadwaita as adw;
+use std::sync::mpsc;
 use adw::prelude::*;
-use snapshot_row::{SnapshotRow, SnapshotAction};
+use snapshot_row::SnapshotAction;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum DateFilter {
-    All,
-    Last7Days,
-    Last30Days,
-    Last90Days,
-}
+use snapshot_list::DateFilter;
 
 pub struct MainWindow {
     window: adw::ApplicationWindow,
@@ -55,7 +53,7 @@ impl MainWindow {
         let (banner, is_btrfs) = Self::create_status_banner();
 
         // Toolbar with buttons
-        let (toolbar, create_btn, compare_btn, statistics_btn, preferences_btn) = Self::create_toolbar();
+        let (toolbar, create_btn, compare_btn, statistics_btn, scheduler_btn, preferences_btn) = toolbar::create_toolbar();
 
         // Disable create button if not on Btrfs
         if !is_btrfs {
@@ -328,11 +326,18 @@ impl MainWindow {
             Self::show_statistics_dialog(&win_clone3, &sm_clone3);
         });
 
-        // Connect preferences button
+        // Connect scheduler button
         let win_clone4 = window.clone();
 
+        scheduler_btn.connect_clicked(move |_| {
+            scheduler_dialog::show_scheduler_dialog(&win_clone4);
+        });
+
+        // Connect preferences button
+        let win_clone5 = window.clone();
+
         preferences_btn.connect_clicked(move |_| {
-            Self::show_preferences_dialog(&win_clone4);
+            Self::show_preferences_dialog(&win_clone5);
         });
 
         window
@@ -373,108 +378,24 @@ impl MainWindow {
         (banner, is_btrfs)
     }
 
-    fn create_toolbar() -> (gtk::Box, Button, Button, Button, Button) {
-        // Use Clamp for toolbar as well (GNOME HIG)
-        let toolbar = gtk::Box::new(Orientation::Horizontal, 12);
-        toolbar.set_margin_top(18);
-        toolbar.set_margin_bottom(12);
-        toolbar.set_margin_start(12);
-        toolbar.set_margin_end(12);
-
-        // Create button with icon
-        let create_btn_content = gtk::Box::new(Orientation::Horizontal, 6);
-        let create_icon = gtk::Image::from_icon_name("document-save-symbolic");
-        let create_label = Label::new(Some("Create Restore Point"));
-        create_btn_content.append(&create_icon);
-        create_btn_content.append(&create_label);
-
-        let create_btn = Button::new();
-        create_btn.set_child(Some(&create_btn_content));
-        create_btn.add_css_class("suggested-action");
-        create_btn.add_css_class("pill");
-
-        toolbar.append(&create_btn);
-
-        // Spacer
-        let spacer = gtk::Box::new(Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        toolbar.append(&spacer);
-
-        // Compare button
-        let compare_btn = Button::builder()
-            .label("Compare Snapshots")
-            .build();
-        compare_btn.add_css_class("flat");
-
-        toolbar.append(&compare_btn);
-
-        // Statistics button
-        let statistics_btn = Button::from_icon_name("view-list-symbolic");
-        statistics_btn.set_tooltip_text(Some("View Statistics"));
-        statistics_btn.add_css_class("flat");
-
-        toolbar.append(&statistics_btn);
-
-        // Preferences button
-        let preferences_btn = Button::from_icon_name("preferences-system-symbolic");
-        preferences_btn.set_tooltip_text(Some("Preferences"));
-        preferences_btn.add_css_class("flat");
-
-        toolbar.append(&preferences_btn);
-
-        (toolbar, create_btn, compare_btn, statistics_btn, preferences_btn)
-    }
-
     fn refresh_snapshot_list(&self) {
-        // Clear existing items
-        while let Some(child) = self.snapshot_list.first_child() {
-            self.snapshot_list.remove(&child);
-        }
+        let window = self.window.clone();
+        let manager = self.snapshot_manager.clone();
+        let list = self.snapshot_list.clone();
+        let compare_btn = self.compare_btn.clone();
 
-        // Load snapshots
-        let snapshots = match self.snapshot_manager.borrow().load_snapshots() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to load snapshots: {}", e);
-                return;
-            }
-        };
-
-        // Update compare button state based on snapshot count
-        if snapshots.len() < 2 {
-            self.compare_btn.set_sensitive(false);
-            self.compare_btn.set_tooltip_text(Some("At least 2 snapshots needed to compare"));
-        } else {
-            self.compare_btn.set_sensitive(true);
-            self.compare_btn.set_tooltip_text(Some("Compare packages between snapshots"));
-        }
-
-        if snapshots.is_empty() {
-            let placeholder = adw::StatusPage::new();
-            placeholder.set_title("No Restore Points");
-            placeholder.set_description(Some("Restore points let you roll back your system to a previous state.\n\nClick \"Create Restore Point\" to save your current system state."));
-            placeholder.set_icon_name(Some("document-save-symbolic"));
-            placeholder.set_vexpand(true);
-
-            self.snapshot_list.append(&placeholder);
-        } else {
-            let window = self.window.clone();
-            let manager = self.snapshot_manager.clone();
-            let list = self.snapshot_list.clone();
-            let compare_btn = self.compare_btn.clone();
-
-            for snapshot in snapshots.iter().rev() {
-                let win_clone = window.clone();
-                let mgr_clone = manager.clone();
-                let list_clone = list.clone();
-                let cmp_btn_clone = compare_btn.clone();
-
-                let row = SnapshotRow::new(snapshot, move |id, action| {
-                    Self::handle_snapshot_action(&win_clone, &mgr_clone, &list_clone, &cmp_btn_clone, &id, action);
-                });
-                self.snapshot_list.append(&row);
-            }
-        }
+        snapshot_list::refresh_snapshot_list_internal(
+            &self.window,
+            &self.snapshot_manager,
+            &self.snapshot_list,
+            &self.compare_btn,
+            None,  // No search filter
+            None,  // No date filter
+            None,  // No match label
+            move |id, action| {
+                Self::handle_snapshot_action(&window, &manager, &list, &compare_btn, id, action);
+            },
+        );
     }
 
     fn refresh_with_filter(
@@ -486,93 +407,23 @@ impl MainWindow {
         search_text: &str,
         date_filter: DateFilter,
     ) {
-        // Clear existing items
-        while let Some(child) = list.first_child() {
-            list.remove(&child);
-        }
+        let window_clone = window.clone();
+        let manager_clone = manager.clone();
+        let list_clone = list.clone();
+        let compare_btn_clone = compare_btn.clone();
 
-        // Load all snapshots
-        let all_snapshots = match manager.borrow().load_snapshots() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to load snapshots: {}", e);
-                return;
-            }
-        };
-
-        // Apply filters
-        let search_lower = search_text.to_lowercase();
-        let now = chrono::Utc::now();
-
-        let filtered_snapshots: Vec<_> = all_snapshots.iter().filter(|snapshot| {
-            // Text filter
-            let text_match = search_text.is_empty() ||
-                snapshot.name.to_lowercase().contains(&search_lower) ||
-                snapshot.description.as_ref()
-                    .map(|d| d.to_lowercase().contains(&search_lower))
-                    .unwrap_or(false);
-
-            // Date filter
-            let age_days = now.signed_duration_since(snapshot.timestamp).num_days();
-            let date_match = match date_filter {
-                DateFilter::All => true,
-                DateFilter::Last7Days => age_days <= 7,
-                DateFilter::Last30Days => age_days <= 30,
-                DateFilter::Last90Days => age_days <= 90,
-            };
-
-            text_match && date_match
-        }).collect();
-
-        // Update match count label
-        if search_text.is_empty() && date_filter == DateFilter::All {
-            match_label.set_text(&format!("{} snapshots", all_snapshots.len()));
-        } else {
-            match_label.set_text(&format!("Showing {} of {} snapshots",
-                filtered_snapshots.len(), all_snapshots.len()));
-        }
-
-        // Update compare button state based on filtered snapshot count
-        if filtered_snapshots.len() < 2 {
-            compare_btn.set_sensitive(false);
-            compare_btn.set_tooltip_text(Some("At least 2 snapshots needed to compare"));
-        } else {
-            compare_btn.set_sensitive(true);
-            compare_btn.set_tooltip_text(Some("Compare packages between snapshots"));
-        }
-
-        // Display filtered snapshots
-        if filtered_snapshots.is_empty() {
-            let placeholder = adw::StatusPage::new();
-            if all_snapshots.is_empty() {
-                placeholder.set_title("No Restore Points");
-                placeholder.set_description(Some("Restore points let you roll back your system to a previous state.\n\nClick \"Create Restore Point\" to save your current system state."));
-            } else {
-                placeholder.set_title("No Matching Snapshots");
-                placeholder.set_description(Some("No snapshots match your search criteria.\n\nTry adjusting your search or filter settings."));
-            }
-            placeholder.set_icon_name(Some("edit-find-symbolic"));
-            placeholder.set_vexpand(true);
-
-            list.append(&placeholder);
-        } else {
-            let window_clone = window.clone();
-            let manager_clone = manager.clone();
-            let list_clone = list.clone();
-            let compare_btn_clone = compare_btn.clone();
-
-            for snapshot in filtered_snapshots.iter().rev() {
-                let win_clone = window_clone.clone();
-                let mgr_clone = manager_clone.clone();
-                let list_clone2 = list_clone.clone();
-                let cmp_btn_clone = compare_btn_clone.clone();
-
-                let row = SnapshotRow::new(snapshot, move |id, action| {
-                    Self::handle_snapshot_action(&win_clone, &mgr_clone, &list_clone2, &cmp_btn_clone, &id, action);
-                });
-                list.append(&row);
-            }
-        }
+        snapshot_list::refresh_snapshot_list_internal(
+            window,
+            manager,
+            list,
+            compare_btn,
+            Some(search_text),
+            Some(date_filter),
+            Some(match_label),
+            move |id, action| {
+                Self::handle_snapshot_action(&window_clone, &manager_clone, &list_clone, &compare_btn_clone, id, action);
+            },
+        );
     }
 
     fn on_create_snapshot(
@@ -657,11 +508,17 @@ impl MainWindow {
         let list_clone = list.clone();
         let manager_clone = manager.clone();
         let compare_btn_clone = compare_btn.clone();
+        let snapshot_name_clone = snapshot_name.clone();
+        let description_clone = description.clone();
 
-        glib::spawn_future_local(async move {
-            // Show loading state
-            dialogs::show_toast(&window_clone, "Creating snapshot...");
+        // Show loading state
+        dialogs::show_toast(&window_clone, "Creating snapshot...");
 
+        // Create channel for thread communication
+        let (sender, receiver) = mpsc::channel();
+
+        // Spawn blocking operation in thread
+        std::thread::spawn(move || {
             // Load subvolume configuration
             let subvolume_paths = preferences::load_config();
             let subvolumes: Vec<String> = subvolume_paths
@@ -670,61 +527,79 @@ impl MainWindow {
                 .collect();
 
             // Connect to D-Bus helper
-            let client = match WaypointHelperClient::new().await {
+            let client = match WaypointHelperClient::new() {
                 Ok(c) => c,
                 Err(e) => {
-                    Self::show_error_dialog(
-                        &window_clone,
-                        "Connection Error",
-                        &format!("Failed to connect to snapshot service: {}\n\nTry: sudo systemctl restart dbus", e)
-                    );
+                    let error = format!("Failed to connect to snapshot service: {}\n\nTry: sudo sv reload dbus", e);
+                    let _ = sender.send((None, Some(("Connection Error".to_string(), error)), vec![]));
                     return;
                 }
             };
 
             // Create snapshot (password prompt happens here)
-            match client.create_snapshot(snapshot_name.clone(), description.clone(), subvolumes.clone()).await {
-                Ok((true, message)) => {
-                    dialogs::show_toast(&window_clone, &message);
+            let result = client.create_snapshot(snapshot_name_clone, description_clone, subvolumes);
 
-                    // Calculate snapshot size and save metadata
-                    Self::save_snapshot_metadata(
-                        &snapshot_name,
-                        &description,
-                        &subvolume_paths,
-                        &manager_clone,
-                    ).await;
+            // Send result back to main thread
+            let _ = sender.send((Some((result, client)), None, subvolume_paths));
+        });
 
-                    // Apply retention policy and cleanup old snapshots
-                    Self::apply_retention_cleanup(&window_clone, &manager_clone, &client).await;
+        // Receive results on main thread
+        glib::source::idle_add_local_once(move || {
+            if let Ok(msg) = receiver.recv() {
+                let (result_opt, error_opt, subvolume_paths) = msg;
 
-                    // Refresh snapshot list
-                    Self::refresh_list_static(&window_clone, &manager_clone, &list_clone, &compare_btn_clone);
+                // Handle connection error
+                if let Some((title, error)) = error_opt {
+                    Self::show_error_dialog(&window_clone, &title, &error);
+                    return;
                 }
-                Ok((false, message)) => {
-                    Self::show_error_dialog(&window_clone, "Snapshot Failed", &message);
-                }
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    if error_msg.contains("NotAuthorized") || error_msg.contains("Dismissed") {
-                        Self::show_error_dialog(
-                            &window_clone,
-                            "Authentication Required",
-                            "Administrator privileges are required to create snapshots.\nAuthentication was cancelled."
-                        );
-                    } else {
-                        Self::show_error_dialog(
-                            &window_clone,
-                            "Snapshot Failed",
-                            &format!("Error: {}", error_msg)
-                        );
+
+                // Handle snapshot result
+                if let Some((result, client)) = result_opt {
+                    match result {
+                        Ok((true, message)) => {
+                            dialogs::show_toast(&window_clone, &message);
+
+                            // Calculate snapshot size and save metadata
+                            Self::save_snapshot_metadata(
+                                &snapshot_name,
+                                &description,
+                                &subvolume_paths,
+                                &manager_clone,
+                            );
+
+                            // Apply retention policy and cleanup old snapshots
+                            Self::apply_retention_cleanup(&window_clone, &manager_clone, &client);
+
+                            // Refresh snapshot list
+                            Self::refresh_list_static(&window_clone, &manager_clone, &list_clone, &compare_btn_clone);
+                        }
+                        Ok((false, message)) => {
+                            Self::show_error_dialog(&window_clone, "Snapshot Failed", &message);
+                        }
+                        Err(e) => {
+                            let error_msg = e.to_string();
+                            if error_msg.contains("NotAuthorized") || error_msg.contains("Dismissed") {
+                                Self::show_error_dialog(
+                                    &window_clone,
+                                    "Authentication Required",
+                                    "Administrator privileges are required to create snapshots.\nAuthentication was cancelled."
+                                );
+                            } else {
+                                Self::show_error_dialog(
+                                    &window_clone,
+                                    "Snapshot Failed",
+                                    &format!("Error: {}", error_msg)
+                                );
+                            }
+                        }
                     }
                 }
             }
         });
     }
 
-    async fn save_snapshot_metadata(
+    fn save_snapshot_metadata(
         snapshot_name: &str,
         description: &str,
         subvolume_paths: &[PathBuf],
@@ -765,7 +640,7 @@ impl MainWindow {
         }
     }
 
-    async fn apply_retention_cleanup(
+    fn apply_retention_cleanup(
         window: &adw::ApplicationWindow,
         manager: &Rc<RefCell<SnapshotManager>>,
         client: &WaypointHelperClient,
@@ -786,7 +661,7 @@ impl MainWindow {
         // Delete old snapshots
         let delete_count = to_delete.len();
         for snapshot_name in to_delete {
-            match client.delete_snapshot(snapshot_name.clone()).await {
+            match client.delete_snapshot(snapshot_name.clone()) {
                 Ok((true, _)) => {
                     eprintln!("Retention policy: deleted snapshot {}", snapshot_name);
                 }
@@ -815,50 +690,23 @@ impl MainWindow {
         list: &ListBox,
         compare_btn: &Button,
     ) {
-        // Clear existing items
-        while let Some(child) = list.first_child() {
-            list.remove(&child);
-        }
+        let window_clone = window.clone();
+        let manager_clone = manager.clone();
+        let list_clone = list.clone();
+        let compare_btn_clone = compare_btn.clone();
 
-        // Load snapshots
-        let snapshots = match manager.borrow().load_snapshots() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to load snapshots: {}", e);
-                return;
-            }
-        };
-
-        // Update compare button state based on snapshot count
-        if snapshots.len() < 2 {
-            compare_btn.set_sensitive(false);
-            compare_btn.set_tooltip_text(Some("At least 2 snapshots needed to compare"));
-        } else {
-            compare_btn.set_sensitive(true);
-            compare_btn.set_tooltip_text(Some("Compare packages between snapshots"));
-        }
-
-        if snapshots.is_empty() {
-            let placeholder = adw::StatusPage::new();
-            placeholder.set_title("No Restore Points Yet");
-            placeholder.set_description(Some("Create your first restore point to get started"));
-            placeholder.set_icon_name(Some("document-save-symbolic"));
-            placeholder.set_vexpand(true);
-
-            list.append(&placeholder);
-        } else {
-            for snapshot in snapshots.iter().rev() {
-                let win_clone = window.clone();
-                let mgr_clone = manager.clone();
-                let list_clone = list.clone();
-                let cmp_btn_clone = compare_btn.clone();
-
-                let row = SnapshotRow::new(snapshot, move |id, action| {
-                    Self::handle_snapshot_action(&win_clone, &mgr_clone, &list_clone, &cmp_btn_clone, &id, action);
-                });
-                list.append(&row);
-            }
-        }
+        snapshot_list::refresh_snapshot_list_internal(
+            window,
+            manager,
+            list,
+            compare_btn,
+            None,  // No search filter
+            None,  // No date filter
+            None,  // No match label
+            move |id, action| {
+                Self::handle_snapshot_action(&window_clone, &manager_clone, &list_clone, &compare_btn_clone, id, action);
+            },
+        );
     }
 
     fn show_error_dialog(window: &adw::ApplicationWindow, title: &str, message: &str) {
@@ -971,43 +819,65 @@ impl MainWindow {
                 let compare_btn = compare_btn_clone.clone();
                 let name = snapshot_basename.clone();
 
-                glib::spawn_future_local(async move {
-                    // Show loading state
-                    dialogs::show_toast(&window, "Deleting snapshot...");
+                // Show loading state
+                dialogs::show_toast(&window, "Deleting snapshot...");
 
+                // Create channel for thread communication
+                let (sender, receiver) = mpsc::channel();
+
+                // Spawn blocking operation in thread
+                std::thread::spawn(move || {
                     // Connect to D-Bus helper
-                    let client = match WaypointHelperClient::new().await {
+                    let client = match WaypointHelperClient::new() {
                         Ok(c) => c,
                         Err(e) => {
-                            dialogs::show_error(
-                                &window,
-                                "Connection Error",
-                                &format!("Failed to connect to snapshot service: {}", e)
-                            );
+                            let error = format!("Failed to connect to snapshot service: {}", e);
+                            let _ = sender.send((None, Some(("Connection Error".to_string(), error))));
                             return;
                         }
                     };
 
                     // Delete snapshot via D-Bus
-                    match client.delete_snapshot(name).await {
-                        Ok((true, message)) => {
-                            dialogs::show_toast(&window, &message);
-                            // Refresh the list
-                            Self::refresh_list_static(&window, &manager, &list, &compare_btn);
+                    let result = client.delete_snapshot(name);
+
+                    // Send result back to main thread
+                    let _ = sender.send((Some(result), None));
+                });
+
+                // Receive results on main thread
+                glib::source::idle_add_local_once(move || {
+                    if let Ok(msg) = receiver.recv() {
+                        let (result_opt, error_opt) = msg;
+
+                        // Handle connection error
+                        if let Some((title, error)) = error_opt {
+                            dialogs::show_error(&window, &title, &error);
+                            return;
                         }
-                        Ok((false, message)) => {
-                            dialogs::show_error(&window, "Deletion Failed", &message);
-                        }
-                        Err(e) => {
-                            let error_msg = e.to_string();
-                            if error_msg.contains("NotAuthorized") || error_msg.contains("Dismissed") {
-                                dialogs::show_error(
-                                    &window,
-                                    "Authentication Required",
-                                    "Administrator privileges are required.\nAuthentication was cancelled."
-                                );
-                            } else {
-                                dialogs::show_error(&window, "Deletion Failed", &format!("Error: {}", error_msg));
+
+                        // Handle delete result
+                        if let Some(result) = result_opt {
+                            match result {
+                                Ok((true, message)) => {
+                                    dialogs::show_toast(&window, &message);
+                                    // Refresh the list
+                                    Self::refresh_list_static(&window, &manager, &list, &compare_btn);
+                                }
+                                Ok((false, message)) => {
+                                    dialogs::show_error(&window, "Deletion Failed", &message);
+                                }
+                                Err(e) => {
+                                    let error_msg = e.to_string();
+                                    if error_msg.contains("NotAuthorized") || error_msg.contains("Dismissed") {
+                                        dialogs::show_error(
+                                            &window,
+                                            "Authentication Required",
+                                            "Administrator privileges are required.\nAuthentication was cancelled."
+                                        );
+                                    } else {
+                                        dialogs::show_error(&window, "Deletion Failed", &format!("Error: {}", error_msg));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1087,77 +957,98 @@ impl MainWindow {
                 let window = window_clone.clone();
                 let name = snapshot_basename.clone();
 
-                glib::spawn_future_local(async move {
-                    // Show loading state
-                    dialogs::show_toast(&window, "Restoring snapshot...");
+                // Show loading state
+                dialogs::show_toast(&window, "Restoring snapshot...");
 
+                // Create channel for thread communication
+                let (sender, receiver) = mpsc::channel();
+
+                // Spawn blocking operation in thread
+                std::thread::spawn(move || {
                     // Connect to D-Bus helper
-                    let client = match WaypointHelperClient::new().await {
+                    let client = match WaypointHelperClient::new() {
                         Ok(c) => c,
                         Err(e) => {
-                            dialogs::show_error(
-                                &window,
-                                "Connection Error",
-                                &format!("Failed to connect to snapshot service: {}", e)
-                            );
+                            let error = format!("Failed to connect to snapshot service: {}", e);
+                            let _ = sender.send((None, Some(("Connection Error".to_string(), error))));
                             return;
                         }
                     };
 
                     // Restore snapshot via D-Bus (password prompt happens here)
-                    match client.restore_snapshot(name).await {
-                        Ok((true, message)) => {
-                            // Show success message with reboot instructions
-                            let success_dialog = adw::MessageDialog::new(
-                                Some(&window),
-                                Some("Rollback Successful"),
-                                Some(&format!(
-                                    "{}\n\n\
-                                    You MUST reboot for the changes to take effect.\n\n\
-                                    After reboot, your system will be restored to the snapshot state.\n\n\
-                                    Reboot now?",
-                                    message
-                                )),
-                            );
+                    let result = client.restore_snapshot(name);
 
-                            success_dialog.add_response("later", "Reboot Later");
-                            success_dialog.add_response("now", "Reboot Now");
-                            success_dialog.set_response_appearance("now", adw::ResponseAppearance::Suggested);
-                            success_dialog.set_default_response(Some("now"));
-                            success_dialog.set_close_response("later");
+                    // Send result back to main thread
+                    let _ = sender.send((Some(result), None));
+                });
 
-                            success_dialog.connect_response(None, |_, response| {
-                                if response == "now" {
-                                    // Attempt to reboot
-                                    let _ = std::process::Command::new("systemctl")
-                                        .arg("reboot")
-                                        .spawn();
+                // Receive results on main thread
+                glib::source::idle_add_local_once(move || {
+                    if let Ok(msg) = receiver.recv() {
+                        let (result_opt, error_opt) = msg;
+
+                        // Handle connection error
+                        if let Some((title, error)) = error_opt {
+                            dialogs::show_error(&window, &title, &error);
+                            return;
+                        }
+
+                        // Handle restore result
+                        if let Some(result) = result_opt {
+                            match result {
+                                Ok((true, message)) => {
+                                    // Show success message with reboot instructions
+                                    let success_dialog = adw::MessageDialog::new(
+                                        Some(&window),
+                                        Some("Rollback Successful"),
+                                        Some(&format!(
+                                            "{}\n\n\
+                                            You MUST reboot for the changes to take effect.\n\n\
+                                            After reboot, your system will be restored to the snapshot state.\n\n\
+                                            Reboot now?",
+                                            message
+                                        )),
+                                    );
+
+                                    success_dialog.add_response("later", "Reboot Later");
+                                    success_dialog.add_response("now", "Reboot Now");
+                                    success_dialog.set_response_appearance("now", adw::ResponseAppearance::Suggested);
+                                    success_dialog.set_default_response(Some("now"));
+                                    success_dialog.set_close_response("later");
+
+                                    success_dialog.connect_response(None, |_, response| {
+                                        if response == "now" {
+                                            // Attempt to reboot
+                                            let _ = std::process::Command::new("reboot")
+                                                .spawn();
+                                        }
+                                    });
+
+                                    success_dialog.present();
                                 }
-                            });
-
-                            success_dialog.present();
-                        }
-                        Ok((false, message)) => {
-                            dialogs::show_error(
-                                &window,
-                                "Rollback Failed",
-                                &format!("{}\n\nYour system has NOT been changed.", message)
-                            );
-                        }
-                        Err(e) => {
-                            let error_msg = e.to_string();
-                            if error_msg.contains("NotAuthorized") || error_msg.contains("Dismissed") {
-                                dialogs::show_error(
-                                    &window,
-                                    "Authentication Required",
-                                    "Administrator privileges are required.\nAuthentication was cancelled."
-                                );
-                            } else {
-                                dialogs::show_error(
-                                    &window,
-                                    "Rollback Failed",
-                                    &format!("Error: {}\n\nYour system has NOT been changed.", error_msg)
-                                );
+                                Ok((false, message)) => {
+                                    dialogs::show_error(
+                                        &window,
+                                        "Rollback Failed",
+                                        &format!("{}\n\nYour system has NOT been changed.", message)
+                                    );
+                                }
+                                Err(e) => {
+                                    let error_msg = e.to_string();
+                                    if error_msg.contains("NotAuthorized") || error_msg.contains("Dismissed") {
+                                        dialogs::show_error(
+                                            &window,
+                                            "Authentication Required",
+                                            "Administrator privileges are required.\nAuthentication was cancelled."
+                                        );
+                                    } else {
+                                        dialogs::show_error(
+                                            &window,
+                                            "Rollback Failed",
+                                            &format!("Error: {}\n\nYour system has NOT been changed.", error_msg)
+                                        );
+                                    }
+                                }
                             }
                         }
                     }

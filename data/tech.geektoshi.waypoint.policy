@@ -3,10 +3,10 @@
  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
 <policyconfig>
-  <vendor>Void Linux</vendor>
-  <vendor_url>https://voidlinux.org</vendor_url>
+  <vendor>Geektoshi</vendor>
+  <vendor_url>https://geektoshi.tech</vendor_url>
 
-  <action id="com.voidlinux.waypoint.create-snapshot">
+  <action id="tech.geektoshi.waypoint.create-snapshot">
     <description>Create a system snapshot</description>
     <message>Authentication is required to create a system snapshot</message>
     <icon_name>document-save-symbolic</icon_name>
@@ -19,7 +19,7 @@
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 
-  <action id="com.voidlinux.waypoint.delete-snapshot">
+  <action id="tech.geektoshi.waypoint.delete-snapshot">
     <description>Delete a system snapshot</description>
     <message>Authentication is required to delete a system snapshot</message>
     <icon_name>user-trash-symbolic</icon_name>
@@ -32,10 +32,23 @@
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 
-  <action id="com.voidlinux.waypoint.restore-snapshot">
+  <action id="tech.geektoshi.waypoint.restore-snapshot">
     <description>Restore a system snapshot</description>
     <message>Authentication is required to restore a system snapshot</message>
     <icon_name>view-refresh-symbolic</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/waypoint-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <action id="tech.geektoshi.waypoint.configure-system">
+    <description>Configure system settings</description>
+    <message>Authentication is required to configure system settings</message>
+    <icon_name>preferences-system-symbolic</icon_name>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>

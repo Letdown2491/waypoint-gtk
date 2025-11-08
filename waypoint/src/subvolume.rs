@@ -58,29 +58,39 @@ pub fn detect_mounted_subvolumes() -> Result<Vec<SubvolumeInfo>> {
             continue;
         }
 
-        // Extract subvolume path from mount options
-        let subvol_path = options
-            .split(',')
-            .find_map(|opt| {
-                if opt.starts_with("subvol=") {
-                    Some(opt.trim_start_matches("subvol=").to_string())
-                } else if opt.starts_with("subvolid=") {
-                    None // We'll get the path via btrfs command
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "/".to_string());
+        // Extract subvolume path and ID from mount options
+        let mut subvol_path = None;
+        let mut subvol_id = None;
 
-        // Get subvolume ID
-        if let Ok(id) = get_subvolume_id(Path::new(mount_point)) {
-            let subvol_info = SubvolumeInfo::new(
-                PathBuf::from(mount_point),
-                subvol_path,
-                id,
-            );
-            subvolumes.push(subvol_info);
+        for opt in options.split(',') {
+            if let Some(path) = opt.strip_prefix("subvol=") {
+                subvol_path = Some(path.to_string());
+            } else if let Some(id_str) = opt.strip_prefix("subvolid=") {
+                if let Ok(id) = id_str.parse::<u64>() {
+                    subvol_id = Some(id);
+                }
+            }
         }
+
+        let subvol_path = subvol_path.unwrap_or_else(|| "/".to_string());
+
+        // Use subvolid from mount options, or fall back to btrfs command
+        let id = if let Some(id) = subvol_id {
+            id
+        } else if let Ok(id) = get_subvolume_id(Path::new(mount_point)) {
+            id
+        } else {
+            // Skip this subvolume if we can't get its ID
+            eprintln!("Warning: Could not determine subvolume ID for {}", mount_point);
+            continue;
+        };
+
+        let subvol_info = SubvolumeInfo::new(
+            PathBuf::from(mount_point),
+            subvol_path,
+            id,
+        );
+        subvolumes.push(subvol_info);
     }
 
     // Sort by mount point for consistent ordering

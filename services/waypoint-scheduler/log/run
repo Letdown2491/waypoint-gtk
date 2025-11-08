@@ -1,0 +1,5 @@
+#!/bin/sh
+# Waypoint Scheduler - Logging Service
+# Handles log rotation and storage for the scheduler
+
+exec svlogd -tt /var/log/waypoint-scheduler

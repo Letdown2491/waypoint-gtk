@@ -72,14 +72,13 @@ pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: 
         // Create checkbox for each subvolume
         let checkboxes: Vec<(SubvolumeInfo, CheckButton)> = subvolumes
             .into_iter()
-            .map(|subvol| {
+            .filter_map(|subvol| {
                 let checkbox_row = create_subvolume_row(&subvol, &current_config);
                 let checkbox = checkbox_row.activatable_widget()
-                    .and_then(|w| w.downcast::<CheckButton>().ok())
-                    .expect("Failed to get checkbox");
+                    .and_then(|w| w.downcast::<CheckButton>().ok())?;
 
                 group.add(&checkbox_row);
-                (subvol, checkbox)
+                Some((subvol, checkbox))
             })
             .collect();
 

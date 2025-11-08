@@ -128,7 +128,7 @@ pub fn show_retention_editor(
                 placeholder_row.set_sensitive(false);
                 pattern_list.append(&placeholder_row);
             } else {
-                for (index, pattern) in patterns_borrowed.iter().enumerate() {
+                for pattern in patterns_borrowed.iter() {
                     let row = adw::ActionRow::new();
                     row.set_title(pattern);
 
@@ -139,9 +139,12 @@ pub fn show_retention_editor(
 
                     let patterns_clone = patterns.clone();
                     let pattern_list_clone = pattern_list.clone();
+                    let pattern_to_remove = pattern.clone();
                     remove_btn.connect_clicked(move |_| {
-                        patterns_clone.borrow_mut().remove(index);
-                        // Refresh the list
+                        // Remove by value, not by index
+                        patterns_clone.borrow_mut().retain(|p| p != &pattern_to_remove);
+
+                        // Refresh the list manually
                         while let Some(child) = pattern_list_clone.first_child() {
                             pattern_list_clone.remove(&child);
                         }
@@ -152,7 +155,7 @@ pub fn show_retention_editor(
                             placeholder.set_sensitive(false);
                             pattern_list_clone.append(&placeholder);
                         } else {
-                            for (_i, pat) in pats.iter().enumerate() {
+                            for pat in pats.iter() {
                                 let r = adw::ActionRow::new();
                                 r.set_title(pat);
                                 pattern_list_clone.append(&r);

@@ -12,18 +12,19 @@ mod packages;
 /// Main D-Bus service interface for Waypoint operations
 struct WaypointHelper;
 
-#[interface(name = "com.voidlinux.waypoint.Helper")]
+#[interface(name = "tech.geektoshi.waypoint.Helper")]
 impl WaypointHelper {
     /// Create a new snapshot
     async fn create_snapshot(
         &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &Connection,
         name: String,
         description: String,
         subvolumes: Vec<String>,
     ) -> (bool, String) {
         // Check authorization
-        if let Err(e) = check_authorization(connection, POLKIT_ACTION_CREATE).await {
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
             return (false, format!("Authorization failed: {}", e));
         }
 
@@ -37,11 +38,12 @@ impl WaypointHelper {
     /// Delete a snapshot
     async fn delete_snapshot(
         &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &Connection,
         name: String,
     ) -> (bool, String) {
         // Check authorization
-        if let Err(e) = check_authorization(connection, POLKIT_ACTION_DELETE).await {
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_DELETE).await {
             return (false, format!("Authorization failed: {}", e));
         }
 
@@ -55,11 +57,12 @@ impl WaypointHelper {
     /// Restore a snapshot (rollback system)
     async fn restore_snapshot(
         &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &Connection,
         name: String,
     ) -> (bool, String) {
         // Check authorization
-        if let Err(e) = check_authorization(connection, POLKIT_ACTION_RESTORE).await {
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
             return (false, format!("Authorization failed: {}", e));
         }
 
@@ -86,6 +89,70 @@ impl WaypointHelper {
                 eprintln!("Failed to list snapshots: {}", e);
                 "[]".to_string()
             }
+        }
+    }
+
+    /// Update scheduler configuration
+    async fn update_scheduler_config(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        config_content: String,
+    ) -> (bool, String) {
+        // Check authorization
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
+            return (false, format!("Authorization failed: {}", e));
+        }
+
+        // Write configuration file
+        match std::fs::write("/etc/waypoint/scheduler.conf", config_content) {
+            Ok(_) => (true, "Scheduler configuration updated".to_string()),
+            Err(e) => (false, format!("Failed to update configuration: {}", e)),
+        }
+    }
+
+    /// Restart scheduler service
+    async fn restart_scheduler(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> (bool, String) {
+        // Check authorization
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
+            return (false, format!("Authorization failed: {}", e));
+        }
+
+        // Restart the service using sv
+        match std::process::Command::new("sv")
+            .arg("restart")
+            .arg("waypoint-scheduler")
+            .status()
+        {
+            Ok(status) if status.success() => {
+                (true, "Scheduler service restarted".to_string())
+            }
+            Ok(_) => (false, "Failed to restart scheduler service".to_string()),
+            Err(e) => (false, format!("Failed to execute sv command: {}", e)),
+        }
+    }
+
+    /// Get scheduler service status
+    async fn get_scheduler_status(&self) -> String {
+        // No authorization needed for status check (read-only)
+        match std::process::Command::new("sv")
+            .arg("status")
+            .arg("waypoint-scheduler")
+            .output()
+        {
+            Ok(output) => {
+                let status_str = String::from_utf8_lossy(&output.stdout);
+                if output.status.success() && status_str.contains("run:") {
+                    "running".to_string()
+                } else {
+                    "stopped".to_string()
+                }
+            }
+            Err(_) => "unknown".to_string(),
         }
     }
 }
@@ -135,21 +202,119 @@ impl WaypointHelper {
 
 /// Check Polkit authorization for an action
 ///
-/// For Phase 4 MVP, this is a simplified check.
-/// The helper binary must be activated by D-Bus with appropriate permissions,
-/// so if we're running, the user has already been authenticated by the system.
-async fn check_authorization(_connection: &Connection, action_id: &str) -> Result<()> {
-    // Log the authorization attempt
+/// Calls org.freedesktop.PolicyKit1.Authority.CheckAuthorization to verify
+/// the caller has permission to perform the requested action.
+async fn check_authorization(
+    hdr: &zbus::message::Header<'_>,
+    connection: &Connection,
+    action_id: &str,
+) -> Result<()> {
+    use zbus::zvariant::{ObjectPath, Value};
+    use std::collections::HashMap;
+
     println!("Authorization requested for action: {}", action_id);
 
-    // Since this service runs as root and is activated by D-Bus,
-    // the authentication is handled by the D-Bus policy and system activation.
-    // For now, we trust that if we're running, the user is authorized.
-    //
-    // TODO: For enhanced security, implement full Polkit CheckAuthorization call
-    // using the org.freedesktop.PolicyKit1.Authority D-Bus interface.
+    // Get the caller's bus name from the message header
+    let caller = hdr.sender()
+        .context("No sender in message header")?
+        .to_owned();
 
-    Ok(())
+    println!("Caller bus name: {}", caller);
+
+    // Get the caller's PID from D-Bus
+    let response = connection.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "GetConnectionUnixProcessID",
+        &caller.as_str(),
+    ).await
+        .context("Failed to get caller PID from D-Bus")?;
+
+    let caller_pid: u32 = response.body().deserialize()
+        .context("Failed to deserialize caller PID")?;
+
+    println!("Caller PID: {}", caller_pid);
+
+    // Get process start time from /proc
+    let start_time = get_process_start_time(caller_pid)?;
+
+    // Build the subject structure for Polkit
+    // Subject is (subject_kind, subject_details)
+    let mut subject_details: HashMap<String, Value> = HashMap::new();
+    subject_details.insert("pid".to_string(), Value::U32(caller_pid));
+    subject_details.insert("start-time".to_string(), Value::U64(start_time));
+
+    let subject = ("unix-process", subject_details);
+
+    // Details dict (empty for now)
+    let details: HashMap<String, String> = HashMap::new();
+
+    // Flags: 1 = AllowUserInteraction (show password prompt if needed)
+    let flags: u32 = 1;
+
+    // Cancellation ID (empty string = no cancellation)
+    let cancellation_id = "";
+
+    // Call Polkit CheckAuthorization
+    let polkit_path = ObjectPath::try_from("/org/freedesktop/PolicyKit1/Authority")
+        .context("Invalid Polkit object path")?;
+
+    let result = connection.call_method(
+        Some("org.freedesktop.PolicyKit1"),
+        polkit_path,
+        Some("org.freedesktop.PolicyKit1.Authority"),
+        "CheckAuthorization",
+        &(subject, action_id, details, flags, cancellation_id),
+    ).await;
+
+    let msg = result
+        .context("Failed to call Polkit CheckAuthorization")?;
+
+    // Result is (is_authorized, is_challenge, details)
+    let (is_authorized, is_challenge, auth_details): (bool, bool, HashMap<String, String>) =
+        msg.body().deserialize()
+            .context("Failed to deserialize Polkit response")?;
+
+    println!("Authorization result: authorized={}, challenge={}, details={:?}",
+             is_authorized, is_challenge, auth_details);
+
+    if is_authorized {
+        Ok(())
+    } else {
+        anyhow::bail!("Action '{}' not authorized", action_id);
+    }
+}
+
+/// Get process start time from /proc/[pid]/stat
+fn get_process_start_time(pid: u32) -> Result<u64> {
+    use std::fs;
+
+    let stat_path = format!("/proc/{}/stat", pid);
+    let stat_content = fs::read_to_string(&stat_path)
+        .context(format!("Failed to read {}", stat_path))?;
+
+    // The start time is the 22nd field in /proc/[pid]/stat
+    // Fields are: pid (comm) state ppid ... starttime ...
+    // We need to handle the (comm) field which may contain spaces
+
+    // Find the last ')' to skip the comm field
+    let start_pos = stat_content.rfind(')')
+        .context("Invalid /proc/[pid]/stat format")?;
+
+    let fields: Vec<&str> = stat_content[start_pos + 1..]
+        .split_whitespace()
+        .collect();
+
+    // After skipping (comm), starttime is field 20 (0-indexed 19)
+    if fields.len() <= 19 {
+        anyhow::bail!("Not enough fields in /proc/[pid]/stat");
+    }
+
+    let start_time: u64 = fields[19].parse()
+        .context("Failed to parse process start time")?;
+
+    Ok(start_time)
 }
 
 #[tokio::main]

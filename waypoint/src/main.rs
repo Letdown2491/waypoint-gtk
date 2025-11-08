@@ -9,7 +9,7 @@ mod ui;
 use gtk::prelude::*;
 use gtk::{glib, Application};
 
-const APP_ID: &str = "com.voidlinux.Waypoint";
+const APP_ID: &str = "tech.geektoshi.waypoint";
 
 fn main() -> glib::ExitCode {
     // Initialize GTK

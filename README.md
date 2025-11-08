@@ -1,13 +1,14 @@
 # Waypoint
 
-A GTK-based snapshot and rollback tool for Void Linux.
+A GTK-based snapshot and rollback tool for Btrfs filesystems.
 
 **Version:** 0.4.0
-**Status:** Production-ready with comprehensive features
+**Status:** Feature-complete and stable
+**Namespace:** tech.geektoshi.waypoint
 
 ## Overview
 
-Waypoint provides a simple, user-friendly interface for creating filesystem snapshots (restore points) and managing them. It's designed specifically for Void Linux with Btrfs filesystems, making it easy to:
+Waypoint provides a simple, user-friendly interface for creating filesystem snapshots (restore points) and managing them. It's designed for Btrfs filesystems on Linux systems (tested on Void Linux), making it easy to:
 
 - Create restore points before system upgrades (manual or automatic)
 - Browse and manage existing snapshots
@@ -55,11 +56,12 @@ Waypoint provides a simple, user-friendly interface for creating filesystem snap
 
 ### System Requirements
 
-- Void Linux with a Btrfs filesystem (root required, other subvolumes optional)
+- Linux system with Btrfs filesystem (root required, other subvolumes optional)
 - GTK4 (>= 4.10)
 - libadwaita (>= 1.4)
 - polkit (for privilege escalation)
 - D-Bus system bus
+- Tested on Void Linux with runit
 
 ### Build Requirements
 
@@ -95,9 +97,11 @@ sudo make install
 # This installs:
 # - /usr/bin/waypoint (GUI application)
 # - /usr/bin/waypoint-helper (privileged D-Bus service)
+# - /usr/bin/waypoint-cli (command-line interface)
 # - Desktop entry and Polkit policy
 # - D-Bus service configuration
 # - XBPS pre-upgrade hook
+# - Runit scheduler service (optional, enable manually)
 ```
 
 ### Manual Installation
@@ -108,12 +112,13 @@ cargo build --release
 # Install binaries
 sudo install -Dm755 target/release/waypoint /usr/bin/waypoint
 sudo install -Dm755 target/release/waypoint-helper /usr/bin/waypoint-helper
+sudo install -Dm755 waypoint-cli /usr/bin/waypoint-cli
 
 # Install data files
-sudo install -Dm644 data/com.voidlinux.waypoint.desktop /usr/share/applications/com.voidlinux.waypoint.desktop
-sudo install -Dm644 data/com.voidlinux.waypoint.policy /usr/share/polkit-1/actions/com.voidlinux.waypoint.policy
-sudo install -Dm644 data/dbus-1/com.voidlinux.waypoint.service /usr/share/dbus-1/system-services/com.voidlinux.waypoint.service
-sudo install -Dm644 data/dbus-1/com.voidlinux.waypoint.conf /etc/dbus-1/system.d/com.voidlinux.waypoint.conf
+sudo install -Dm644 data/tech.geektoshi.waypoint.desktop /usr/share/applications/tech.geektoshi.waypoint.desktop
+sudo install -Dm644 data/tech.geektoshi.waypoint.policy /usr/share/polkit-1/actions/tech.geektoshi.waypoint.policy
+sudo install -Dm644 data/dbus-1/tech.geektoshi.waypoint.service /usr/share/dbus-1/system-services/tech.geektoshi.waypoint.service
+sudo install -Dm644 data/dbus-1/tech.geektoshi.waypoint.conf /etc/dbus-1/system.d/tech.geektoshi.waypoint.conf
 
 # Install XBPS hook (optional)
 sudo install -Dm755 hooks/waypoint-pre-upgrade.sh /etc/xbps.d/waypoint-pre-upgrade.sh
@@ -141,6 +146,42 @@ waypoint
 
 The D-Bus helper service will start automatically when needed.
 
+### Command Line Interface
+
+Waypoint includes a command-line tool for scriptable snapshot management:
+
+```bash
+# List all snapshots
+waypoint-cli list
+
+# Create a snapshot
+waypoint-cli create "my-backup" "Optional description"
+
+# Delete a snapshot
+waypoint-cli delete "snapshot-name"
+
+# Restore a snapshot (rollback system)
+waypoint-cli restore "snapshot-name"
+
+# Show help
+waypoint-cli help
+```
+
+**Note**: All CLI operations require authentication via Polkit, just like the GUI.
+
+**Examples:**
+
+```bash
+# Create a backup before making system changes
+waypoint-cli create "before-kernel-update" "Backup before updating kernel"
+
+# List snapshots with jq for pretty output
+waypoint-cli list | jq
+
+# Automated backups in scripts
+waypoint-cli create "daily-$(date +%Y%m%d)" "Automated daily backup"
+```
+
 ### Creating a Restore Point
 
 1. Click the **"Create Restore Point"** button
@@ -153,11 +194,68 @@ The D-Bus helper service will start automatically when needed.
 
 ### Automatic Snapshots
 
-If you've installed the XBPS hook, Waypoint will automatically create snapshots:
+Waypoint supports two types of automatic snapshots:
 
+**1. Pre-Upgrade Snapshots (XBPS Hook)**
+
+If you've installed the XBPS hook, snapshots are created:
 - Before running `xbps-install -Su` (system upgrade)
 - Before installing new packages (configurable in `/etc/waypoint/waypoint.conf`)
 - Named like `pre-upgrade-20251107-143000` for easy identification
+
+**2. Scheduled Snapshots (Runit Service)**
+
+Waypoint includes an optional scheduler service for periodic snapshots. You can configure it through the GUI (click the alarm icon in the toolbar) or manually edit the configuration file.
+
+**GUI Configuration:**
+- Click the alarm clock icon in the Waypoint toolbar
+- Choose frequency (Hourly, Daily, Weekly, Custom)
+- Set time and day for scheduled snapshots
+- Configure snapshot name prefix
+- View service status in real-time
+- Save button will update config and restart the service automatically
+
+**Manual Setup:**
+```bash
+# Enable the scheduler service
+sudo ln -s /etc/sv/waypoint-scheduler /var/service/
+
+# Check service status
+sudo sv status waypoint-scheduler
+
+# View logs
+sudo tail -f /var/log/waypoint-scheduler/current
+
+# Disable the scheduler
+sudo sv stop waypoint-scheduler
+sudo rm /var/service/waypoint-scheduler
+```
+
+**Configuration** (`/etc/waypoint/scheduler.conf`):
+- **SCHEDULE_FREQUENCY**: `hourly`, `daily`, `weekly`, or `custom`
+- **SCHEDULE_TIME**: Time of day for daily/weekly snapshots (e.g., `02:00`)
+- **SCHEDULE_DAY**: Day of week for weekly (0=Sunday)
+- **SNAPSHOT_PREFIX**: Prefix for snapshot names (default: `auto`)
+
+**Examples:**
+```bash
+# Daily snapshots at 2 AM (default)
+SCHEDULE_FREQUENCY="daily"
+SCHEDULE_TIME="02:00"
+
+# Weekly snapshots on Sunday at 3 AM
+SCHEDULE_FREQUENCY="weekly"
+SCHEDULE_DAY="0"
+SCHEDULE_TIME="03:00"
+
+# Hourly snapshots
+SCHEDULE_FREQUENCY="hourly"
+```
+
+After editing the configuration, restart the service:
+```bash
+sudo sv restart waypoint-scheduler
+```
 
 ### Managing Snapshots
 
@@ -246,11 +344,11 @@ waypoint-gtk/
 │   ├── src/lib.rs
 │   └── Cargo.toml
 ├── data/
-│   ├── com.voidlinux.waypoint.desktop  # Desktop entry
-│   ├── com.voidlinux.waypoint.policy   # Polkit policy
+│   ├── tech.geektoshi.waypoint.desktop  # Desktop entry
+│   ├── tech.geektoshi.waypoint.policy   # Polkit policy
 │   └── dbus-1/
-│       ├── com.voidlinux.waypoint.service  # D-Bus service file
-│       └── com.voidlinux.waypoint.conf     # D-Bus policy
+│       ├── tech.geektoshi.waypoint.service  # D-Bus service file
+│       └── tech.geektoshi.waypoint.conf     # D-Bus policy
 ├── hooks/
 │   ├── waypoint-pre-upgrade.sh  # XBPS pre-upgrade hook
 │   └── waypoint.conf            # Hook configuration
@@ -311,6 +409,62 @@ waypoint-gtk/
 - **Void Linux Focused**: Designed specifically for Void Linux and XBPS package manager. May work on other distros with Btrfs but untested.
 - **System Reboot Required**: Rollback requires a reboot to boot into the restored snapshot.
 - **No File-Level Restore**: Currently restores entire snapshots, not individual files (you can manually browse and copy files).
+
+## Troubleshooting
+
+### Cannot Create Snapshots
+
+If you're unable to create snapshots, check the following:
+
+1. **Verify D-Bus service is running:**
+   ```bash
+   ps aux | grep waypoint-helper
+   ```
+
+2. **Check D-Bus configuration:**
+   ```bash
+   # The config file should allow standard D-Bus interfaces
+   cat /etc/dbus-1/system.d/tech.geektoshi.waypoint.conf
+   ```
+
+3. **Restart D-Bus (Void Linux with runit):**
+   ```bash
+   sudo pkill waypoint-helper
+   sudo sv reload dbus
+   ```
+
+4. **Test D-Bus connection:**
+   ```bash
+   gdbus introspect --system --dest tech.geektoshi.waypoint --object-path /tech/geektoshi/waypoint
+   ```
+
+5. **Check polkit is running:**
+   ```bash
+   ps aux | grep polkitd
+   ```
+
+### Permission Denied Errors
+
+If you get "Authorization failed" or "Permission denied" errors:
+
+- Ensure polkit is installed and running
+- Check that the polkit policy file is installed:
+  ```bash
+  ls -l /usr/share/polkit-1/actions/tech.geektoshi.waypoint.policy
+  ```
+- Verify your user has admin privileges
+
+### Old Namespace Files
+
+If you're upgrading from an older version, remove old namespace files:
+
+```bash
+sudo rm -f /etc/dbus-1/system.d/com.voidlinux.waypoint.conf
+sudo rm -f /usr/share/polkit-1/actions/com.voidlinux.waypoint.policy
+sudo rm -f /usr/share/dbus-1/system-services/com.voidlinux.waypoint.service
+sudo rm -f /usr/share/applications/com.voidlinux.waypoint.desktop
+sudo sv reload dbus
+```
 
 ## Contributing
 

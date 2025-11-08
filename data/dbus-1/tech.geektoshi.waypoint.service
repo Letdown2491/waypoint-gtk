@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=tech.geektoshi.waypoint
+Exec=/usr/bin/waypoint-helper
+User=root

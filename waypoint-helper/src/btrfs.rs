@@ -209,6 +209,9 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
         bail!("Snapshot not found: {}", name);
     }
 
+    // Load snapshot metadata to check which subvolumes were included
+    let snapshot_meta = get_snapshot_metadata(name)?;
+
     // Determine the path to the root snapshot
     let root_snapshot_path = if snapshot_base_path.is_dir() {
         // New format: directory with subvolumes
@@ -222,8 +225,43 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
         bail!("Root snapshot not found in snapshot {}", name);
     }
 
-    // Get subvolume ID of the root snapshot
-    let subvol_id = get_subvolume_id(&root_snapshot_path)?;
+    // Check if this is a multi-subvolume snapshot
+    let has_multiple_subvolumes = snapshot_meta.subvolumes.len() > 1;
+
+    let target_root = if has_multiple_subvolumes {
+        // For multi-subvolume snapshots, we need to update fstab
+        // Create a writable copy of the root snapshot
+        let writable_root = snapshot_base_path.join("root-writable");
+
+        // Clean up any existing writable snapshot from previous attempts
+        if writable_root.exists() {
+            let _ = Command::new("btrfs")
+                .arg("subvolume")
+                .arg("delete")
+                .arg(&writable_root)
+                .output();
+        }
+
+        create_writable_snapshot(&root_snapshot_path, &writable_root)
+            .context("Failed to create writable snapshot for fstab update")?;
+
+        // Update fstab in the writable snapshot
+        let fstab_path = writable_root.join("etc/fstab");
+        if fstab_path.exists() {
+            update_fstab_for_snapshot(&fstab_path, name, &snapshot_meta.subvolumes)
+                .context("Failed to update fstab")?;
+        } else {
+            eprintln!("Warning: /etc/fstab not found in snapshot, multi-subvolume restore may not work correctly");
+        }
+
+        writable_root
+    } else {
+        // Single subvolume snapshot, use it directly
+        root_snapshot_path
+    };
+
+    // Get subvolume ID of the target root
+    let subvol_id = get_subvolume_id(&target_root)?;
 
     // Set as default boot subvolume
     let output = Command::new("btrfs")
@@ -238,11 +276,6 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("Failed to set default subvolume: {}", stderr);
     }
-
-    // TODO: For multi-subvolume snapshots, we would also need to:
-    // 1. Check if /home, /var, etc. were included in the snapshot
-    // 2. Update /etc/fstab in the restored root to mount the correct subvolume snapshots
-    // 3. Or provide a warning to the user about what was/wasn't restored
 
     Ok(())
 }
@@ -336,4 +369,172 @@ fn remove_snapshot_metadata(name: &str) -> Result<()> {
     let mut snapshots = load_snapshot_metadata()?;
     snapshots.retain(|s| s.name != name);
     save_snapshot_metadata(&snapshots)
+}
+
+/// Get snapshot metadata by name
+fn get_snapshot_metadata(name: &str) -> Result<Snapshot> {
+    let snapshots = load_snapshot_metadata()?;
+    snapshots
+        .into_iter()
+        .find(|s| s.name == name)
+        .context(format!("Snapshot metadata not found: {}", name))
+}
+
+/// Get filesystem UUID for a mount point
+#[allow(dead_code)]
+fn get_filesystem_uuid(mount_point: &Path) -> Result<String> {
+    let output = Command::new("findmnt")
+        .arg("-n")
+        .arg("-o")
+        .arg("UUID")
+        .arg(mount_point)
+        .output()
+        .context("Failed to execute findmnt")?;
+
+    if !output.status.success() {
+        bail!("Failed to get UUID for {:?}", mount_point);
+    }
+
+    let uuid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if uuid.is_empty() {
+        bail!("No UUID found for {:?}", mount_point);
+    }
+
+    Ok(uuid)
+}
+
+/// Update fstab in a snapshot to mount the correct subvolume snapshots
+fn update_fstab_for_snapshot(
+    fstab_path: &Path,
+    snapshot_name: &str,
+    subvolumes: &[PathBuf],
+) -> Result<()> {
+    // Read current fstab
+    let fstab_content = fs::read_to_string(fstab_path)
+        .context("Failed to read fstab")?;
+
+    let mut updated_lines = Vec::new();
+    let mut updated = false;
+
+    for line in fstab_content.lines() {
+        let trimmed = line.trim();
+
+        // Skip comments and empty lines
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            updated_lines.push(line.to_string());
+            continue;
+        }
+
+        // Parse fstab entry: device mountpoint fstype options dump pass
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() < 4 {
+            updated_lines.push(line.to_string());
+            continue;
+        }
+
+        let mount_point = parts[1];
+        let fs_type = parts[2];
+        let options = parts[3];
+
+        // Only process btrfs entries for subvolumes we snapshotted
+        if fs_type != "btrfs" {
+            updated_lines.push(line.to_string());
+            continue;
+        }
+
+        // Check if this mount point is in our snapshot
+        let mount_path = PathBuf::from(mount_point);
+        if !subvolumes.contains(&mount_path) {
+            updated_lines.push(line.to_string());
+            continue;
+        }
+
+        // Update the subvol option to point to the snapshot
+        let new_options = update_subvol_option(options, snapshot_name, &mount_path)?;
+
+        // Reconstruct the fstab line with updated options
+        let mut new_parts = parts.clone();
+        new_parts[3] = &new_options;
+
+        // Preserve original spacing/formatting as much as possible
+        let new_line = if parts.len() == 6 {
+            format!("{}\t{}\t{}\t{}\t{}\t{}",
+                new_parts[0], new_parts[1], new_parts[2],
+                new_parts[3], new_parts[4], new_parts[5])
+        } else {
+            new_parts.join("\t")
+        };
+
+        updated_lines.push(new_line);
+        updated = true;
+    }
+
+    if updated {
+        // Write updated fstab
+        let new_content = updated_lines.join("\n") + "\n";
+        fs::write(fstab_path, new_content)
+            .context("Failed to write updated fstab")?;
+    }
+
+    Ok(())
+}
+
+/// Update the subvol option in mount options string
+fn update_subvol_option(
+    options: &str,
+    snapshot_name: &str,
+    mount_point: &Path,
+) -> Result<String> {
+    let opts: Vec<&str> = options.split(',').collect();
+    let mut new_opts = Vec::new();
+    let mut found_subvol = false;
+
+    // Determine the subvolume name in the snapshot
+    let subvol_name = if mount_point == &PathBuf::from("/") {
+        "root".to_string()
+    } else {
+        mount_point
+            .to_string_lossy()
+            .trim_start_matches('/')
+            .replace('/', "_")
+    };
+
+    // The new subvol path in the snapshot
+    let new_subvol = format!("@snapshots/{}/{}", snapshot_name, subvol_name);
+
+    for opt in opts {
+        if opt.starts_with("subvol=") || opt.starts_with("subvolid=") {
+            // Replace with new subvol path
+            new_opts.push(format!("subvol={}", new_subvol));
+            found_subvol = true;
+        } else {
+            new_opts.push(opt.to_string());
+        }
+    }
+
+    // If no subvol option was found, add it
+    if !found_subvol {
+        new_opts.push(format!("subvol={}", new_subvol));
+    }
+
+    Ok(new_opts.join(","))
+}
+
+/// Create a writable snapshot from a read-only snapshot
+fn create_writable_snapshot(source: &Path, dest: &Path) -> Result<()> {
+    let output = Command::new("btrfs")
+        .arg("subvolume")
+        .arg("snapshot")
+        // Note: no -r flag, so it's writable
+        .arg(source)
+        .arg(dest)
+        .output()
+        .context("Failed to create writable snapshot")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to create writable snapshot: {}", stderr);
+    }
+
+    Ok(())
 }

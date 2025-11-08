@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# waypoint-cli - Command-line interface for Waypoint snapshot management
+# This is a thin wrapper around D-Bus calls to waypoint-helper
+
+set -euo pipefail
+
+DBUS_SERVICE="tech.geektoshi.waypoint"
+DBUS_PATH="/tech/geektoshi/waypoint"
+DBUS_INTERFACE="tech.geektoshi.waypoint.Helper"
+
+usage() {
+    cat << EOF
+Waypoint CLI - Btrfs snapshot management for Void Linux
+
+Usage:
+    waypoint-cli create <name> [description] [subvolumes]
+    waypoint-cli list
+    waypoint-cli delete <name>
+    waypoint-cli restore <name>
+    waypoint-cli help
+
+Commands:
+    create      Create a new snapshot
+    list        List all snapshots
+    delete      Delete a snapshot
+    restore     Restore a snapshot (rollback system)
+    help        Show this help message
+
+Examples:
+    waypoint-cli create "before-upgrade" "Snapshot before system upgrade"
+    waypoint-cli create "test-$(date +%Y%m%d)" "Daily backup"
+    waypoint-cli list
+    waypoint-cli delete "old-snapshot"
+    waypoint-cli restore "before-upgrade"
+
+Note: All operations require authentication via Polkit.
+EOF
+    exit 0
+}
+
+check_dbus_service() {
+    if ! busctl status "$DBUS_SERVICE" >/dev/null 2>&1; then
+        echo "Error: Waypoint D-Bus service is not available." >&2
+        echo "Make sure waypoint is installed and D-Bus is running." >&2
+        exit 1
+    fi
+}
+
+cmd_create() {
+    local name="${1:-}"
+    local description="${2:-Snapshot created via CLI}"
+    local subvolumes="${3:-/}"
+
+    if [[ -z "$name" ]]; then
+        echo "Error: Snapshot name is required" >&2
+        echo "Usage: waypoint-cli create <name> [description]" >&2
+        exit 1
+    fi
+
+    echo "Creating snapshot: $name"
+    echo "Description: $description"
+
+    # Convert subvolumes to array format for D-Bus
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        create_snapshot \
+        'sss' \
+        "$name" \
+        "$description" \
+        "$subvolumes" 2>&1)
+
+    # Parse result (format: "b s" true "message")
+    if echo "$result" | grep -q "^true"; then
+        echo "✓ Success: $(echo "$result" | cut -d'"' -f2)"
+    else
+        echo "✗ Failed: $(echo "$result" | cut -d'"' -f2)" >&2
+        exit 1
+    fi
+}
+
+cmd_list() {
+    echo "Fetching snapshot list..."
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        list_snapshots 2>&1)
+
+    # Parse JSON result (format: "s" "json_data")
+    local json
+    json=$(echo "$result" | sed 's/^s "//' | sed 's/"$//')
+
+    if command -v jq >/dev/null 2>&1; then
+        # Pretty print with jq if available
+        echo "$json" | jq -r '.[] | "[\(.name)] \(.timestamp) - \(.description // "No description")"'
+    else
+        # Fallback: just print raw JSON
+        echo "$json" | python3 -m json.tool 2>/dev/null || echo "$json"
+    fi
+}
+
+cmd_delete() {
+    local name="${1:-}"
+
+    if [[ -z "$name" ]]; then
+        echo "Error: Snapshot name is required" >&2
+        echo "Usage: waypoint-cli delete <name>" >&2
+        exit 1
+    fi
+
+    echo "Deleting snapshot: $name"
+    read -p "Are you sure? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        delete_snapshot \
+        's' \
+        "$name" 2>&1)
+
+    if echo "$result" | grep -q "^true"; then
+        echo "✓ Success: $(echo "$result" | cut -d'"' -f2)"
+    else
+        echo "✗ Failed: $(echo "$result" | cut -d'"' -f2)" >&2
+        exit 1
+    fi
+}
+
+cmd_restore() {
+    local name="${1:-}"
+
+    if [[ -z "$name" ]]; then
+        echo "Error: Snapshot name is required" >&2
+        echo "Usage: waypoint-cli restore <name>" >&2
+        exit 1
+    fi
+
+    echo "WARNING: This will restore your system to snapshot: $name"
+    echo "You MUST reboot after this operation for changes to take effect."
+    echo
+    read -p "Are you absolutely sure? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    echo "Restoring snapshot: $name"
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        restore_snapshot \
+        's' \
+        "$name" 2>&1)
+
+    if echo "$result" | grep -q "^true"; then
+        echo "✓ Success: $(echo "$result" | cut -d'"' -f2)"
+        echo
+        echo "IMPORTANT: You MUST reboot now for changes to take effect!"
+        echo "Run: sudo reboot"
+    else
+        echo "✗ Failed: $(echo "$result" | cut -d'"' -f2)" >&2
+        exit 1
+    fi
+}
+
+# Main
+if [[ $# -eq 0 ]]; then
+    usage
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+    create)
+        check_dbus_service
+        cmd_create "$@"
+        ;;
+    list|ls)
+        check_dbus_service
+        cmd_list "$@"
+        ;;
+    delete|del|rm)
+        check_dbus_service
+        cmd_delete "$@"
+        ;;
+    restore|rollback)
+        check_dbus_service
+        cmd_restore "$@"
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        echo "Error: Unknown command: $COMMAND" >&2
+        echo "Run 'waypoint-cli help' for usage information." >&2
+        exit 1
+        ;;
+esac

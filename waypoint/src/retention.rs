@@ -1,6 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
-use std::path::PathBuf;
 
 use crate::snapshot::Snapshot;
 
@@ -32,8 +31,9 @@ impl RetentionPolicy {
     /// Load retention policy from config file
     pub fn load() -> Result<Self> {
         let config_path = dirs::config_local_dir()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
             .map(|d| d.join("waypoint").join("retention.json"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/waypoint-retention.json"));
+            .context("Failed to determine config directory")?;
 
         if !config_path.exists() {
             return Ok(Self::default());
@@ -48,8 +48,9 @@ impl RetentionPolicy {
     #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         let config_dir = dirs::config_local_dir()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
             .map(|d| d.join("waypoint"))
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
+            .context("Failed to determine config directory")?;
 
         std::fs::create_dir_all(&config_dir)?;
         let config_path = config_dir.join("retention.json");
@@ -196,6 +197,7 @@ impl<'de> Deserialize<'de> for RetentionPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn create_test_snapshot(name: &str, days_ago: i64) -> Snapshot {
         let timestamp = Utc::now() - Duration::days(days_ago);
