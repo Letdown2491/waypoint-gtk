@@ -200,6 +200,29 @@ pub fn show_retention_editor(
         }
     });
 
+    // Current cleanup status (based on saved policy)
+    let cleanup_group = adw::PreferencesGroup::new();
+    cleanup_group.set_title("Snapshots to Clean Up");
+    cleanup_group.set_description(Some("Based on currently saved retention policy"));
+    content_box.append(&cleanup_group);
+
+    if let Ok(to_cleanup) = manager.borrow().get_snapshots_to_cleanup() {
+        let cleanup_row = adw::ActionRow::new();
+        if to_cleanup.is_empty() {
+            cleanup_row.set_title("No snapshots will be automatically deleted");
+            let ok_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            cleanup_row.add_prefix(&ok_icon);
+        } else {
+            cleanup_row.set_title(&format!("{} snapshot{} will be deleted on next cleanup",
+                to_cleanup.len(),
+                if to_cleanup.len() == 1 { "" } else { "s" }
+            ));
+            let trash_icon = gtk::Image::from_icon_name("user-trash-symbolic");
+            cleanup_row.add_prefix(&trash_icon);
+        }
+        cleanup_group.add(&cleanup_row);
+    }
+
     // Preview group
     let preview_group = adw::PreferencesGroup::new();
     preview_group.set_title("Preview");

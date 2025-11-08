@@ -49,11 +49,119 @@ impl MainWindow {
         let header = adw::HeaderBar::new();
         header.set_title_widget(Some(&adw::WindowTitle::new("Waypoint", "")));
 
+        // Add application icon to header bar
+        let app_icon = if let Ok(icon_path) = std::fs::canonicalize("assets/icons/hicolor/scalable/waypoint.svg") {
+            gtk::Image::from_file(&icon_path)
+        } else {
+            // Fallback to system icon if assets folder not found (installed version)
+            gtk::Image::from_icon_name("waypoint")
+        };
+        app_icon.set_pixel_size(24);
+        app_icon.set_margin_start(6);
+        header.pack_start(&app_icon);
+
+        // Create hamburger menu
+        let menu_button = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .build();
+
+        let popover = gtk::Popover::new();
+        let popover_box = gtk::Box::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(6)
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+
+        // Theme section (using ListBox for proper styling)
+        let theme_list = ListBox::new();
+        theme_list.set_selection_mode(gtk::SelectionMode::None);
+        theme_list.add_css_class("boxed-list");
+
+        let theme_row = adw::ActionRow::builder()
+            .title("Switch theme")
+            .build();
+
+        // Theme buttons
+        let theme_buttons_box = gtk::Box::new(Orientation::Horizontal, 6);
+
+        let system_btn = gtk::Button::builder()
+            .label("◐")
+            .tooltip_text("Match system theme")
+            .build();
+        system_btn.add_css_class("flat");
+        system_btn.add_css_class("circular");
+
+        let light_btn = gtk::Button::builder()
+            .label("○")
+            .tooltip_text("Light theme")
+            .build();
+        light_btn.add_css_class("flat");
+        light_btn.add_css_class("circular");
+
+        let dark_btn = gtk::Button::builder()
+            .label("●")
+            .tooltip_text("Dark theme")
+            .build();
+        dark_btn.add_css_class("flat");
+        dark_btn.add_css_class("circular");
+
+        theme_buttons_box.append(&system_btn);
+        theme_buttons_box.append(&light_btn);
+        theme_buttons_box.append(&dark_btn);
+
+        theme_row.add_suffix(&theme_buttons_box);
+        theme_list.append(&theme_row);
+        popover_box.append(&theme_list);
+
+        // Menu items section
+        let menu_list = ListBox::new();
+        menu_list.set_selection_mode(gtk::SelectionMode::None);
+        menu_list.add_css_class("boxed-list");
+
+        let retention_row = adw::ActionRow::builder()
+            .title("Retention Policy")
+            .activatable(true)
+            .build();
+        menu_list.append(&retention_row);
+
+        let schedule_row = adw::ActionRow::builder()
+            .title("Snapshot Schedule")
+            .activatable(true)
+            .build();
+        menu_list.append(&schedule_row);
+
+        let preferences_row = adw::ActionRow::builder()
+            .title("Snapshot Preferences")
+            .activatable(true)
+            .build();
+        menu_list.append(&preferences_row);
+
+        let statistics_row = adw::ActionRow::builder()
+            .title("Snapshot Statistics")
+            .activatable(true)
+            .build();
+        menu_list.append(&statistics_row);
+
+        let about_row = adw::ActionRow::builder()
+            .title("About Waypoint")
+            .activatable(true)
+            .build();
+        menu_list.append(&about_row);
+
+        popover_box.append(&menu_list);
+
+        popover.set_child(Some(&popover_box));
+        menu_button.set_popover(Some(&popover));
+        header.pack_end(&menu_button);
+
         // Status banner - also returns whether Btrfs is available
         let (banner, is_btrfs) = Self::create_status_banner();
 
         // Toolbar with buttons
-        let (toolbar, create_btn, compare_btn, statistics_btn, scheduler_btn, preferences_btn) = toolbar::create_toolbar();
+        let (toolbar, create_btn, compare_btn) = toolbar::create_toolbar();
 
         // Disable create button if not on Btrfs
         if !is_btrfs {
@@ -318,26 +426,58 @@ impl MainWindow {
             Self::show_compare_dialog(&win_clone2, &sm_clone2);
         });
 
-        // Connect statistics button
-        let win_clone3 = window.clone();
-        let sm_clone3 = snapshot_manager.clone();
-
-        statistics_btn.connect_clicked(move |_| {
-            Self::show_statistics_dialog(&win_clone3, &sm_clone3);
+        // Connect theme buttons
+        let style_manager = adw::StyleManager::default();
+        system_btn.connect_clicked(move |_| {
+            style_manager.set_color_scheme(adw::ColorScheme::Default);
         });
 
-        // Connect scheduler button
-        let win_clone4 = window.clone();
-
-        scheduler_btn.connect_clicked(move |_| {
-            scheduler_dialog::show_scheduler_dialog(&win_clone4);
+        let style_manager_light = adw::StyleManager::default();
+        light_btn.connect_clicked(move |_| {
+            style_manager_light.set_color_scheme(adw::ColorScheme::ForceLight);
         });
 
-        // Connect preferences button
-        let win_clone5 = window.clone();
+        let style_manager_dark = adw::StyleManager::default();
+        dark_btn.connect_clicked(move |_| {
+            style_manager_dark.set_color_scheme(adw::ColorScheme::ForceDark);
+        });
 
-        preferences_btn.connect_clicked(move |_| {
-            Self::show_preferences_dialog(&win_clone5);
+        // Connect hamburger menu items
+        let win_clone_menu_schedule = window.clone();
+        let popover_clone_schedule = popover.clone();
+        schedule_row.connect_activated(move |_| {
+            popover_clone_schedule.popdown();
+            scheduler_dialog::show_scheduler_dialog(&win_clone_menu_schedule);
+        });
+
+        let win_clone_menu_prefs = window.clone();
+        let popover_clone_prefs = popover.clone();
+        preferences_row.connect_activated(move |_| {
+            popover_clone_prefs.popdown();
+            Self::show_preferences_dialog(&win_clone_menu_prefs);
+        });
+
+        let win_clone_menu_stats = window.clone();
+        let sm_clone_menu_stats = snapshot_manager.clone();
+        let popover_clone_stats = popover.clone();
+        statistics_row.connect_activated(move |_| {
+            popover_clone_stats.popdown();
+            Self::show_statistics_dialog(&win_clone_menu_stats, &sm_clone_menu_stats);
+        });
+
+        let win_clone_menu_retention = window.clone();
+        let sm_clone_menu_retention = snapshot_manager.clone();
+        let popover_clone_retention = popover.clone();
+        retention_row.connect_activated(move |_| {
+            popover_clone_retention.popdown();
+            retention_editor_dialog::show_retention_editor(&win_clone_menu_retention, &sm_clone_menu_retention);
+        });
+
+        let win_clone_menu_about = window.clone();
+        let popover_clone_about = popover.clone();
+        about_row.connect_activated(move |_| {
+            popover_clone_about.popdown();
+            Self::show_about_dialog(&win_clone_menu_about);
         });
 
         window
@@ -1179,6 +1319,88 @@ impl MainWindow {
         if let Err(e) = preferences::save_config(&prefs.get_enabled()) {
             eprintln!("Failed to save preferences: {}", e);
         }
+    }
+
+    fn show_about_dialog(window: &adw::ApplicationWindow) {
+        let dialog = adw::Window::new();
+        dialog.set_title(Some("About Waypoint"));
+        dialog.set_default_size(400, 500);
+        dialog.set_modal(true);
+        dialog.set_transient_for(Some(window));
+
+        // Create header bar with close button
+        let header = adw::HeaderBar::new();
+        header.set_show_end_title_buttons(true);
+
+        // Main container
+        let main_box = gtk::Box::new(Orientation::Vertical, 0);
+        main_box.append(&header);
+
+        // Main content box
+        let content = gtk::Box::new(Orientation::Vertical, 24);
+        content.set_margin_top(48);
+        content.set_margin_bottom(48);
+        content.set_margin_start(48);
+        content.set_margin_end(48);
+        content.set_valign(gtk::Align::Center);
+
+        // Application icon
+        let icon = if let Ok(icon_path) = std::fs::canonicalize("assets/icons/hicolor/scalable/waypoint.svg") {
+            gtk::Image::from_file(&icon_path)
+        } else {
+            gtk::Image::from_icon_name("waypoint")
+        };
+        icon.set_pixel_size(96);
+        content.append(&icon);
+
+        // Application name
+        let name_label = Label::new(Some("Waypoint"));
+        name_label.add_css_class("title-1");
+        content.append(&name_label);
+
+        // Version
+        let version_label = Label::new(Some(&format!("Version {}", env!("CARGO_PKG_VERSION"))));
+        version_label.add_css_class("dim-label");
+        content.append(&version_label);
+
+        // Description
+        let description = Label::new(Some(
+            "A GTK-based snapshot and rollback tool for Btrfs filesystems on Void Linux."
+        ));
+        description.set_wrap(true);
+        description.set_justify(gtk::Justification::Center);
+        description.set_max_width_chars(40);
+        content.append(&description);
+
+        // Links section
+        let links_box = gtk::Box::new(Orientation::Vertical, 12);
+        links_box.set_margin_top(12);
+
+        // GitHub link
+        let github_btn = gtk::Button::with_label("View on GitHub");
+        github_btn.add_css_class("flat");
+        github_btn.connect_clicked(|_| {
+            let _ = std::process::Command::new("xdg-open")
+                .arg("https://github.com/Letdown2491/waypoint-gtk/")
+                .spawn();
+        });
+        links_box.append(&github_btn);
+
+        // Report issue link
+        let issue_btn = gtk::Button::with_label("Report an issue");
+        issue_btn.add_css_class("flat");
+        issue_btn.connect_clicked(|_| {
+            let _ = std::process::Command::new("xdg-open")
+                .arg("https://github.com/Letdown2491/waypoint-gtk/issues")
+                .spawn();
+        });
+        links_box.append(&issue_btn);
+
+        content.append(&links_box);
+
+        main_box.append(&content);
+        dialog.set_content(Some(&main_box));
+        dialog.present();
     }
 
     #[allow(dead_code)]

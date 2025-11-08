@@ -130,11 +130,19 @@ pub fn refresh_snapshot_list_internal(
         if all_snapshots.is_empty() {
             placeholder.set_title("No Restore Points");
             placeholder.set_description(Some("Restore points let you roll back your system to a previous state.\n\nClick \"Create Restore Point\" to save your current system state."));
-            placeholder.set_icon_name(Some("document-save-symbolic"));
+
+            // Create custom icon with specific size
+            let icon = gtk::Image::from_icon_name("document-save-symbolic");
+            icon.set_pixel_size(64);
+            placeholder.set_child(Some(&icon));
         } else {
             placeholder.set_title("No Matching Snapshots");
             placeholder.set_description(Some("No snapshots match your search criteria.\n\nTry adjusting your search or filter settings."));
-            placeholder.set_icon_name(Some("edit-find-symbolic"));
+
+            // Create custom icon with specific size
+            let icon = gtk::Image::from_icon_name("edit-find-symbolic");
+            icon.set_pixel_size(64);
+            placeholder.set_child(Some(&icon));
         }
         placeholder.set_vexpand(true);
 

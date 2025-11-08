@@ -182,6 +182,40 @@ create_metadata_dir() {
     sudo install -d -m755 /var/lib/waypoint
 }
 
+install_icons() {
+    local icon_source_dir="assets/icons/hicolor"
+
+    if [[ ! -d "$icon_source_dir" ]]; then
+        echo "Icon directory not found: $icon_source_dir"
+        return
+    fi
+
+    echo "Installing application icons..."
+
+    # Install PNG icons
+    while IFS= read -r -d '' icon; do
+        local relative_path="${icon#$icon_source_dir/}"
+        local target="${DATADIR}/icons/hicolor/${relative_path}"
+        echo " → Installing icon: $relative_path"
+        sudo install -D -m644 "$icon" "$target"
+    done < <(find "$icon_source_dir" -type f -name '*.png' -print0)
+
+    # Install SVG icons
+    while IFS= read -r -d '' icon; do
+        local relative_path="${icon#$icon_source_dir/}"
+        # SVG icons go in scalable/apps directory
+        local target="${DATADIR}/icons/hicolor/scalable/apps/waypoint.svg"
+        echo " → Installing icon: $relative_path"
+        sudo install -D -m644 "$icon" "$target"
+    done < <(find "$icon_source_dir" -type f -name '*.svg' -print0)
+
+    # Update icon cache
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        echo " → Updating icon cache..."
+        sudo gtk-update-icon-cache -f -t "${DATADIR}/icons/hicolor" 2>/dev/null || true
+    fi
+}
+
 install_scheduler_service() {
     if [[ ! -f "services/waypoint-scheduler/run" ]]; then
         echo "Scheduler service script missing"
@@ -319,6 +353,32 @@ uninstall_xbps_hooks() {
     fi
 }
 
+uninstall_icons() {
+    echo "Removing application icons..."
+
+    # Remove PNG icons in all sizes
+    for size in 128x128 256x256 512x512; do
+        local icon_path="${DATADIR}/icons/hicolor/${size}/apps/waypoint.png"
+        if [[ -f "$icon_path" ]]; then
+            echo " → Removing $icon_path"
+            sudo rm -f "$icon_path"
+        fi
+    done
+
+    # Remove SVG icon
+    local svg_icon="${DATADIR}/icons/hicolor/scalable/apps/waypoint.svg"
+    if [[ -f "$svg_icon" ]]; then
+        echo " → Removing $svg_icon"
+        sudo rm -f "$svg_icon"
+    fi
+
+    # Update icon cache
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        echo " → Updating icon cache..."
+        sudo gtk-update-icon-cache -f -t "${DATADIR}/icons/hicolor" 2>/dev/null || true
+    fi
+}
+
 uninstall_scheduler_service() {
     echo "Removing scheduler service..."
 
@@ -356,6 +416,7 @@ case "$ACTION" in
         build_release
         install_binaries
         install_desktop_entry
+        install_icons
         install_polkit_policy
         install_dbus_service
         install_xbps_hooks
@@ -383,6 +444,7 @@ case "$ACTION" in
         require_sudo
         uninstall_binaries
         uninstall_desktop_entry
+        uninstall_icons
         uninstall_polkit_policy
         uninstall_dbus_service
         uninstall_xbps_hooks

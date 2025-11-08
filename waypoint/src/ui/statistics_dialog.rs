@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use crate::snapshot::{SnapshotManager, format_bytes};
-use crate::retention::RetentionPolicy;
 use crate::btrfs;
 
 /// Show statistics dialog with disk space and retention info
@@ -138,55 +137,6 @@ pub fn show_statistics_dialog(parent: &adw::ApplicationWindow, manager: &Rc<RefC
         main_box.append(&largest_group);
     }
 
-    // Retention Policy Section
-    let retention = match RetentionPolicy::load() {
-        Ok(p) => p,
-        Err(_) => RetentionPolicy::default(),
-    };
-
-    let retention_group = adw::PreferencesGroup::new();
-    retention_group.set_title("Retention Policy");
-    retention_group.set_description(Some("Automatic cleanup settings"));
-
-    let policy_row = adw::ActionRow::new();
-    policy_row.set_title("Current Policy");
-    policy_row.set_subtitle(&retention.description());
-    let policy_icon = gtk::Image::from_icon_name("emblem-system-symbolic");
-    policy_row.add_prefix(&policy_icon);
-
-    // Add Edit Policy button
-    let edit_policy_btn = Button::with_label("Edit Policy");
-    edit_policy_btn.set_valign(gtk::Align::Center);
-    edit_policy_btn.add_css_class("flat");
-
-    let parent_for_edit = parent.clone();
-    let manager_for_edit = manager.clone();
-    let dialog_for_edit = dialog.clone();
-    edit_policy_btn.connect_clicked(move |_| {
-        // Close the statistics dialog and open the editor
-        dialog_for_edit.close();
-        super::retention_editor_dialog::show_retention_editor(&parent_for_edit, &manager_for_edit);
-    });
-
-    policy_row.add_suffix(&edit_policy_btn);
-    retention_group.add(&policy_row);
-
-    // Show which snapshots would be cleaned up
-    if let Ok(to_cleanup) = manager.borrow().get_snapshots_to_cleanup() {
-        let cleanup_row = adw::ActionRow::new();
-        cleanup_row.set_title("Snapshots to Clean Up");
-        if to_cleanup.is_empty() {
-            cleanup_row.set_subtitle("No snapshots will be automatically deleted");
-        } else {
-            cleanup_row.set_subtitle(&format!("{} snapshots will be deleted on next cleanup", to_cleanup.len()));
-        }
-        let cleanup_icon = gtk::Image::from_icon_name("user-trash-symbolic");
-        cleanup_row.add_prefix(&cleanup_icon);
-        retention_group.add(&cleanup_row);
-    }
-
-    main_box.append(&retention_group);
-
     // Maintenance section
     let maintenance_group = adw::PreferencesGroup::new();
     maintenance_group.set_title("Maintenance");
@@ -248,32 +198,6 @@ pub fn show_statistics_dialog(parent: &adw::ApplicationWindow, manager: &Rc<RefC
     maintenance_group.add(&calc_button_row);
 
     main_box.append(&maintenance_group);
-
-    // Settings hint
-    let settings_group = adw::PreferencesGroup::new();
-    settings_group.set_title("Configuration");
-
-    let config_info = Label::new(Some(
-        "Retention policy can be configured in:\n~/.config/waypoint/retention.json"
-    ));
-    config_info.set_wrap(true);
-    config_info.add_css_class("dim-label");
-    config_info.set_halign(gtk::Align::Start);
-    config_info.set_margin_top(6);
-    config_info.set_margin_bottom(6);
-    settings_group.add(&config_info);
-
-    let example = Label::new(Some(
-        "Example:\n{\n  \"max_snapshots\": 10,\n  \"max_age_days\": 30,\n  \"min_snapshots\": 3\n}"
-    ));
-    example.set_wrap(true);
-    example.add_css_class("monospace");
-    example.set_halign(gtk::Align::Start);
-    example.set_margin_top(6);
-    example.set_margin_bottom(6);
-    settings_group.add(&example);
-
-    main_box.append(&settings_group);
 
     scrolled.set_child(Some(&main_box));
     content.append(&scrolled);

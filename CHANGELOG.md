@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2025-01-08 (Stable Release)
+
+### Added
+- **Hamburger menu**: Clean menu interface in header bar with GNOME-style design
+  - Theme switcher with system/light/dark mode options
+  - Retention Policy editor for automatic cleanup rules
+  - Snapshot Schedule for automated snapshot configuration
+  - Snapshot Preferences for subvolume configuration
+  - Snapshot Statistics for disk usage and metrics
+  - About Waypoint dialog with project links and version info
+- **Application icons**: Custom Waypoint icons in multiple sizes
+  - PNG icons (128x128, 256x256, 512x512)
+  - SVG icon for scalable display
+  - Icon displayed in header bar and application launcher
+  - Integrated installation via setup.sh
+
+### Changed
+- Updated to stable 1.0.0 version number
+- Streamlined toolbar by moving settings to hamburger menu
+- Improved UI organization with menu-based access to all features
+- Enhanced Statistics dialog with focused disk usage information
+- Retention Policy dialog now shows cleanup preview
+
+### Fixed
+- Application icon now displays correctly in header bar
+- Desktop entry uses proper Waypoint icon
+- Statistics dialog cleaned up (removed duplicate retention policy section)
+
 ## [0.4.0] - 2025-01-08 (Feature-Complete Release)
 
 ### Added
