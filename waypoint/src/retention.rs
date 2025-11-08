@@ -128,29 +128,6 @@ impl RetentionPolicy {
 
         to_delete
     }
-
-    /// Get a human-readable description of this policy
-    pub fn description(&self) -> String {
-        let mut parts = Vec::new();
-
-        if self.max_snapshots > 0 {
-            parts.push(format!("Keep last {} snapshots", self.max_snapshots));
-        }
-
-        if self.max_age_days > 0 {
-            parts.push(format!("Keep snapshots for {} days", self.max_age_days));
-        }
-
-        if self.min_snapshots > 0 {
-            parts.push(format!("Always keep at least {}", self.min_snapshots));
-        }
-
-        if parts.is_empty() {
-            "Keep all snapshots".to_string()
-        } else {
-            parts.join(", ")
-        }
-    }
 }
 
 // Make RetentionPolicy serializable
