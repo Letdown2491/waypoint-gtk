@@ -44,21 +44,6 @@ pub fn show_retention_editor(
     content_box.set_margin_end(24);
     scrolled.set_child(Some(&content_box));
 
-    // Title and description
-    let title = Label::new(Some("Automatic Cleanup Policy"));
-    title.add_css_class("title-2");
-    title.set_halign(gtk::Align::Start);
-    content_box.append(&title);
-
-    let description = Label::new(Some(
-        "Configure rules for automatically deleting old snapshots. \
-         Cleanup runs after creating new snapshots."
-    ));
-    description.set_wrap(true);
-    description.set_halign(gtk::Align::Start);
-    description.add_css_class("dim-label");
-    content_box.append(&description);
-
     // Settings group
     let settings_group = adw::PreferencesGroup::new();
     settings_group.set_title("Policy Rules");

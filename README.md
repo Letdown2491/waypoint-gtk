@@ -417,6 +417,9 @@ Waypoint uses a **privilege-separated architecture** for security:
 - **waypoint-helper**: Runs as root via D-Bus activation, performs privileged operations
 - **D-Bus**: Mediates communication between GUI and helper
 - **Polkit**: Handles authentication and authorization
+  - Regular users require password authentication for snapshot operations
+  - Root user can bypass authentication (enables automated scheduler service)
+  - Polkit rules: `/etc/polkit-1/rules.d/50-waypoint-automated.rules`
 
 ## Known Limitations
 

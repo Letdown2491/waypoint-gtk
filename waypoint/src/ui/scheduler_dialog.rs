@@ -33,20 +33,6 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
     content_box.set_margin_end(24);
     scrolled.set_child(Some(&content_box));
 
-    // Title and description
-    let title = Label::new(Some("Scheduled Snapshots"));
-    title.add_css_class("title-2");
-    title.set_halign(gtk::Align::Start);
-    content_box.append(&title);
-
-    let description = Label::new(Some(
-        "Configure automatic periodic snapshots using the runit scheduler service."
-    ));
-    description.set_wrap(true);
-    description.set_halign(gtk::Align::Start);
-    description.add_css_class("dim-label");
-    content_box.append(&description);
-
     // Service status group
     let status_group = adw::PreferencesGroup::new();
     status_group.set_title("Service Status");
@@ -62,33 +48,6 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
 
     // Load current config
     let (frequency, time, day, prefix) = load_scheduler_config();
-
-    // Quick presets group
-    let presets_group = adw::PreferencesGroup::new();
-    presets_group.set_title("Quick Presets");
-    presets_group.set_description(Some("Common snapshot schedules"));
-    content_box.append(&presets_group);
-
-    let presets_box = Box::new(Orientation::Horizontal, 12);
-    presets_box.set_margin_top(12);
-    presets_box.set_margin_bottom(12);
-    presets_box.set_margin_start(12);
-    presets_box.set_margin_end(12);
-    presets_box.set_halign(gtk::Align::Center);
-
-    let preset_daily_2am = Button::with_label("Daily at 2 AM");
-    preset_daily_2am.add_css_class("pill");
-    presets_box.append(&preset_daily_2am);
-
-    let preset_daily_midnight = Button::with_label("Daily at Midnight");
-    preset_daily_midnight.add_css_class("pill");
-    presets_box.append(&preset_daily_midnight);
-
-    let preset_weekly_sunday = Button::with_label("Weekly on Sunday");
-    preset_weekly_sunday.add_css_class("pill");
-    presets_box.append(&preset_weekly_sunday);
-
-    presets_group.add(&presets_box);
 
     // Settings group
     let settings_group = adw::PreferencesGroup::new();
@@ -179,36 +138,6 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
     time_row.set_visible(initial_freq == 1 || initial_freq == 2);
     day_row.set_visible(initial_freq == 2);
 
-    // Preset button handlers
-    let freq_for_preset1 = freq_dropdown.clone();
-    let hour_for_preset1 = hour_spin.clone();
-    let minute_for_preset1 = minute_spin.clone();
-    preset_daily_2am.connect_clicked(move |_| {
-        freq_for_preset1.set_selected(1); // Daily
-        hour_for_preset1.set_value(2.0);
-        minute_for_preset1.set_value(0.0);
-    });
-
-    let freq_for_preset2 = freq_dropdown.clone();
-    let hour_for_preset2 = hour_spin.clone();
-    let minute_for_preset2 = minute_spin.clone();
-    preset_daily_midnight.connect_clicked(move |_| {
-        freq_for_preset2.set_selected(1); // Daily
-        hour_for_preset2.set_value(0.0);
-        minute_for_preset2.set_value(0.0);
-    });
-
-    let freq_for_preset3 = freq_dropdown.clone();
-    let hour_for_preset3 = hour_spin.clone();
-    let minute_for_preset3 = minute_spin.clone();
-    let day_for_preset3 = day_dropdown.clone();
-    preset_weekly_sunday.connect_clicked(move |_| {
-        freq_for_preset3.set_selected(2); // Weekly
-        hour_for_preset3.set_value(2.0);
-        minute_for_preset3.set_value(0.0);
-        day_for_preset3.set_selected(0); // Sunday
-    });
-
     // Next snapshot preview
     let preview_group = adw::PreferencesGroup::new();
     preview_group.set_title("Schedule Preview");
@@ -258,23 +187,6 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
 
     let update_preview_clone4 = update_preview.clone();
     day_dropdown.connect_selected_notify(move |_| update_preview_clone4());
-
-    // Info group
-    let info_group = adw::PreferencesGroup::new();
-    info_group.set_title("Information");
-    content_box.append(&info_group);
-
-    let info_label = Label::new(Some(
-        "After saving, the scheduler service will be restarted automatically.\n\n\
-         Snapshots will be named: [prefix]-YYYYMMDD-HHMM\n\
-         Example: auto-20251107-0200\n\n\
-         To enable the service: sudo ln -s /etc/sv/waypoint-scheduler /var/service/\n\
-         To disable: sudo rm /var/service/waypoint-scheduler"
-    ));
-    info_label.set_wrap(true);
-    info_label.set_halign(gtk::Align::Start);
-    info_label.add_css_class("dim-label");
-    info_group.add(&info_label);
 
     // Button box at bottom
     let button_box = Box::new(Orientation::Horizontal, 12);
@@ -544,8 +456,12 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
 
             let time_until = next.signed_duration_since(now.naive_local());
             let hours_until = time_until.num_hours();
+            let minutes_until = time_until.num_minutes();
 
-            if hours_until < 24 {
+            if minutes_until < 60 {
+                format!("📅 Next snapshot: Today at {:02}:{:02} (in {} minutes)",
+                        hour, minute, minutes_until)
+            } else if hours_until < 24 {
                 format!("📅 Next snapshot: Today at {:02}:{:02} (in {} hours)",
                         hour, minute, hours_until)
             } else {
@@ -574,14 +490,27 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
             let day_name = day_names.get(target_day as usize).unwrap_or(&"Unknown");
 
             if days_until == 0 {
-                format!("📅 Next snapshot: Today ({}) at {:02}:{:02}",
-                        day_name, hour, minute)
+                // Calculate time until for today
+                let target_time = now.date_naive()
+                    .and_hms_opt(hour, minute, 0)
+                    .unwrap();
+                let time_until = target_time.signed_duration_since(now.naive_local());
+                let hours_until = time_until.num_hours();
+                let minutes_until = time_until.num_minutes();
+
+                if minutes_until < 60 {
+                    format!("📅 Next snapshot: Today ({}) at {:02}:{:02} (in {} minutes)",
+                            day_name, hour, minute, minutes_until)
+                } else {
+                    format!("📅 Next snapshot: Today ({}) at {:02}:{:02} (in {} hours)",
+                            day_name, hour, minute, hours_until)
+                }
             } else if days_until == 1 {
                 format!("📅 Next snapshot: Tomorrow ({}) at {:02}:{:02}",
                         day_name, hour, minute)
             } else {
-                format!("📅 Next snapshot: {} ({}) at {:02}:{:02} (in {} days)",
-                        day_name, day_name, hour, minute, days_until)
+                format!("📅 Next snapshot: {} at {:02}:{:02} (in {} days)",
+                        day_name, hour, minute, days_until)
             }
         }
         3 => {

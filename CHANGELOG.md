@@ -73,6 +73,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Real-time next snapshot calculation
   - Improved user experience with immediate feedback
 
+### Fixed
+- **Disk space indicator**: Now updates immediately after snapshot creation/deletion
+  - Previously only updated on 30-second timer
+  - Footer now reflects actual disk usage without delay
+- **Package comparison**: Fixed comparison showing no differences
+  - GUI and helper now use unified metadata file location
+  - Changed from user-local (~/.local/share) to centralized (/var/lib/waypoint)
+  - Both components now read from same metadata source
+- **Scheduler service**: Fixed automated snapshots not being created
+  - Added Polkit rule allowing root to bypass authentication
+  - Scheduler can now create snapshots without interactive prompts
+  - Rule installed via setup.sh to /etc/polkit-1/rules.d/50-waypoint-automated.rules
+- **Scheduler preview**: Improved time display for imminent snapshots
+  - Shows minutes when next snapshot is less than 1 hour away
+  - Previously showed "in 0 hours" which was confusing
+  - Better user experience with more precise timing information
+- **Snapshot list refresh**: UI now auto-refreshes every 30 seconds
+  - External snapshots (from scheduler/CLI) now appear automatically
+  - No longer requires manual tab switching to see new snapshots
+  - Keeps UI synchronized with filesystem state
+
 ### Security
 - **Input validation**: Prevents snapshot name injection attacks
   - Validates all user-provided snapshot names
@@ -85,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fstab safety**: Automatic backup before modifications
   - Reduces risk of unbootable system from rollback
   - Timestamped backups preserve history
+- **Polkit automation**: Secure privilege elevation for scheduler
+  - Root can bypass authentication for automated operations
+  - Regular users still require password for GUI operations
+  - Enables background snapshot creation without compromising security
 
 ### Performance
 - **Caching layer**: Reduces filesystem query overhead

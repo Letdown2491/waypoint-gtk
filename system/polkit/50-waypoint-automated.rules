@@ -1,0 +1,22 @@
+/* Waypoint - Polkit Authorization Rules
+ *
+ * This rule allows the root user to perform Waypoint operations without
+ * interactive authentication. This is necessary for the automated scheduler
+ * service to create snapshots in the background.
+ *
+ * Security note: Only root can bypass authentication. Regular users will
+ * still be prompted for their password when using the GUI.
+ *
+ * Installed to: /etc/polkit-1/rules.d/50-waypoint-automated.rules
+ */
+
+polkit.addRule(function(action, subject) {
+    // Allow root user to perform all Waypoint operations without authentication
+    if (subject.user === "root" &&
+        (action.id === "tech.geektoshi.waypoint.create-snapshot" ||
+         action.id === "tech.geektoshi.waypoint.delete-snapshot" ||
+         action.id === "tech.geektoshi.waypoint.restore-snapshot" ||
+         action.id === "tech.geektoshi.waypoint.configure-system")) {
+        return polkit.Result.YES;
+    }
+});

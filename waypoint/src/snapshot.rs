@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
+use waypoint_common::WaypointConfig;
 
 use crate::packages::Package;
 
@@ -154,25 +155,27 @@ pub fn format_bytes(bytes: u64) -> String {
 
 /// Manage snapshot metadata persistence
 pub struct SnapshotManager {
-    data_dir: PathBuf,
+    metadata_file: PathBuf,
 }
 
 impl SnapshotManager {
     /// Create a new snapshot manager
     pub fn new() -> Result<Self> {
-        let data_dir = dirs::data_local_dir()
-            .context("Failed to get local data directory")?
-            .join("waypoint");
+        let config = WaypointConfig::new();
+        let metadata_file = config.metadata_file.clone();
 
-        fs::create_dir_all(&data_dir)
-            .context("Failed to create data directory")?;
+        // Ensure parent directory exists
+        if let Some(parent) = metadata_file.parent() {
+            fs::create_dir_all(parent)
+                .context("Failed to create metadata directory")?;
+        }
 
-        Ok(Self { data_dir })
+        Ok(Self { metadata_file })
     }
 
     /// Get path to snapshots metadata file
-    fn metadata_path(&self) -> PathBuf {
-        self.data_dir.join("snapshots.json")
+    fn metadata_path(&self) -> &PathBuf {
+        &self.metadata_file
     }
 
     /// Load all snapshots from disk
@@ -186,10 +189,41 @@ impl SnapshotManager {
         let content = fs::read_to_string(&path)
             .context("Failed to read snapshots metadata")?;
 
-        let snapshots: Vec<Snapshot> = serde_json::from_str(&content)
+        let mut snapshots: Vec<Snapshot> = serde_json::from_str(&content)
             .context("Failed to parse snapshots metadata")?;
 
-        Ok(snapshots)
+        // Filter out snapshots that don't exist on disk (phantom snapshots)
+        let initial_count = snapshots.len();
+        snapshots.retain(|s| s.path.exists());
+        let after_phantom_cleanup = snapshots.len();
+
+        // Remove duplicates by keeping only the last occurrence of each ID
+        let mut seen_ids = std::collections::HashSet::new();
+        let mut deduped = Vec::new();
+
+        // Iterate in reverse to keep the most recent entry for each ID
+        for snapshot in snapshots.into_iter().rev() {
+            if seen_ids.insert(snapshot.id.clone()) {
+                deduped.push(snapshot);
+            }
+        }
+        deduped.reverse(); // Restore original order
+
+        let after_dedup = deduped.len();
+
+        // If we cleaned anything, save the cleaned list
+        if after_phantom_cleanup < initial_count {
+            eprintln!("Cleaned up {} phantom snapshot(s) from metadata", initial_count - after_phantom_cleanup);
+        }
+        if after_dedup < after_phantom_cleanup {
+            eprintln!("Cleaned up {} duplicate snapshot(s) from metadata", after_phantom_cleanup - after_dedup);
+        }
+
+        if after_dedup < initial_count {
+            let _ = self.save_snapshots(&deduped);
+        }
+
+        Ok(deduped)
     }
 
     /// Save snapshots to disk
@@ -205,10 +239,16 @@ impl SnapshotManager {
         Ok(())
     }
 
-    /// Add a new snapshot
+    /// Add or update a snapshot
+    /// If a snapshot with the same ID already exists, it will be replaced
     #[allow(dead_code)]
     pub fn add_snapshot(&self, snapshot: Snapshot) -> Result<()> {
         let mut snapshots = self.load_snapshots()?;
+
+        // Remove any existing snapshot with the same ID to avoid duplicates
+        snapshots.retain(|s| s.id != snapshot.id);
+
+        // Add the new/updated snapshot
         snapshots.push(snapshot);
         self.save_snapshots(&snapshots)
     }

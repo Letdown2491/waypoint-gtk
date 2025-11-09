@@ -141,6 +141,20 @@ install_polkit_policy() {
         "${DATADIR}/polkit-1/actions/tech.geektoshi.waypoint.policy"
 }
 
+install_polkit_rules() {
+    if [[ ! -f "system/polkit/50-waypoint-automated.rules" ]]; then
+        echo "Polkit rules file missing: system/polkit/50-waypoint-automated.rules"
+        return
+    fi
+
+    echo "Installing Polkit authorization rules..."
+    sudo install -D -m644 -o polkitd -g polkitd \
+        system/polkit/50-waypoint-automated.rules \
+        /etc/polkit-1/rules.d/50-waypoint-automated.rules
+
+    echo " ℹ Polkit rule allows automated scheduler to create snapshots"
+}
+
 install_dbus_service() {
     if [[ ! -f "data/dbus-1/tech.geektoshi.waypoint.service" ]]; then
         echo "D-Bus service file missing"
@@ -230,7 +244,7 @@ install_scheduler_service() {
 }
 
 reload_dbus() {
-    echo "Reloading D-Bus configuration..."
+    echo "Reloading system services..."
 
     # Kill any running waypoint-helper instances
     if sudo pkill -9 waypoint-helper 2>/dev/null; then
@@ -242,6 +256,13 @@ reload_dbus() {
         echo " ✓ D-Bus reloaded successfully"
     else
         echo " ⚠ Could not reload D-Bus. You may need to reboot."
+    fi
+
+    # Reload Polkit to pick up new rules
+    if command -v sv >/dev/null 2>&1 && sudo sv reload polkitd 2>/dev/null; then
+        echo " ✓ Polkit reloaded successfully"
+    else
+        echo " ⚠ Could not reload Polkit. Restart may be needed for auth changes."
     fi
 }
 
@@ -305,6 +326,15 @@ uninstall_polkit_policy() {
     # Remove both old and new namespace files
     [[ -f "$old_policy_file" ]] && sudo rm -f "$old_policy_file"
     [[ -f "$new_policy_file" ]] && sudo rm -f "$new_policy_file"
+}
+
+uninstall_polkit_rules() {
+    local rules_file="/etc/polkit-1/rules.d/50-waypoint-automated.rules"
+
+    echo "Removing Polkit authorization rules..."
+    if [[ -f "$rules_file" ]]; then
+        sudo rm -f "$rules_file"
+    fi
 }
 
 uninstall_dbus_service() {
@@ -391,6 +421,7 @@ case "$ACTION" in
         install_desktop_entry
         install_icons
         install_polkit_policy
+        install_polkit_rules
         install_dbus_service
         install_scheduler_service
         create_metadata_dir
@@ -417,6 +448,7 @@ case "$ACTION" in
         uninstall_desktop_entry
         uninstall_icons
         uninstall_polkit_policy
+        uninstall_polkit_rules
         uninstall_dbus_service
         uninstall_scheduler_service
         reload_dbus

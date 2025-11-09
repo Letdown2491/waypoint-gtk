@@ -75,6 +75,7 @@ pub struct MainWindow {
     snapshot_manager: Rc<RefCell<SnapshotManager>>,
     snapshot_list: ListBox,
     compare_btn: Button,
+    disk_space_label: Label,
     _search_entry: SearchEntry,
     _match_label: Label,
     _date_filter: Rc<RefCell<DateFilter>>,
@@ -166,6 +167,8 @@ impl MainWindow {
         let system_btn = gtk::Button::builder()
             .label("◐")
             .tooltip_text("Match system theme")
+            .width_request(24)
+            .height_request(24)
             .build();
         system_btn.add_css_class("flat");
         system_btn.add_css_class("circular");
@@ -173,6 +176,8 @@ impl MainWindow {
         let light_btn = gtk::Button::builder()
             .label("○")
             .tooltip_text("Light theme")
+            .width_request(24)
+            .height_request(24)
             .build();
         light_btn.add_css_class("flat");
         light_btn.add_css_class("circular");
@@ -180,6 +185,8 @@ impl MainWindow {
         let dark_btn = gtk::Button::builder()
             .label("●")
             .tooltip_text("Dark theme")
+            .width_request(24)
+            .height_request(24)
             .build();
         dark_btn.add_css_class("flat");
         dark_btn.add_css_class("circular");
@@ -204,7 +211,7 @@ impl MainWindow {
         menu_list.append(&retention_row);
 
         let schedule_row = adw::ActionRow::builder()
-            .title("Snapshot Schedule")
+            .title("Scheduled Snapshots")
             .activatable(true)
             .build();
         menu_list.append(&schedule_row);
@@ -226,13 +233,6 @@ impl MainWindow {
         popover.set_child(Some(&popover_box));
         menu_button.set_popover(Some(&popover));
         header.pack_end(&menu_button);
-
-        // Disk space indicator
-        let disk_space_label = Label::new(Some("Checking space..."));
-        disk_space_label.add_css_class("caption");
-        disk_space_label.add_css_class("dim-label");
-        disk_space_label.set_margin_end(12);
-        header.pack_end(&disk_space_label);
 
         // Status banner - also returns whether Btrfs is available
         let (banner, is_btrfs) = Self::create_status_banner();
@@ -299,9 +299,17 @@ impl MainWindow {
         clamp.set_tightening_threshold(600);
         clamp.set_child(Some(&scrolled));
         clamp.set_margin_top(24);
-        clamp.set_margin_bottom(24);
+        clamp.set_margin_bottom(12);
         clamp.set_margin_start(12);
         clamp.set_margin_end(12);
+
+        // Disk space indicator footer
+        let disk_space_label = Label::new(Some("Checking space..."));
+        disk_space_label.add_css_class("caption");
+        disk_space_label.add_css_class("dim-label");
+        disk_space_label.set_halign(gtk::Align::Center);
+        disk_space_label.set_margin_top(6);
+        disk_space_label.set_margin_bottom(12);
 
         // Main content box
         let content_box = gtk::Box::new(Orientation::Vertical, 0);
@@ -309,6 +317,7 @@ impl MainWindow {
         content_box.append(&toolbar);
         content_box.append(&search_box);
         content_box.append(&clamp);
+        content_box.append(&disk_space_label);
 
         // Use ToolbarView for proper GNOME layout
         let toolbar_view = adw::ToolbarView::new();
@@ -335,6 +344,7 @@ impl MainWindow {
             snapshot_manager: snapshot_manager.clone(),
             snapshot_list: snapshot_list.clone(),
             compare_btn: compare_btn.clone(),
+            disk_space_label: disk_space_label.clone(),
             _search_entry: search_entry.clone(),
             _match_label: match_label.clone(),
             _date_filter: date_filter.clone(),
@@ -348,6 +358,7 @@ impl MainWindow {
         let sm_clone_search = snapshot_manager.clone();
         let list_clone_search = snapshot_list.clone();
         let compare_btn_clone_search = compare_btn.clone();
+        let disk_space_clone_search = disk_space_label.clone();
         let match_label_clone = match_label.clone();
         let date_filter_clone = date_filter.clone();
 
@@ -358,6 +369,7 @@ impl MainWindow {
                 &sm_clone_search,
                 &list_clone_search,
                 &compare_btn_clone_search,
+                &disk_space_clone_search,
                 &match_label_clone,
                 &search_text,
                 *date_filter_clone.borrow(),
@@ -369,6 +381,7 @@ impl MainWindow {
         let sm_clone_all = snapshot_manager.clone();
         let list_clone_all = snapshot_list.clone();
         let compare_btn_clone_all = compare_btn.clone();
+        let disk_space_clone_all = disk_space_label.clone();
         let match_label_clone_all = match_label.clone();
         let search_entry_clone_all = search_entry.clone();
         let date_filter_clone_all = date_filter.clone();
@@ -388,6 +401,7 @@ impl MainWindow {
                     &sm_clone_all,
                     &list_clone_all,
                     &compare_btn_clone_all,
+                    &disk_space_clone_all,
                     &match_label_clone_all,
                     &search_text,
                     DateFilter::All,
@@ -399,6 +413,7 @@ impl MainWindow {
         let sm_clone_week = snapshot_manager.clone();
         let list_clone_week = snapshot_list.clone();
         let compare_btn_clone_week = compare_btn.clone();
+        let disk_space_clone_week = disk_space_label.clone();
         let match_label_clone_week = match_label.clone();
         let search_entry_clone_week = search_entry.clone();
         let date_filter_clone_week = date_filter.clone();
@@ -418,6 +433,7 @@ impl MainWindow {
                     &sm_clone_week,
                     &list_clone_week,
                     &compare_btn_clone_week,
+                    &disk_space_clone_week,
                     &match_label_clone_week,
                     &search_text,
                     DateFilter::Last7Days,
@@ -429,6 +445,7 @@ impl MainWindow {
         let sm_clone_month = snapshot_manager.clone();
         let list_clone_month = snapshot_list.clone();
         let compare_btn_clone_month = compare_btn.clone();
+        let disk_space_clone_month = disk_space_label.clone();
         let match_label_clone_month = match_label.clone();
         let search_entry_clone_month = search_entry.clone();
         let date_filter_clone_month = date_filter.clone();
@@ -448,6 +465,7 @@ impl MainWindow {
                     &sm_clone_month,
                     &list_clone_month,
                     &compare_btn_clone_month,
+                    &disk_space_clone_month,
                     &match_label_clone_month,
                     &search_text,
                     DateFilter::Last30Days,
@@ -459,6 +477,7 @@ impl MainWindow {
         let sm_clone_quarter = snapshot_manager.clone();
         let list_clone_quarter = snapshot_list.clone();
         let compare_btn_clone_quarter = compare_btn.clone();
+        let disk_space_clone_quarter = disk_space_label.clone();
         let match_label_clone_quarter = match_label.clone();
         let search_entry_clone_quarter = search_entry.clone();
         let date_filter_clone_quarter = date_filter.clone();
@@ -478,6 +497,7 @@ impl MainWindow {
                     &sm_clone_quarter,
                     &list_clone_quarter,
                     &compare_btn_clone_quarter,
+                    &disk_space_clone_quarter,
                     &match_label_clone_quarter,
                     &search_text,
                     DateFilter::Last90Days,
@@ -490,9 +510,10 @@ impl MainWindow {
         let list_clone = snapshot_list.clone();
         let win_clone = window.clone();
         let compare_btn_clone = compare_btn.clone();
+        let disk_space_clone = disk_space_label.clone();
 
         create_btn.connect_clicked(move |_| {
-            Self::on_create_snapshot(&win_clone, sm_clone.clone(), list_clone.clone(), compare_btn_clone.clone());
+            Self::on_create_snapshot(&win_clone, sm_clone.clone(), list_clone.clone(), compare_btn_clone.clone(), disk_space_clone.clone());
         });
 
         // Connect compare button
@@ -564,6 +585,24 @@ impl MainWindow {
         let disk_space_label_clone = disk_space_label.clone();
         glib::timeout_add_seconds_local(30, move || {
             Self::update_disk_space_label(&disk_space_label_clone);
+            glib::ControlFlow::Continue
+        });
+
+        // Set up periodic snapshot list refresh (every 30 seconds)
+        // This ensures external snapshots (from scheduler) appear in the UI
+        let window_refresh = window.clone();
+        let manager_refresh = snapshot_manager.clone();
+        let list_refresh = snapshot_list.clone();
+        let compare_refresh = compare_btn.clone();
+        let disk_space_refresh = disk_space_label.clone();
+        glib::timeout_add_seconds_local(30, move || {
+            Self::refresh_list_static(
+                &window_refresh,
+                &manager_refresh,
+                &list_refresh,
+                &compare_refresh,
+                &disk_space_refresh,
+            );
             glib::ControlFlow::Continue
         });
 
@@ -696,6 +735,7 @@ impl MainWindow {
         let manager = self.snapshot_manager.clone();
         let list = self.snapshot_list.clone();
         let compare_btn = self.compare_btn.clone();
+        let disk_space_label = self.disk_space_label.clone();
 
         snapshot_list::refresh_snapshot_list_internal(
             &self.window,
@@ -706,7 +746,7 @@ impl MainWindow {
             None,  // No date filter
             None,  // No match label
             move |id, action| {
-                Self::handle_snapshot_action(&window, &manager, &list, &compare_btn, id, action);
+                Self::handle_snapshot_action(&window, &manager, &list, &compare_btn, &disk_space_label, id, action);
             },
         );
     }
@@ -716,6 +756,7 @@ impl MainWindow {
         manager: &Rc<RefCell<SnapshotManager>>,
         list: &ListBox,
         compare_btn: &Button,
+        disk_space_label: &Label,
         match_label: &Label,
         search_text: &str,
         date_filter: DateFilter,
@@ -724,6 +765,7 @@ impl MainWindow {
         let manager_clone = manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
+        let disk_space_clone = disk_space_label.clone();
 
         snapshot_list::refresh_snapshot_list_internal(
             window,
@@ -734,7 +776,7 @@ impl MainWindow {
             Some(date_filter),
             Some(match_label),
             move |id, action| {
-                Self::handle_snapshot_action(&window_clone, &manager_clone, &list_clone, &compare_btn_clone, id, action);
+                Self::handle_snapshot_action(&window_clone, &manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, id, action);
             },
         );
     }
@@ -744,6 +786,7 @@ impl MainWindow {
         manager: Rc<RefCell<SnapshotManager>>,
         list: ListBox,
         compare_btn: Button,
+        disk_space_label: Label,
     ) {
         // Check if root is on Btrfs (can check without root)
         match btrfs::is_btrfs(&std::path::PathBuf::from("/")) {
@@ -821,6 +864,7 @@ impl MainWindow {
             let list_clone2 = list_clone.clone();
             let manager_clone2 = manager_clone.clone();
             let compare_btn_clone2 = compare_btn_clone.clone();
+            let disk_space_clone2 = disk_space_label.clone();
 
             create_snapshot_dialog::show_create_snapshot_dialog_async(&window_clone, move |result| {
                 if let Some((snapshot_name, description)) = result {
@@ -830,6 +874,7 @@ impl MainWindow {
                         manager_clone2.clone(),
                         list_clone2.clone(),
                         compare_btn_clone2.clone(),
+                        disk_space_clone2.clone(),
                         snapshot_name,
                         description,
                     );
@@ -844,6 +889,7 @@ impl MainWindow {
         manager: Rc<RefCell<SnapshotManager>>,
         list: ListBox,
         compare_btn: Button,
+        disk_space_label: Label,
         snapshot_name: String,
         description: String,
     ) {
@@ -851,6 +897,7 @@ impl MainWindow {
         let list_clone = list.clone();
         let manager_clone = manager.clone();
         let compare_btn_clone = compare_btn.clone();
+        let disk_space_clone = disk_space_label.clone();
         let snapshot_name_clone = snapshot_name.clone();
         let description_clone = description.clone();
 
@@ -901,6 +948,22 @@ impl MainWindow {
                 if let Some((result, client)) = result_opt {
                     match result {
                         Ok((true, message)) => {
+                            // Verify snapshot actually exists before saving metadata
+                            let snapshot_path = if PathBuf::from("/.snapshots").exists() {
+                                PathBuf::from(format!("/.snapshots/{}", snapshot_name))
+                            } else {
+                                PathBuf::from(format!("/mnt/btrfs-root/@snapshots/{}", snapshot_name))
+                            };
+
+                            if !snapshot_path.exists() {
+                                Self::show_error_dialog(
+                                    &window_clone,
+                                    "Snapshot Creation Failed",
+                                    &format!("The snapshot was reported as created, but the snapshot directory does not exist:\n{}\n\nThis may indicate a permission issue or filesystem error.", snapshot_path.display())
+                                );
+                                return;
+                            }
+
                             dialogs::show_toast(&window_clone, &message);
 
                             // Calculate snapshot size and save metadata
@@ -915,7 +978,10 @@ impl MainWindow {
                             Self::apply_retention_cleanup(&window_clone, &manager_clone, &client);
 
                             // Refresh snapshot list
-                            Self::refresh_list_static(&window_clone, &manager_clone, &list_clone, &compare_btn_clone);
+                            Self::refresh_list_static(&window_clone, &manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone);
+
+                            // Update disk space after creating snapshot
+                            Self::update_disk_space_label(&disk_space_clone);
                         }
                         Ok((false, message)) => {
                             Self::show_error_dialog(&window_clone, "Snapshot Failed", &message);
@@ -1069,11 +1135,13 @@ impl MainWindow {
         manager: &Rc<RefCell<SnapshotManager>>,
         list: &ListBox,
         compare_btn: &Button,
+        disk_space_label: &Label,
     ) {
         let window_clone = window.clone();
         let manager_clone = manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
+        let disk_space_clone = disk_space_label.clone();
 
         snapshot_list::refresh_snapshot_list_internal(
             window,
@@ -1084,7 +1152,7 @@ impl MainWindow {
             None,  // No date filter
             None,  // No match label
             move |id, action| {
-                Self::handle_snapshot_action(&window_clone, &manager_clone, &list_clone, &compare_btn_clone, id, action);
+                Self::handle_snapshot_action(&window_clone, &manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, id, action);
             },
         );
     }
@@ -1098,6 +1166,7 @@ impl MainWindow {
         manager: &Rc<RefCell<SnapshotManager>>,
         list: &ListBox,
         compare_btn: &Button,
+        disk_space_label: &Label,
         snapshot_id: &str,
         action: SnapshotAction,
     ) {
@@ -1112,7 +1181,7 @@ impl MainWindow {
                 Self::restore_snapshot(window, manager, list, snapshot_id);
             }
             SnapshotAction::Delete => {
-                Self::delete_snapshot(window, manager, list, compare_btn, snapshot_id);
+                Self::delete_snapshot(window, manager, list, compare_btn, disk_space_label, snapshot_id);
             }
         }
     }
@@ -1253,6 +1322,7 @@ impl MainWindow {
         manager: &Rc<RefCell<SnapshotManager>>,
         list: &ListBox,
         compare_btn: &Button,
+        disk_space_label: &Label,
         snapshot_id: &str,
     ) {
         let snapshot = match manager.borrow().get_snapshot(snapshot_id) {
@@ -1279,6 +1349,7 @@ impl MainWindow {
         let manager_clone = manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
+        let disk_space_clone = disk_space_label.clone();
 
         dialogs::show_confirmation(
             window,
@@ -1294,6 +1365,7 @@ impl MainWindow {
                 let manager = manager_clone.clone();
                 let list = list_clone.clone();
                 let compare_btn = compare_btn_clone.clone();
+                let disk_space = disk_space_clone.clone();
                 let name = snapshot_basename.clone();
 
                 // Show loading state
@@ -1338,7 +1410,9 @@ impl MainWindow {
                                 Ok((true, message)) => {
                                     dialogs::show_toast(&window, &message);
                                     // Refresh the list
-                                    Self::refresh_list_static(&window, &manager, &list, &compare_btn);
+                                    Self::refresh_list_static(&window, &manager, &list, &compare_btn, &disk_space);
+                                    // Update disk space after deletion
+                                    Self::update_disk_space_label(&disk_space);
                                 }
                                 Ok((false, message)) => {
                                     dialogs::show_error(&window, "Deletion Failed", &message);

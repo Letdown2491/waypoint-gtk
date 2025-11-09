@@ -51,7 +51,7 @@ pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: 
     let group = adw::PreferencesGroup::new();
     group.set_title("Subvolumes to Snapshot");
     group.set_description(Some(
-        "Select which Btrfs subvolumes should be included when creating restore points.\n\
+        "Select which Btrfs subvolumes should be included when creating restore points. \
          The root filesystem (/) is always required."
     ));
 
@@ -134,6 +134,12 @@ fn create_subvolume_row(subvol: &SubvolumeInfo, current_config: &[PathBuf]) -> a
         checkbox.set_active(true);
         checkbox.set_sensitive(false);
         row.set_subtitle("Subvolume: @ (Required)");
+    }
+
+    // Disable @snapshots and @swap - these should not be snapshotted
+    if subvol.subvol_path == "@snapshots" || subvol.subvol_path == "@swap" {
+        checkbox.set_active(false);
+        checkbox.set_sensitive(false);
     }
 
     row.add_suffix(&checkbox);
