@@ -25,6 +25,51 @@ use std::rc::Rc;
 
 use snapshot_list::DateFilter;
 
+/// Validate that a path is safe to open with xdg-open
+///
+/// # Arguments
+/// * `path` - The path to validate
+///
+/// # Returns
+/// `Ok(())` if path is safe to open, `Err` with description if invalid
+///
+/// # Security
+/// Only allows paths within known snapshot directories to prevent opening
+/// arbitrary files or directories that could be malicious.
+fn validate_path_for_open(path: &std::path::Path) -> Result<(), String> {
+    // Canonicalize the path to resolve symlinks and get absolute path
+    let canonical = match path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("Cannot resolve path: {}", e)),
+    };
+
+    // Define allowed base directories
+    let allowed_dirs = [
+        PathBuf::from("/.snapshots"),
+        PathBuf::from("/mnt/btrfs-root/@snapshots"),
+    ];
+
+    // Check if the canonical path starts with any allowed directory
+    for allowed_dir in &allowed_dirs {
+        // Try to canonicalize the allowed dir (it might not exist)
+        if let Ok(canonical_allowed) = allowed_dir.canonicalize() {
+            if canonical.starts_with(&canonical_allowed) {
+                return Ok(());
+            }
+        } else {
+            // If allowed dir doesn't exist yet, do string comparison
+            if canonical.starts_with(allowed_dir) {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(format!(
+        "Path '{}' is outside allowed snapshot directories",
+        canonical.display()
+    ))
+}
+
 pub struct MainWindow {
     window: adw::ApplicationWindow,
     snapshot_manager: Rc<RefCell<SnapshotManager>>,
@@ -41,7 +86,38 @@ impl MainWindow {
             Ok(sm) => Rc::new(RefCell::new(sm)),
             Err(e) => {
                 eprintln!("Failed to initialize snapshot manager: {}", e);
-                std::process::exit(1);
+
+                // Create a temporary window to show the error dialog
+                let temp_window = adw::ApplicationWindow::builder()
+                    .application(app)
+                    .build();
+
+                // Show error dialog to user
+                let dialog = adw::MessageDialog::new(
+                    Some(&temp_window),
+                    Some("Failed to Initialize Waypoint"),
+                    Some(&format!(
+                        "Could not initialize the snapshot manager:\n\n{}\n\n\
+                        Please check that:\n\
+                        • Btrfs filesystem is available\n\
+                        • /.snapshots directory exists and is mounted\n\
+                        • D-Bus service is running",
+                        e
+                    ))
+                );
+
+                dialog.add_response("ok", "OK");
+                dialog.set_default_response(Some("ok"));
+
+                let app_clone = app.clone();
+                dialog.connect_response(None, move |_, _| {
+                    app_clone.quit();
+                });
+
+                dialog.present();
+
+                // Return the temp window - it will be cleaned up when app quits
+                return temp_window;
             }
         };
 
@@ -150,6 +226,13 @@ impl MainWindow {
         popover.set_child(Some(&popover_box));
         menu_button.set_popover(Some(&popover));
         header.pack_end(&menu_button);
+
+        // Disk space indicator
+        let disk_space_label = Label::new(Some("Checking space..."));
+        disk_space_label.add_css_class("caption");
+        disk_space_label.add_css_class("dim-label");
+        disk_space_label.set_margin_end(12);
+        header.pack_end(&disk_space_label);
 
         // Status banner - also returns whether Btrfs is available
         let (banner, is_btrfs) = Self::create_status_banner();
@@ -474,7 +557,103 @@ impl MainWindow {
             Self::show_about_dialog(&win_clone_menu_about);
         });
 
+        // Initialize disk space monitoring
+        Self::update_disk_space_label(&disk_space_label);
+
+        // Set up periodic disk space updates (every 30 seconds)
+        let disk_space_label_clone = disk_space_label.clone();
+        glib::timeout_add_seconds_local(30, move || {
+            Self::update_disk_space_label(&disk_space_label_clone);
+            glib::ControlFlow::Continue
+        });
+
         window
+    }
+
+    /// Update the disk space label with current usage
+    ///
+    /// Queries the available space for the root filesystem and updates the label
+    /// with color-coded text based on remaining space percentage.
+    fn update_disk_space_label(label: &Label) {
+        use std::path::PathBuf;
+
+        // Query disk space for root (where snapshots are stored)
+        let space_result = btrfs::get_available_space(&PathBuf::from("/"));
+
+        match space_result {
+            Ok(available_bytes) => {
+                // Get total filesystem size by reading from df
+                let total_result = std::process::Command::new("df")
+                    .arg("-B1")
+                    .arg("--output=size")
+                    .arg("/")
+                    .output();
+
+                let (available_gb, total_gb, percent_free) = match total_result {
+                    Ok(output) if output.status.success() => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let lines: Vec<&str> = stdout.lines().collect();
+
+                        if lines.len() >= 2 {
+                            if let Ok(total_bytes) = lines[1].trim().parse::<u64>() {
+                                let available_gb = available_bytes as f64 / 1_073_741_824.0; // Convert to GB
+                                let total_gb = total_bytes as f64 / 1_073_741_824.0;
+                                let percent = (available_bytes as f64 / total_bytes as f64) * 100.0;
+                                (available_gb, total_gb, percent)
+                            } else {
+                                // Fallback: just show available
+                                let available_gb = available_bytes as f64 / 1_073_741_824.0;
+                                (available_gb, 0.0, 0.0)
+                            }
+                        } else {
+                            let available_gb = available_bytes as f64 / 1_073_741_824.0;
+                            (available_gb, 0.0, 0.0)
+                        }
+                    }
+                    _ => {
+                        // Fallback: just show available
+                        let available_gb = available_bytes as f64 / 1_073_741_824.0;
+                        (available_gb, 0.0, 0.0)
+                    }
+                };
+
+                // Format the label text
+                let text = if total_gb > 0.0 {
+                    format!("{:.1} GB free of {:.1} GB ({:.0}% free)",
+                            available_gb, total_gb, percent_free)
+                } else {
+                    format!("{:.1} GB free", available_gb)
+                };
+
+                label.set_text(&text);
+
+                // Remove any existing warning/error classes
+                label.remove_css_class("warning");
+                label.remove_css_class("error");
+
+                // Color-code based on percentage (if we have total)
+                if total_gb > 0.0 {
+                    if percent_free < 10.0 {
+                        // Critical: < 10% free - red
+                        label.add_css_class("error");
+                        label.set_tooltip_text(Some("Low disk space! Consider deleting old snapshots."));
+                    } else if percent_free < 20.0 {
+                        // Warning: < 20% free - yellow
+                        label.add_css_class("warning");
+                        label.set_tooltip_text(Some("Disk space running low. Monitor snapshot usage."));
+                    } else {
+                        // OK: >= 20% free - normal
+                        label.set_tooltip_text(Some("Available disk space for snapshots"));
+                    }
+                } else {
+                    label.set_tooltip_text(Some("Available disk space"));
+                }
+            }
+            Err(e) => {
+                label.set_text("Space: Unknown");
+                label.set_tooltip_text(Some(&format!("Failed to query disk space: {}", e)));
+            }
+        }
     }
 
     fn create_status_banner() -> (adw::Banner, bool) {
@@ -583,50 +762,80 @@ impl MainWindow {
             _ => {}
         }
 
-        // Check available disk space (can check without root)
+        // Check available disk space in background (can check without root)
         const MIN_SPACE_GB: u64 = 1; // Minimum 1 GB free space
         const MIN_SPACE_BYTES: u64 = MIN_SPACE_GB * 1024 * 1024 * 1024;
 
-        match btrfs::get_available_space(&std::path::PathBuf::from("/")) {
-            Ok(available) => {
-                if available < MIN_SPACE_BYTES {
-                    let available_gb = available as f64 / (1024.0 * 1024.0 * 1024.0);
-                    Self::show_error_dialog(
-                        window,
-                        "Insufficient Disk Space",
-                        &format!(
-                            "Only {:.2} GB available. At least {} GB is recommended for snapshot creation.",
-                            available_gb, MIN_SPACE_GB
-                        ),
-                    );
-                    return;
-                }
-            }
-            Err(e) => {
-                eprintln!("Warning: Could not check available disk space: {}", e);
-                // Continue anyway - this is just a warning
-            }
-        }
-
-        // Show custom description dialog
         let window_clone = window.clone();
         let list_clone = list.clone();
         let manager_clone = manager.clone();
         let compare_btn_clone = compare_btn.clone();
 
-        create_snapshot_dialog::show_create_snapshot_dialog_async(window, move |result| {
-            if let Some((snapshot_name, description)) = result {
-                // User confirmed, create the snapshot
-                Self::create_snapshot_with_description(
-                    &window_clone,
-                    manager_clone.clone(),
-                    list_clone.clone(),
-                    compare_btn_clone.clone(),
-                    snapshot_name,
-                    description,
-                );
+        // Run disk space check in background
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = btrfs::get_available_space(&std::path::PathBuf::from("/"));
+            let _ = tx.send(result);
+        });
+
+        // Poll for result and proceed based on available space
+        glib::spawn_future_local(async move {
+            let space_result = loop {
+                match rx.try_recv() {
+                    Ok(result) => break result,
+                    Err(mpsc::TryRecvError::Empty) => {
+                        glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                        continue;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        eprintln!("Disk space check thread disconnected");
+                        break Ok(MIN_SPACE_BYTES + 1); // Assume sufficient space
+                    }
+                }
+            };
+
+            // Check if we have enough space
+            match space_result {
+                Ok(available) => {
+                    if available < MIN_SPACE_BYTES {
+                        let available_gb = available as f64 / (1024.0 * 1024.0 * 1024.0);
+                        Self::show_error_dialog(
+                            &window_clone,
+                            "Insufficient Disk Space",
+                            &format!(
+                                "Only {:.2} GB available. At least {} GB is recommended for snapshot creation.",
+                                available_gb, MIN_SPACE_GB
+                            ),
+                        );
+                        return;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Could not check available disk space: {}", e);
+                    // Continue anyway - this is just a warning
+                }
             }
-            // If None, user cancelled - do nothing
+
+            // Show custom description dialog
+            let window_clone2 = window_clone.clone();
+            let list_clone2 = list_clone.clone();
+            let manager_clone2 = manager_clone.clone();
+            let compare_btn_clone2 = compare_btn_clone.clone();
+
+            create_snapshot_dialog::show_create_snapshot_dialog_async(&window_clone, move |result| {
+                if let Some((snapshot_name, description)) = result {
+                    // User confirmed, create the snapshot
+                    Self::create_snapshot_with_description(
+                        &window_clone2,
+                        manager_clone2.clone(),
+                        list_clone2.clone(),
+                        compare_btn_clone2.clone(),
+                        snapshot_name,
+                        description,
+                    );
+                }
+                // If None, user cancelled - do nothing
+            });
         });
     }
 
@@ -740,38 +949,75 @@ impl MainWindow {
         manager: &Rc<RefCell<SnapshotManager>>,
     ) {
         // Construct snapshot path
-        let snapshot_path = PathBuf::from(format!("/@snapshots/{}", snapshot_name));
-
-        // Calculate snapshot size (this may take a moment)
-        let size_bytes = match btrfs::get_snapshot_size(&snapshot_path) {
-            Ok(size) => {
-                eprintln!("Calculated snapshot size: {} bytes", size);
-                Some(size)
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to calculate snapshot size: {}", e);
-                None
-            }
+        // Use /.snapshots if mounted, otherwise fall back to /mnt/btrfs-root/@snapshots
+        let snapshot_path = if PathBuf::from("/.snapshots").exists() {
+            PathBuf::from(format!("/.snapshots/{}", snapshot_name))
+        } else {
+            PathBuf::from(format!("/mnt/btrfs-root/@snapshots/{}", snapshot_name))
         };
 
-        // Create snapshot metadata
+        // Create snapshot metadata without size first (size calculation can be slow)
         let snapshot = Snapshot {
             id: snapshot_name.to_string(),
             name: snapshot_name.to_string(),
             timestamp: chrono::Utc::now(),
-            path: snapshot_path,
+            path: snapshot_path.clone(),
             description: Some(description.to_string()),
             kernel_version: None, // Could add this later
             package_count: None,  // Could add this later
-            size_bytes,
-            packages: Vec::new(),
-            subvolumes: subvolume_paths.to_vec(),
+            size_bytes: None,     // Will be calculated in background
+            packages: Rc::new(Vec::new()),
+            subvolumes: Rc::new(subvolume_paths.to_vec()),
         };
 
-        // Save metadata
+        // Save metadata immediately
         if let Err(e) = manager.borrow().add_snapshot(snapshot) {
             eprintln!("Warning: Failed to save snapshot metadata: {}", e);
         }
+
+        // Calculate snapshot size in background thread (non-blocking)
+        let snapshot_name_clone = snapshot_name.to_string();
+        let manager_clone = manager.clone();
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let size_result = btrfs::get_snapshot_size(&snapshot_path);
+            let _ = tx.send((snapshot_name_clone, size_result));
+        });
+
+        // Poll for result and update metadata when available
+        glib::spawn_future_local(async move {
+            loop {
+                match rx.try_recv() {
+                    Ok((name, size_result)) => {
+                        match size_result {
+                            Ok(size) => {
+                                eprintln!("Calculated snapshot size: {} bytes", size);
+                                // Update snapshot with size
+                                if let Ok(Some(mut snapshot)) = manager_clone.borrow().get_snapshot(&name) {
+                                    snapshot.size_bytes = Some(size);
+                                    if let Err(e) = manager_clone.borrow().add_snapshot(snapshot) {
+                                        eprintln!("Warning: Failed to update snapshot size: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to calculate snapshot size: {}", e);
+                            }
+                        }
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        eprintln!("Size calculation thread disconnected");
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     fn apply_retention_cleanup(
@@ -859,6 +1105,9 @@ impl MainWindow {
             SnapshotAction::Browse => {
                 Self::browse_snapshot(window, manager, snapshot_id);
             }
+            SnapshotAction::Verify => {
+                Self::verify_snapshot(window, snapshot_id);
+            }
             SnapshotAction::Restore => {
                 Self::restore_snapshot(window, manager, list, snapshot_id);
             }
@@ -866,6 +1115,90 @@ impl MainWindow {
                 Self::delete_snapshot(window, manager, list, compare_btn, snapshot_id);
             }
         }
+    }
+
+    fn verify_snapshot(window: &adw::ApplicationWindow, snapshot_id: &str) {
+        let window_clone = window.clone();
+        let snapshot_id_owned = snapshot_id.to_string();
+
+        // Run verification in background thread
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<crate::dbus_client::VerificationResult> {
+                let client = WaypointHelperClient::new()?;
+                client.verify_snapshot(snapshot_id_owned)
+            })();
+            let _ = tx.send(result);
+        });
+
+        // Poll for result
+        glib::spawn_future_local(async move {
+            let result = loop {
+                match rx.try_recv() {
+                    Ok(result) => break result,
+                    Err(mpsc::TryRecvError::Empty) => {
+                        glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                        continue;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        Self::show_error_dialog(
+                            &window_clone,
+                            "Verification Failed",
+                            "Verification thread disconnected unexpectedly",
+                        );
+                        return;
+                    }
+                }
+            };
+
+            match result {
+                Ok(verification) => {
+                    if verification.is_valid {
+                        let mut message = "✓ Snapshot is valid and intact".to_string();
+                        if !verification.warnings.is_empty() {
+                            message.push_str("\n\nWarnings:\n");
+                            for warning in &verification.warnings {
+                                message.push_str(&format!("• {}\n", warning));
+                            }
+                        }
+
+                        let dialog = adw::MessageDialog::new(
+                            Some(&window_clone),
+                            Some("Verification Successful"),
+                            Some(&message),
+                        );
+                        dialog.add_response("ok", "OK");
+                        dialog.set_default_response(Some("ok"));
+                        dialog.present();
+                    } else {
+                        let mut message = "✗ Snapshot verification failed\n\nErrors found:\n".to_string();
+                        for error in &verification.errors {
+                            message.push_str(&format!("• {}\n", error));
+                        }
+
+                        if !verification.warnings.is_empty() {
+                            message.push_str("\nWarnings:\n");
+                            for warning in &verification.warnings {
+                                message.push_str(&format!("• {}\n", warning));
+                            }
+                        }
+
+                        Self::show_error_dialog(
+                            &window_clone,
+                            "Verification Failed",
+                            &message,
+                        );
+                    }
+                }
+                Err(e) => {
+                    Self::show_error_dialog(
+                        &window_clone,
+                        "Verification Error",
+                        &format!("Failed to verify snapshot: {}", e),
+                    );
+                }
+            }
+        });
     }
 
     fn browse_snapshot(
@@ -884,6 +1217,16 @@ impl MainWindow {
                 return;
             }
         };
+
+        // Validate path before opening
+        if let Err(e) = validate_path_for_open(&snapshot.path) {
+            dialogs::show_error(
+                window,
+                "Cannot Open Path",
+                &format!("Security validation failed: {}", e),
+            );
+            return;
+        }
 
         // Open file manager at snapshot path
         let path_str = snapshot.path.to_string_lossy();
@@ -1038,41 +1381,7 @@ impl MainWindow {
             }
         };
 
-        // Build detailed warning message
-        let snapshot_date = snapshot.format_timestamp();
-        let pkg_info = if let Some(count) = snapshot.package_count {
-            format!("{} packages", count)
-        } else {
-            "unknown package count".to_string()
-        };
-
-        let kernel_info = snapshot.kernel_version.as_deref().unwrap_or("unknown");
-
-        let warning_message = format!(
-            "⚠️ CRITICAL WARNING ⚠️\n\n\
-            You are about to restore your system to:\n\
-            • Snapshot: {}\n\
-            • Created: {}\n\
-            • Kernel: {}\n\
-            • Packages: {}\n\n\
-            This will:\n\
-            ✓ Change your system to match this snapshot\n\
-            ✓ Require a reboot to take effect\n\
-            ✗ LOSE ALL CHANGES made after this snapshot\n\
-            ✗ This CANNOT be undone automatically\n\n\
-            Before proceeding:\n\
-            1. Save all your work\n\
-            2. Close all applications\n\
-            3. Make sure you have a backup\n\n\
-            A backup snapshot will be created first.\n\n\
-            Do you want to continue?",
-            snapshot.name,
-            snapshot_date,
-            kernel_info,
-            pkg_info
-        );
-
-        // Extract snapshot basename
+        // Extract snapshot basename for D-Bus call
         let snapshot_basename = snapshot.path
             .file_name()
             .and_then(|n| n.to_str())
@@ -1080,16 +1389,131 @@ impl MainWindow {
             .to_string();
 
         let window_clone = window.clone();
+        let snapshot_id_owned = snapshot_basename.clone();
 
-        dialogs::show_confirmation(
-            window,
-            "Restore System Snapshot?",
-            &warning_message,
-            "Restore and Reboot",
-            true, // destructive
-            move || {
+        // Show loading toast while fetching preview
+        dialogs::show_toast(window, "Loading restore preview...");
+
+        // Create channel for background thread communication
+        let (tx, rx) = mpsc::channel();
+
+        // Fetch preview in background thread
+        std::thread::spawn(move || {
+            let client = match WaypointHelperClient::new() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Err(anyhow::anyhow!("Failed to connect to snapshot service: {}", e)));
+                    return;
+                }
+            };
+
+            let result = client.preview_restore(snapshot_id_owned);
+            let _ = tx.send(result);
+        });
+
+        // Poll for preview result
+        glib::source::idle_add_local(move || {
+            match rx.try_recv() {
+                Ok(Ok(preview)) => {
+                    // Show preview dialog with package changes
+                    Self::show_restore_preview_dialog(&window_clone, &snapshot_basename, preview);
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(e)) => {
+                    dialogs::show_error(&window_clone, "Preview Failed",
+                        &format!("Failed to generate restore preview: {}", e));
+                    glib::ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    dialogs::show_error(&window_clone, "Error", "Preview thread disconnected");
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    }
+
+    fn show_restore_preview_dialog(
+        window: &adw::ApplicationWindow,
+        snapshot_basename: &str,
+        preview: crate::dbus_client::RestorePreview,
+    ) {
+        // Build comprehensive preview message
+        let mut preview_parts = Vec::new();
+
+        // Header info
+        preview_parts.push(format!(
+            "📸 Snapshot: {}\n📅 Created: {}",
+            preview.snapshot_name,
+            preview.snapshot_timestamp
+        ));
+
+        if let Some(desc) = &preview.snapshot_description {
+            preview_parts.push(format!("📝 {}", desc));
+        }
+
+        // Kernel changes
+        let kernel_current = preview.current_kernel.as_deref().unwrap_or("unknown");
+        let kernel_snapshot = preview.snapshot_kernel.as_deref().unwrap_or("unknown");
+        if kernel_current != kernel_snapshot {
+            preview_parts.push(format!(
+                "\n🐧 Kernel: {} → {}",
+                kernel_current, kernel_snapshot
+            ));
+        } else {
+            preview_parts.push(format!("\n🐧 Kernel: {} (no change)", kernel_current));
+        }
+
+        // Package changes summary
+        preview_parts.push(format!("\n📦 Package Changes: {}", preview.total_package_changes));
+
+        if !preview.packages_to_add.is_empty() {
+            preview_parts.push(format!("  ➕ {} to install", preview.packages_to_add.len()));
+        }
+        if !preview.packages_to_remove.is_empty() {
+            preview_parts.push(format!("  ➖ {} to remove", preview.packages_to_remove.len()));
+        }
+        if !preview.packages_to_upgrade.is_empty() {
+            preview_parts.push(format!("  ⬆️  {} to upgrade", preview.packages_to_upgrade.len()));
+        }
+        if !preview.packages_to_downgrade.is_empty() {
+            preview_parts.push(format!("  ⬇️  {} to downgrade", preview.packages_to_downgrade.len()));
+        }
+
+        // Affected subvolumes
+        if !preview.affected_subvolumes.is_empty() {
+            preview_parts.push(format!("\n💾 Affected: {}", preview.affected_subvolumes.join(", ")));
+        }
+
+        // Warning footer
+        preview_parts.push(
+            "\n⚠️  WARNING:\n\
+            • All changes after this snapshot will be LOST\n\
+            • System will require a REBOOT\n\
+            • A backup snapshot will be created first".to_string()
+        );
+
+        let preview_message = preview_parts.join("\n");
+
+        let dialog = adw::MessageDialog::new(
+            Some(window),
+            Some("Restore System Snapshot?"),
+            Some(&preview_message),
+        );
+
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("restore", "Restore and Reboot");
+        dialog.set_response_appearance("restore", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        let window_clone = window.clone();
+        let snapshot_name = snapshot_basename.to_string();
+
+        dialog.connect_response(None, move |_, response| {
+            if response == "restore" {
                 let window = window_clone.clone();
-                let name = snapshot_basename.clone();
+                let name = snapshot_name.clone();
 
                 // Show loading state
                 dialogs::show_toast(&window, "Restoring snapshot...");
@@ -1187,8 +1611,10 @@ impl MainWindow {
                         }
                     }
                 });
-            },
-        );
+            }
+        });
+
+        dialog.present();
     }
 
     /// Show dialog to compare two snapshots

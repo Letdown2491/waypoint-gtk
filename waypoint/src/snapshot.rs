@@ -3,11 +3,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use crate::packages::Package;
 
 /// Metadata for a snapshot
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// This structure uses `Rc` for package and subvolume lists to make cloning cheap.
+/// When a Snapshot is cloned, only the reference counts are incremented, not the entire vectors.
+#[derive(Debug, Clone)]
 pub struct Snapshot {
     pub id: String,
     pub name: String,
@@ -17,12 +21,69 @@ pub struct Snapshot {
     pub kernel_version: Option<String>,
     pub package_count: Option<usize>,
     pub size_bytes: Option<u64>,
-    /// List of installed packages at time of snapshot
+    /// List of installed packages at time of snapshot (wrapped in Rc for cheap cloning)
+    pub packages: Rc<Vec<Package>>,
+    /// List of subvolumes included in this snapshot (wrapped in Rc for cheap cloning)
+    pub subvolumes: Rc<Vec<PathBuf>>,
+}
+
+/// Helper struct for serde serialization/deserialization
+#[derive(Debug, Serialize, Deserialize)]
+struct SnapshotSerde {
+    id: String,
+    name: String,
+    timestamp: DateTime<Utc>,
+    path: PathBuf,
+    description: Option<String>,
+    kernel_version: Option<String>,
+    package_count: Option<usize>,
+    size_bytes: Option<u64>,
     #[serde(default)]
-    pub packages: Vec<Package>,
-    /// List of subvolumes included in this snapshot (mount points)
+    packages: Vec<Package>,
     #[serde(default)]
-    pub subvolumes: Vec<PathBuf>,
+    subvolumes: Vec<PathBuf>,
+}
+
+impl Serialize for Snapshot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let helper = SnapshotSerde {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            timestamp: self.timestamp,
+            path: self.path.clone(),
+            description: self.description.clone(),
+            kernel_version: self.kernel_version.clone(),
+            package_count: self.package_count,
+            size_bytes: self.size_bytes,
+            packages: (*self.packages).clone(),
+            subvolumes: (*self.subvolumes).clone(),
+        };
+        helper.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Snapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let helper = SnapshotSerde::deserialize(deserializer)?;
+        Ok(Snapshot {
+            id: helper.id,
+            name: helper.name,
+            timestamp: helper.timestamp,
+            path: helper.path,
+            description: helper.description,
+            kernel_version: helper.kernel_version,
+            package_count: helper.package_count,
+            size_bytes: helper.size_bytes,
+            packages: Rc::new(helper.packages),
+            subvolumes: Rc::new(helper.subvolumes),
+        })
+    }
 }
 
 impl Snapshot {
@@ -41,8 +102,8 @@ impl Snapshot {
             kernel_version: Self::get_kernel_version(),
             package_count: None,
             size_bytes: None,
-            packages: Vec::new(),
-            subvolumes: vec![PathBuf::from("/")],
+            packages: Rc::new(Vec::new()),
+            subvolumes: Rc::new(vec![PathBuf::from("/")]),
         }
     }
 
@@ -50,7 +111,7 @@ impl Snapshot {
     #[allow(dead_code)]
     pub fn with_packages(mut self, packages: Vec<Package>) -> Self {
         self.package_count = Some(packages.len());
-        self.packages = packages;
+        self.packages = Rc::new(packages);
         self
     }
 

@@ -9,6 +9,18 @@ use zbus::{interface, Connection, ConnectionBuilder};
 mod btrfs;
 mod packages;
 
+/// Get the configured scheduler config path
+fn scheduler_config_path() -> String {
+    let config = WaypointConfig::new();
+    config.scheduler_config.to_string_lossy().to_string()
+}
+
+/// Get the configured scheduler service path
+fn scheduler_service_path() -> String {
+    let config = WaypointConfig::new();
+    config.scheduler_service_path().to_string_lossy().to_string()
+}
+
 /// Main D-Bus service interface for Waypoint operations
 struct WaypointHelper;
 
@@ -92,6 +104,44 @@ impl WaypointHelper {
         }
     }
 
+    /// Verify snapshot integrity
+    async fn verify_snapshot(&self, name: String) -> String {
+        // Verification is read-only, no authorization needed
+        match btrfs::verify_snapshot(&name) {
+            Ok(result) => {
+                serde_json::to_string(&result).unwrap_or_else(|_| {
+                    r#"{"is_valid":false,"errors":["Failed to serialize result"],"warnings":[]}"#.to_string()
+                })
+            }
+            Err(e) => {
+                eprintln!("Failed to verify snapshot: {}", e);
+                serde_json::to_string(&btrfs::VerificationResult {
+                    is_valid: false,
+                    errors: vec![format!("Verification failed: {}", e)],
+                    warnings: vec![],
+                }).unwrap_or_else(|_| {
+                    r#"{"is_valid":false,"errors":["Failed to verify"],"warnings":[]}"#.to_string()
+                })
+            }
+        }
+    }
+
+    /// Preview what will happen if a snapshot is restored
+    async fn preview_restore(&self, name: String) -> String {
+        // Preview is read-only, no authorization needed
+        match btrfs::preview_restore(&name) {
+            Ok(result) => {
+                serde_json::to_string(&result).unwrap_or_else(|_| {
+                    r#"{"snapshot_name":"","snapshot_timestamp":"","snapshot_description":null,"current_kernel":null,"snapshot_kernel":null,"affected_subvolumes":[],"packages_to_add":[],"packages_to_remove":[],"packages_to_upgrade":[],"packages_to_downgrade":[],"total_package_changes":0}"#.to_string()
+                })
+            }
+            Err(e) => {
+                eprintln!("Failed to preview restore: {}", e);
+                format!(r#"{{"error":"Failed to preview restore: {}"}}"#, e.to_string().replace('"', "\\\""))
+            }
+        }
+    }
+
     /// Update scheduler configuration
     async fn update_scheduler_config(
         &self,
@@ -105,7 +155,7 @@ impl WaypointHelper {
         }
 
         // Write configuration file
-        match std::fs::write("/etc/waypoint/scheduler.conf", config_content) {
+        match std::fs::write(scheduler_config_path(), config_content) {
             Ok(_) => (true, "Scheduler configuration updated".to_string()),
             Err(e) => (false, format!("Failed to update configuration: {}", e)),
         }
@@ -139,6 +189,16 @@ impl WaypointHelper {
     /// Get scheduler service status
     async fn get_scheduler_status(&self) -> String {
         // No authorization needed for status check (read-only)
+        // Note: waypoint-helper runs as root, so sv commands should work
+
+        // First check if service is enabled (linked in service directory)
+        let service_enabled = std::path::Path::new(&scheduler_service_path()).exists();
+
+        if !service_enabled {
+            return "disabled".to_string();
+        }
+
+        // Service is enabled, check if it's running
         match std::process::Command::new("sv")
             .arg("status")
             .arg("waypoint-scheduler")
@@ -146,10 +206,15 @@ impl WaypointHelper {
         {
             Ok(output) => {
                 let status_str = String::from_utf8_lossy(&output.stdout);
-                if output.status.success() && status_str.contains("run:") {
+                let stderr_str = String::from_utf8_lossy(&output.stderr);
+
+                // sv status returns "run:" when running, "down:" when stopped
+                if status_str.contains("run:") {
                     "running".to_string()
-                } else {
+                } else if status_str.contains("down:") || stderr_str.contains("unable to") {
                     "stopped".to_string()
+                } else {
+                    "unknown".to_string()
                 }
             }
             Err(_) => "unknown".to_string(),
@@ -324,6 +389,9 @@ async fn main() -> Result<()> {
         eprintln!("waypoint-helper must be run as root");
         std::process::exit(1);
     }
+
+    // Initialize configuration
+    btrfs::init_config();
 
     println!("Starting Waypoint Helper service...");
 

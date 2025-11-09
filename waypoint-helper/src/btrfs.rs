@@ -5,10 +5,28 @@ use chrono::{DateTime, Utc};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use waypoint_common::{Package, SnapshotInfo};
+use std::sync::OnceLock;
+use waypoint_common::{Package, SnapshotInfo, WaypointConfig};
 
-const SNAPSHOT_DIR: &str = "/@snapshots";
-const METADATA_FILE: &str = "/var/lib/waypoint/snapshots.json";
+/// Global configuration instance
+static CONFIG: OnceLock<WaypointConfig> = OnceLock::new();
+
+/// Initialize the global configuration (called once at startup)
+pub fn init_config() {
+    CONFIG.get_or_init(|| WaypointConfig::new());
+}
+
+/// Get the snapshot directory path
+fn snapshot_dir() -> &'static Path {
+    CONFIG.get_or_init(|| WaypointConfig::new())
+        .snapshot_dir.as_path()
+}
+
+/// Get the metadata file path
+fn metadata_file() -> &'static Path {
+    CONFIG.get_or_init(|| WaypointConfig::new())
+        .metadata_file.as_path()
+}
 
 /// Internal snapshot representation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -47,6 +65,10 @@ pub fn create_snapshot(
     packages: Vec<Package>,
     subvolumes: Vec<PathBuf>,
 ) -> Result<()> {
+    // Validate snapshot name for security and filesystem safety
+    waypoint_common::validate_snapshot_name(name)
+        .map_err(|e| anyhow::anyhow!("Invalid snapshot name: {}", e))?;
+
     // Default to root if no subvolumes specified
     let subvolumes_to_snapshot = if subvolumes.is_empty() {
         vec![PathBuf::from("/")]
@@ -55,12 +77,12 @@ pub fn create_snapshot(
     };
 
     // Ensure snapshot directory exists
-    let snapshot_dir = Path::new(SNAPSHOT_DIR);
-    fs::create_dir_all(snapshot_dir)
+    let snap_dir = snapshot_dir();
+    fs::create_dir_all(snap_dir)
         .context("Failed to create snapshot directory")?;
 
     // Create a directory for this snapshot group
-    let snapshot_base_path = snapshot_dir.join(name);
+    let snapshot_base_path = snap_dir.join(name);
     fs::create_dir_all(&snapshot_base_path)
         .context("Failed to create snapshot base directory")?;
 
@@ -78,27 +100,34 @@ pub fn create_snapshot(
 
         let snapshot_path = snapshot_base_path.join(&subvol_name);
 
+        // Use the mount point directly as the source
+        let source_path = subvol_mount;
+
+        println!("Creating snapshot: {} -> {}", source_path.display(), snapshot_path.display());
+
         // Create the btrfs snapshot
         let output = Command::new("btrfs")
             .arg("subvolume")
             .arg("snapshot")
             .arg("-r") // Read-only
-            .arg(subvol_mount)
+            .arg(&source_path)
             .arg(&snapshot_path)
             .output()
             .context(format!(
                 "Failed to create snapshot of {}",
-                subvol_mount.display()
+                source_path.display()
             ))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
             // Clean up partial snapshots
             let _ = cleanup_failed_snapshot(&snapshot_base_path);
             bail!(
-                "Failed to create snapshot of {}: {}",
-                subvol_mount.display(),
-                stderr
+                "Failed to create snapshot of {}: {}\n{}",
+                source_path.display(),
+                stderr,
+                stdout
             );
         }
     }
@@ -145,7 +174,7 @@ fn cleanup_failed_snapshot(snapshot_path: &Path) -> Result<()> {
 
 /// Delete a snapshot (and all its subvolumes)
 pub fn delete_snapshot(name: &str) -> Result<()> {
-    let snapshot_path = Path::new(SNAPSHOT_DIR).join(name);
+    let snapshot_path = snapshot_dir().join(name);
 
     if !snapshot_path.exists() {
         bail!("Snapshot not found: {}", name);
@@ -203,7 +232,7 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
 
 /// Restore a snapshot (set as default boot subvolume)
 pub fn restore_snapshot(name: &str) -> Result<()> {
-    let snapshot_base_path = Path::new(SNAPSHOT_DIR).join(name);
+    let snapshot_base_path = snapshot_dir().join(name);
 
     if !snapshot_base_path.exists() {
         bail!("Snapshot not found: {}", name);
@@ -285,6 +314,296 @@ pub fn list_snapshots() -> Result<Vec<Snapshot>> {
     load_snapshot_metadata()
 }
 
+/// Verification result for a snapshot
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct VerificationResult {
+    pub is_valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Verify snapshot integrity
+///
+/// Checks:
+/// - Snapshot directory exists
+/// - All expected subvolumes exist
+/// - Each subvolume is a valid btrfs subvolume
+///
+/// Returns a VerificationResult with any errors or warnings found
+pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    // Get snapshot metadata
+    let snapshot_meta = match get_snapshot_metadata(name) {
+        Ok(meta) => meta,
+        Err(e) => {
+            errors.push(format!("Failed to load snapshot metadata: {}", e));
+            return Ok(VerificationResult {
+                is_valid: false,
+                errors,
+                warnings,
+            });
+        }
+    };
+
+    // Check snapshot base directory exists
+    let snapshot_base_path = snapshot_dir().join(name);
+    if !snapshot_base_path.exists() {
+        errors.push(format!("Snapshot directory does not exist: {}", snapshot_base_path.display()));
+        return Ok(VerificationResult {
+            is_valid: false,
+            errors,
+            warnings,
+        });
+    }
+
+    // Check if it's a directory or single subvolume
+    if snapshot_base_path.is_dir() {
+        // New format: directory with subvolumes
+        // Check each expected subvolume
+        for subvol_mount in &snapshot_meta.subvolumes {
+            let subvol_name = if subvol_mount == &PathBuf::from("/") {
+                "root".to_string()
+            } else {
+                subvol_mount
+                    .to_string_lossy()
+                    .trim_start_matches('/')
+                    .replace('/', "_")
+            };
+
+            let subvol_path = snapshot_base_path.join(&subvol_name);
+
+            // Check if subvolume exists
+            if !subvol_path.exists() {
+                errors.push(format!(
+                    "Subvolume snapshot missing: {} (expected at {})",
+                    subvol_name,
+                    subvol_path.display()
+                ));
+                continue;
+            }
+
+            // Verify it's a valid btrfs subvolume
+            match Command::new("btrfs")
+                .arg("subvolume")
+                .arg("show")
+                .arg(&subvol_path)
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    // Subvolume is valid
+                }
+                Ok(_) => {
+                    errors.push(format!(
+                        "Path exists but is not a valid btrfs subvolume: {}",
+                        subvol_path.display()
+                    ));
+                }
+                Err(e) => {
+                    warnings.push(format!(
+                        "Could not verify subvolume {}: {}",
+                        subvol_path.display(),
+                        e
+                    ));
+                }
+            }
+        }
+    } else {
+        // Old format: single subvolume
+        // Verify it's a valid btrfs subvolume
+        match Command::new("btrfs")
+            .arg("subvolume")
+            .arg("show")
+            .arg(&snapshot_base_path)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                // Subvolume is valid
+            }
+            Ok(_) => {
+                errors.push(format!(
+                    "Path exists but is not a valid btrfs subvolume: {}",
+                    snapshot_base_path.display()
+                ));
+            }
+            Err(e) => {
+                warnings.push(format!(
+                    "Could not verify subvolume {}: {}",
+                    snapshot_base_path.display(),
+                    e
+                ));
+            }
+        }
+    }
+
+    Ok(VerificationResult {
+        is_valid: errors.is_empty(),
+        errors,
+        warnings,
+    })
+}
+
+/// Package change information for restore preview
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PackageChange {
+    pub name: String,
+    pub current_version: Option<String>,
+    pub snapshot_version: Option<String>,
+    pub change_type: String, // "add", "remove", "upgrade", "downgrade", "unchanged"
+}
+
+/// Preview of what will happen if a snapshot is restored
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct RestorePreview {
+    pub snapshot_name: String,
+    pub snapshot_timestamp: String,
+    pub snapshot_description: Option<String>,
+    pub current_kernel: Option<String>,
+    pub snapshot_kernel: Option<String>,
+    pub affected_subvolumes: Vec<String>,
+    pub packages_to_add: Vec<PackageChange>,
+    pub packages_to_remove: Vec<PackageChange>,
+    pub packages_to_upgrade: Vec<PackageChange>,
+    pub packages_to_downgrade: Vec<PackageChange>,
+    pub total_package_changes: usize,
+}
+
+/// Preview what will happen if a snapshot is restored
+///
+/// Compares the snapshot's state with the current system state to show:
+/// - Which packages will be added, removed, upgraded, or downgraded
+/// - Kernel version changes
+/// - Which subvolumes will be affected
+pub fn preview_restore(name: &str) -> Result<RestorePreview> {
+    use crate::packages::get_installed_packages;
+    use std::collections::HashMap;
+
+    // Get snapshot metadata
+    let snapshot_meta = get_snapshot_metadata(name)
+        .context("Failed to load snapshot metadata")?;
+
+    // Get current packages
+    let current_packages = get_installed_packages()
+        .context("Failed to get current installed packages")?;
+
+    // Build maps for easy lookup
+    let current_pkg_map: HashMap<String, String> = current_packages
+        .iter()
+        .map(|p| (p.name.clone(), p.version.clone()))
+        .collect();
+
+    let snapshot_pkg_map: HashMap<String, String> = snapshot_meta
+        .packages
+        .iter()
+        .map(|p| (p.name.clone(), p.version.clone()))
+        .collect();
+
+    // Categorize package changes
+    let mut packages_to_add = Vec::new();
+    let mut packages_to_remove = Vec::new();
+    let mut packages_to_upgrade = Vec::new();
+    let mut packages_to_downgrade = Vec::new();
+
+    // Check packages in snapshot
+    for (snap_name, snap_version) in &snapshot_pkg_map {
+        match current_pkg_map.get(snap_name) {
+            None => {
+                // Package is in snapshot but not currently installed - will be added
+                packages_to_add.push(PackageChange {
+                    name: snap_name.clone(),
+                    current_version: None,
+                    snapshot_version: Some(snap_version.clone()),
+                    change_type: "add".to_string(),
+                });
+            }
+            Some(current_version) => {
+                if current_version != snap_version {
+                    // Version mismatch - determine if upgrade or downgrade
+                    // For simplicity, we'll use lexicographic comparison
+                    // (A proper implementation would parse version numbers)
+                    let change = if current_version > snap_version {
+                        PackageChange {
+                            name: snap_name.clone(),
+                            current_version: Some(current_version.clone()),
+                            snapshot_version: Some(snap_version.clone()),
+                            change_type: "downgrade".to_string(),
+                        }
+                    } else {
+                        PackageChange {
+                            name: snap_name.clone(),
+                            current_version: Some(current_version.clone()),
+                            snapshot_version: Some(snap_version.clone()),
+                            change_type: "upgrade".to_string(),
+                        }
+                    };
+
+                    if change.change_type == "downgrade" {
+                        packages_to_downgrade.push(change);
+                    } else {
+                        packages_to_upgrade.push(change);
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for packages currently installed but not in snapshot (will be removed)
+    for (current_name, current_version) in &current_pkg_map {
+        if !snapshot_pkg_map.contains_key(current_name) {
+            packages_to_remove.push(PackageChange {
+                name: current_name.clone(),
+                current_version: Some(current_version.clone()),
+                snapshot_version: None,
+                change_type: "remove".to_string(),
+            });
+        }
+    }
+
+    // Get current kernel version
+    let current_kernel = get_current_kernel_version().ok();
+
+    // Format affected subvolumes
+    let affected_subvolumes: Vec<String> = snapshot_meta
+        .subvolumes
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+
+    let total_package_changes = packages_to_add.len()
+        + packages_to_remove.len()
+        + packages_to_upgrade.len()
+        + packages_to_downgrade.len();
+
+    Ok(RestorePreview {
+        snapshot_name: snapshot_meta.name.clone(),
+        snapshot_timestamp: snapshot_meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        snapshot_description: snapshot_meta.description.clone(),
+        current_kernel,
+        snapshot_kernel: snapshot_meta.kernel_version.clone(),
+        affected_subvolumes,
+        packages_to_add,
+        packages_to_remove,
+        packages_to_upgrade,
+        packages_to_downgrade,
+        total_package_changes,
+    })
+}
+
+/// Get current kernel version
+fn get_current_kernel_version() -> Result<String> {
+    let output = Command::new("uname")
+        .arg("-r")
+        .output()
+        .context("Failed to execute uname")?;
+
+    if !output.status.success() {
+        bail!("Failed to get kernel version");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// Get subvolume ID for a path
 fn get_subvolume_id(path: &Path) -> Result<u64> {
     let output = Command::new("btrfs")
@@ -323,7 +642,7 @@ fn get_kernel_version() -> Option<String> {
 
 /// Load snapshot metadata from file
 fn load_snapshot_metadata() -> Result<Vec<Snapshot>> {
-    let path = Path::new(METADATA_FILE);
+    let path = metadata_file();
 
     if !path.exists() {
         return Ok(Vec::new());
@@ -340,7 +659,7 @@ fn load_snapshot_metadata() -> Result<Vec<Snapshot>> {
 
 /// Save snapshot metadata to file
 fn save_snapshot_metadata(snapshots: &[Snapshot]) -> Result<()> {
-    let path = Path::new(METADATA_FILE);
+    let path = metadata_file();
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
@@ -403,12 +722,46 @@ fn get_filesystem_uuid(mount_point: &Path) -> Result<String> {
     Ok(uuid)
 }
 
+/// Create a backup of /etc/fstab before modification
+///
+/// # Arguments
+/// * `fstab_path` - Path to the fstab file to backup
+///
+/// # Returns
+/// Path to the created backup file
+///
+/// # Backup Strategy
+/// - Creates /etc/fstab.bak if it doesn't exist
+/// - If backup already exists, creates timestamped backup /etc/fstab.bak.TIMESTAMP
+fn backup_fstab(fstab_path: &Path) -> Result<PathBuf> {
+    let backup_path = PathBuf::from("/etc/fstab.bak");
+
+    let final_backup_path = if backup_path.exists() {
+        // Create timestamped backup
+        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        PathBuf::from(format!("/etc/fstab.bak.{}", timestamp))
+    } else {
+        backup_path
+    };
+
+    // Copy fstab to backup
+    fs::copy(fstab_path, &final_backup_path)
+        .context(format!("Failed to create fstab backup at {}", final_backup_path.display()))?;
+
+    println!("Created fstab backup: {}", final_backup_path.display());
+
+    Ok(final_backup_path)
+}
+
 /// Update fstab in a snapshot to mount the correct subvolume snapshots
 fn update_fstab_for_snapshot(
     fstab_path: &Path,
     snapshot_name: &str,
     subvolumes: &[PathBuf],
 ) -> Result<()> {
+    // Create backup before modifying fstab
+    backup_fstab(fstab_path)?;
+
     // Read current fstab
     let fstab_content = fs::read_to_string(fstab_path)
         .context("Failed to read fstab")?;

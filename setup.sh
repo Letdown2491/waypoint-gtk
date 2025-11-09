@@ -159,23 +159,6 @@ install_dbus_service() {
         /etc/dbus-1/system.d/tech.geektoshi.waypoint.conf
 }
 
-install_xbps_hooks() {
-    if [[ ! -f "hooks/waypoint-pre-upgrade.sh" ]]; then
-        echo "XBPS hook script missing"
-        return
-    fi
-    if [[ ! -f "hooks/waypoint.conf" ]]; then
-        echo "XBPS hook config missing"
-        return
-    fi
-
-    echo "Installing XBPS hooks..."
-    sudo install -D -m755 hooks/waypoint-pre-upgrade.sh \
-        /etc/xbps.d/waypoint-pre-upgrade.sh
-
-    sudo install -D -m644 hooks/waypoint.conf \
-        /etc/waypoint/waypoint.conf
-}
 
 create_metadata_dir() {
     echo "Creating metadata directory..."
@@ -342,16 +325,6 @@ uninstall_dbus_service() {
     [[ -f "$new_conf_file" ]] && sudo rm -f "$new_conf_file"
 }
 
-uninstall_xbps_hooks() {
-    echo "Removing XBPS hooks..."
-    if [[ -f "/etc/xbps.d/waypoint-pre-upgrade.sh" ]]; then
-        sudo rm -f /etc/xbps.d/waypoint-pre-upgrade.sh
-    fi
-    if [[ -f "/etc/waypoint/waypoint.conf" ]]; then
-        sudo rm -f /etc/waypoint/waypoint.conf
-        sudo rmdir /etc/waypoint 2>/dev/null || true
-    fi
-}
 
 uninstall_icons() {
     echo "Removing application icons..."
@@ -419,7 +392,6 @@ case "$ACTION" in
         install_icons
         install_polkit_policy
         install_dbus_service
-        install_xbps_hooks
         install_scheduler_service
         create_metadata_dir
         reload_dbus
@@ -431,7 +403,6 @@ case "$ACTION" in
         echo "  • Launch Waypoint from your application menu"
         echo "  • Run 'waypoint' for the GUI"
         echo "  • Run 'waypoint-cli' for CLI operations (create, list, delete, restore)"
-        echo "  • XBPS will automatically create snapshots before upgrades"
         echo "  • Configure scheduled snapshots via GUI or /etc/waypoint/scheduler.conf"
         echo
         echo "Note: Snapshot metadata is stored in /var/lib/waypoint/"
@@ -447,7 +418,6 @@ case "$ACTION" in
         uninstall_icons
         uninstall_polkit_policy
         uninstall_dbus_service
-        uninstall_xbps_hooks
         uninstall_scheduler_service
         reload_dbus
         echo

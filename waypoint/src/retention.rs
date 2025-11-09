@@ -187,8 +187,8 @@ mod tests {
             kernel_version: None,
             package_count: Some(0),
             size_bytes: None,
-            packages: vec![],
-            subvolumes: vec![PathBuf::from("/")],
+            packages: std::rc::Rc::new(vec![]),
+            subvolumes: std::rc::Rc::new(vec![PathBuf::from("/")]),
         }
     }
 

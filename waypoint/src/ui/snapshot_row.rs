@@ -10,6 +10,7 @@ pub struct SnapshotRow {
 
 pub enum SnapshotAction {
     Browse,
+    Verify,
     Restore,
     Delete,
 }
@@ -54,6 +55,13 @@ impl SnapshotRow {
             .build();
         browse_btn.add_css_class("flat");
 
+        let verify_btn = Button::builder()
+            .icon_name("emblem-ok-symbolic")
+            .tooltip_text("Verify Snapshot Integrity")
+            .valign(gtk::Align::Center)
+            .build();
+        verify_btn.add_css_class("flat");
+
         let restore_btn = Button::builder()
             .icon_name("view-refresh-symbolic")
             .tooltip_text("Restore System to This Point")
@@ -81,6 +89,12 @@ impl SnapshotRow {
 
         let id_clone = snapshot_id.clone();
         let cb_clone = callback.clone();
+        verify_btn.connect_clicked(move |_| {
+            cb_clone(id_clone.clone(), SnapshotAction::Verify);
+        });
+
+        let id_clone = snapshot_id.clone();
+        let cb_clone = callback.clone();
         restore_btn.connect_clicked(move |_| {
             cb_clone(id_clone.clone(), SnapshotAction::Restore);
         });
@@ -92,6 +106,7 @@ impl SnapshotRow {
         });
 
         button_box.append(&browse_btn);
+        button_box.append(&verify_btn);
         button_box.append(&restore_btn);
         button_box.append(&delete_btn);
 

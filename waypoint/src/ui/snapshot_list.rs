@@ -148,6 +148,9 @@ pub fn refresh_snapshot_list_internal(
 
         list.append(&placeholder);
     } else {
+        // Note: action_handler is cloned for each row, but it's a closure which is relatively
+        // lightweight. The Snapshot references passed to SnapshotRow::new use Rc<T> internally
+        // for expensive fields (packages, subvolumes), so cloning snapshots is cheap.
         for snapshot in filtered_snapshots.iter().rev() {
             let handler_clone = action_handler.clone();
             let row = SnapshotRow::new(snapshot, move |id, action| {

@@ -3,47 +3,6 @@ use gtk::{Entry, Label, Orientation};
 use libadwaita as adw;
 use adw::prelude::*;
 
-/// Validate snapshot name for security and filesystem compatibility
-///
-/// # Arguments
-/// * `name` - The snapshot name to validate
-///
-/// # Returns
-/// `true` if the name is valid and safe to use, `false` otherwise
-///
-/// # Validation Rules
-/// - Name must not be empty and must be ≤ 255 characters
-/// - Cannot contain `/`, null bytes, or `..`
-/// - Cannot start with `-` or `.`
-/// - Cannot be exactly `.` or `..`
-///
-/// # Note
-/// This function is tested but not yet used in production code.
-/// It's available for future validation requirements.
-#[allow(dead_code)]
-pub fn is_valid_snapshot_name(name: &str) -> bool {
-    if name.is_empty() || name.len() > 255 {
-        return false;
-    }
-
-    // Reject names with problematic characters
-    if name.contains('/') || name.contains('\0') || name.contains("..") {
-        return false;
-    }
-
-    // Reject names starting with - or .
-    if name.starts_with('-') || name.starts_with('.') {
-        return false;
-    }
-
-    // Reject special names
-    if name == "." || name == ".." {
-        return false;
-    }
-
-    true
-}
-
 /// Sanitize description text to prevent issues
 fn sanitize_description(desc: &str) -> String {
     // Trim whitespace and limit length
@@ -126,35 +85,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use waypoint_common::validate_snapshot_name;
 
     #[test]
     fn test_valid_snapshot_names() {
-        assert!(is_valid_snapshot_name("snapshot-001"));
-        assert!(is_valid_snapshot_name("backup_2024"));
-        assert!(is_valid_snapshot_name("pre-upgrade"));
-        assert!(is_valid_snapshot_name("my-snapshot"));
-        assert!(is_valid_snapshot_name("waypoint-20241108-120000"));
+        assert!(validate_snapshot_name("snapshot-001").is_ok());
+        assert!(validate_snapshot_name("backup_2024").is_ok());
+        assert!(validate_snapshot_name("pre-upgrade").is_ok());
+        assert!(validate_snapshot_name("my-snapshot").is_ok());
+        assert!(validate_snapshot_name("waypoint-20241108-120000").is_ok());
     }
 
     #[test]
     fn test_invalid_snapshot_names() {
         // Empty or too long
-        assert!(!is_valid_snapshot_name(""));
-        assert!(!is_valid_snapshot_name(&"a".repeat(256)));
+        assert!(validate_snapshot_name("").is_err());
+        assert!(validate_snapshot_name(&"a".repeat(256)).is_err());
 
         // Path traversal
-        assert!(!is_valid_snapshot_name("../etc"));
-        assert!(!is_valid_snapshot_name("test/../root"));
-        assert!(!is_valid_snapshot_name("."));
-        assert!(!is_valid_snapshot_name(".."));
+        assert!(validate_snapshot_name("../etc").is_err());
+        assert!(validate_snapshot_name("test/../root").is_err());
+        assert!(validate_snapshot_name(".").is_err());
+        assert!(validate_snapshot_name("..").is_err());
 
         // Dangerous characters
-        assert!(!is_valid_snapshot_name("test/path"));
-        assert!(!is_valid_snapshot_name("test\0null"));
+        assert!(validate_snapshot_name("test/path").is_err());
+        assert!(validate_snapshot_name("test\0null").is_err());
 
         // Starting with special chars
-        assert!(!is_valid_snapshot_name("-snapshot"));
-        assert!(!is_valid_snapshot_name(".hidden"));
+        assert!(validate_snapshot_name("-snapshot").is_err());
+        assert!(validate_snapshot_name(".hidden").is_err());
     }
 
     #[test]

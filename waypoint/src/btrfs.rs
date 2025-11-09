@@ -2,6 +2,32 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use crate::cache::TtlCache;
+
+/// Global cache for snapshot sizes (5-minute TTL)
+static SIZE_CACHE: OnceLock<TtlCache<PathBuf, u64>> = OnceLock::new();
+
+/// Global cache for available disk space (30-second TTL)
+static SPACE_CACHE: OnceLock<TtlCache<PathBuf, u64>> = OnceLock::new();
+
+/// Initialize caches (call once at startup)
+pub fn init_cache() {
+    SIZE_CACHE.get_or_init(|| TtlCache::new(Duration::from_secs(300))); // 5 minutes
+    SPACE_CACHE.get_or_init(|| TtlCache::new(Duration::from_secs(30))); // 30 seconds
+}
+
+/// Get the size cache
+fn size_cache() -> &'static TtlCache<PathBuf, u64> {
+    SIZE_CACHE.get_or_init(|| TtlCache::new(Duration::from_secs(300)))
+}
+
+/// Get the space cache
+fn space_cache() -> &'static TtlCache<PathBuf, u64> {
+    SPACE_CACHE.get_or_init(|| TtlCache::new(Duration::from_secs(30)))
+}
 
 /// Check if a path is on a Btrfs filesystem
 pub fn is_btrfs(path: &Path) -> Result<bool> {
@@ -239,7 +265,18 @@ pub fn check_root() -> Result<()> {
 }
 
 /// Get available disk space for a path
+///
+/// This function uses a cache with a 30-second TTL to avoid repeatedly
+/// querying the filesystem for the same path.
 pub fn get_available_space(path: &Path) -> Result<u64> {
+    let path_buf = path.to_path_buf();
+
+    // Check cache first
+    if let Some(cached_space) = space_cache().get(&path_buf) {
+        return Ok(cached_space);
+    }
+
+    // Cache miss - query filesystem
     let output = Command::new("df")
         .arg("-B1")
         .arg("--output=avail")
@@ -258,37 +295,66 @@ pub fn get_available_space(path: &Path) -> Result<u64> {
         bail!("Unexpected df output");
     }
 
-    lines[1]
+    let space: u64 = lines[1]
         .trim()
         .parse()
-        .context("Failed to parse available space")
+        .context("Failed to parse available space")?;
+
+    // Store in cache
+    space_cache().insert(path_buf, space);
+
+    Ok(space)
 }
 
 /// Get the disk usage of a snapshot or subvolume
 /// Returns size in bytes
+///
+/// This function uses a cache with a 5-minute TTL to avoid repeatedly
+/// running expensive `du` operations on the same snapshot.
 pub fn get_snapshot_size(path: &Path) -> Result<u64> {
+    let path_buf = path.to_path_buf();
+
+    // Check cache first
+    if let Some(cached_size) = size_cache().get(&path_buf) {
+        return Ok(cached_size);
+    }
+
+    // Cache miss - run du
     // Use du to get actual disk usage
     // -s for summary, -b for bytes
+    // Note: du may return non-zero exit code due to permission denied errors
+    // on some directories in the snapshot, but it still returns a valid size
     let output = Command::new("du")
         .arg("-sb")
         .arg(path)
         .output()
         .context("Failed to execute du command")?;
 
-    if !output.status.success() {
-        bail!("Failed to get snapshot size");
-    }
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parts: Vec<&str> = stdout.split_whitespace().collect();
 
     if parts.is_empty() {
-        bail!("Unexpected du output");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to get snapshot size: {}", stderr);
     }
 
-    parts[0]
+    // Parse the size from the first column
+    let size: u64 = parts[0]
         .parse()
-        .context("Failed to parse snapshot size")
+        .context("Failed to parse snapshot size")?;
+
+    // Store in cache
+    size_cache().insert(path_buf, size);
+
+    Ok(size)
+}
+
+/// Invalidate the size cache for a specific snapshot path
+///
+/// Call this when a snapshot is deleted or its contents change
+#[allow(dead_code)]
+pub fn invalidate_size_cache(path: &Path) {
+    size_cache().remove(&path.to_path_buf());
 }
 
 #[cfg(test)]

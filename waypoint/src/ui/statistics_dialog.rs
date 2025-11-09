@@ -241,30 +241,43 @@ async fn calculate_missing_sizes_async(
                 total_to_calculate
             ));
 
-            // Run du command in separate thread to avoid blocking UI
+            // Run du command - since we're in an async function running in glib's event loop,
+            // we need to yield to prevent blocking. Use glib::spawn_future to run the
+            // blocking operation
             let path = snapshot.path.clone();
-            let (sender, receiver) = async_channel::bounded(1);
 
+            // Create a oneshot channel manually
+            let (tx, rx) = std::sync::mpsc::channel();
+
+            // Spawn blocking task in thread pool
             std::thread::spawn(move || {
                 let result = btrfs::get_snapshot_size(&path);
-                let _ = sender.send_blocking(result);
+                let _ = tx.send(result);
             });
 
-            // Wait for result asynchronously
-            let size_result = receiver.recv().await;
-
-            match size_result {
-                Ok(Ok(size)) => {
-                    snapshot.size_bytes = Some(size);
-                    updated = true;
-                    calculated_count += 1;
-                    eprintln!("  Size: {}", format_bytes(size));
-                }
-                Ok(Err(e)) => {
-                    eprintln!("  Failed to calculate size: {}", e);
-                }
-                Err(e) => {
-                    eprintln!("  Channel receive error: {}", e);
+            // Poll for result without blocking the UI
+            loop {
+                match rx.try_recv() {
+                    Ok(Ok(size)) => {
+                        snapshot.size_bytes = Some(size);
+                        updated = true;
+                        calculated_count += 1;
+                        eprintln!("  Size: {}", format_bytes(size));
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        eprintln!("  Failed to calculate size: {}", e);
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // Wait a bit and try again
+                        glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        eprintln!("  Channel disconnected");
+                        break;
+                    }
                 }
             }
 

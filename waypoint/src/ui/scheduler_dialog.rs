@@ -63,6 +63,33 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
     // Load current config
     let (frequency, time, day, prefix) = load_scheduler_config();
 
+    // Quick presets group
+    let presets_group = adw::PreferencesGroup::new();
+    presets_group.set_title("Quick Presets");
+    presets_group.set_description(Some("Common snapshot schedules"));
+    content_box.append(&presets_group);
+
+    let presets_box = Box::new(Orientation::Horizontal, 12);
+    presets_box.set_margin_top(12);
+    presets_box.set_margin_bottom(12);
+    presets_box.set_margin_start(12);
+    presets_box.set_margin_end(12);
+    presets_box.set_halign(gtk::Align::Center);
+
+    let preset_daily_2am = Button::with_label("Daily at 2 AM");
+    preset_daily_2am.add_css_class("pill");
+    presets_box.append(&preset_daily_2am);
+
+    let preset_daily_midnight = Button::with_label("Daily at Midnight");
+    preset_daily_midnight.add_css_class("pill");
+    presets_box.append(&preset_daily_midnight);
+
+    let preset_weekly_sunday = Button::with_label("Weekly on Sunday");
+    preset_weekly_sunday.add_css_class("pill");
+    presets_box.append(&preset_weekly_sunday);
+
+    presets_group.add(&presets_box);
+
     // Settings group
     let settings_group = adw::PreferencesGroup::new();
     settings_group.set_title("Schedule Settings");
@@ -152,6 +179,86 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
     time_row.set_visible(initial_freq == 1 || initial_freq == 2);
     day_row.set_visible(initial_freq == 2);
 
+    // Preset button handlers
+    let freq_for_preset1 = freq_dropdown.clone();
+    let hour_for_preset1 = hour_spin.clone();
+    let minute_for_preset1 = minute_spin.clone();
+    preset_daily_2am.connect_clicked(move |_| {
+        freq_for_preset1.set_selected(1); // Daily
+        hour_for_preset1.set_value(2.0);
+        minute_for_preset1.set_value(0.0);
+    });
+
+    let freq_for_preset2 = freq_dropdown.clone();
+    let hour_for_preset2 = hour_spin.clone();
+    let minute_for_preset2 = minute_spin.clone();
+    preset_daily_midnight.connect_clicked(move |_| {
+        freq_for_preset2.set_selected(1); // Daily
+        hour_for_preset2.set_value(0.0);
+        minute_for_preset2.set_value(0.0);
+    });
+
+    let freq_for_preset3 = freq_dropdown.clone();
+    let hour_for_preset3 = hour_spin.clone();
+    let minute_for_preset3 = minute_spin.clone();
+    let day_for_preset3 = day_dropdown.clone();
+    preset_weekly_sunday.connect_clicked(move |_| {
+        freq_for_preset3.set_selected(2); // Weekly
+        hour_for_preset3.set_value(2.0);
+        minute_for_preset3.set_value(0.0);
+        day_for_preset3.set_selected(0); // Sunday
+    });
+
+    // Next snapshot preview
+    let preview_group = adw::PreferencesGroup::new();
+    preview_group.set_title("Schedule Preview");
+    content_box.append(&preview_group);
+
+    let preview_label = Label::new(Some("Calculating next snapshot time..."));
+    preview_label.set_wrap(true);
+    preview_label.set_halign(gtk::Align::Start);
+    preview_label.add_css_class("title-4");
+    preview_label.set_margin_top(12);
+    preview_label.set_margin_bottom(12);
+    preview_label.set_margin_start(12);
+    preview_label.set_margin_end(12);
+    preview_group.add(&preview_label);
+
+    // Function to update preview
+    let update_preview = {
+        let freq_dropdown = freq_dropdown.clone();
+        let hour_spin = hour_spin.clone();
+        let minute_spin = minute_spin.clone();
+        let day_dropdown = day_dropdown.clone();
+        let preview_label = preview_label.clone();
+
+        move || {
+            let freq_selected = freq_dropdown.selected();
+            let hour_val = hour_spin.value() as u32;
+            let minute_val = minute_spin.value() as u32;
+            let day_val = day_dropdown.selected();
+
+            let next_time = calculate_next_snapshot_time(freq_selected, hour_val, minute_val, day_val);
+            preview_label.set_text(&next_time);
+        }
+    };
+
+    // Initial preview
+    update_preview();
+
+    // Update preview when values change
+    let update_preview_clone1 = update_preview.clone();
+    freq_dropdown.connect_selected_notify(move |_| update_preview_clone1());
+
+    let update_preview_clone2 = update_preview.clone();
+    hour_spin.connect_value_changed(move |_| update_preview_clone2());
+
+    let update_preview_clone3 = update_preview.clone();
+    minute_spin.connect_value_changed(move |_| update_preview_clone3());
+
+    let update_preview_clone4 = update_preview.clone();
+    day_dropdown.connect_selected_notify(move |_| update_preview_clone4());
+
     // Info group
     let info_group = adw::PreferencesGroup::new();
     info_group.set_title("Information");
@@ -239,81 +346,130 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
             frequency, time_str, day_val, prefix_str
         );
 
-        // Save configuration via D-Bus
+        // Save configuration via D-Bus (run in thread to avoid blocking UI)
         let dialog_for_error = dialog_for_save.clone();
-        glib::spawn_future_local(async move {
-            let result = async {
-                let client = WaypointHelperClient::new_async().await?;
-                let (success, message) = client.update_scheduler_config(config_content).await?;
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<()> {
+                let client = WaypointHelperClient::new()?;
+                let (success, message) = client.update_scheduler_config(config_content)?;
                 if !success {
                     return Err(anyhow::anyhow!(message));
                 }
 
                 // Restart service
-                let (success, message) = client.restart_scheduler().await?;
+                let (success, message) = client.restart_scheduler()?;
                 if !success {
                     return Err(anyhow::anyhow!(message));
                 }
 
-                Ok::<(), anyhow::Error>(())
-            }.await;
+                Ok(())
+            })();
 
-            match result {
-                Ok(_) => {
-                    println!("✓ Scheduler configuration saved and service restarted");
+            let _ = tx.send(result);
+        });
 
-                    // Show success toast
-                    let toast = adw::Toast::new("Scheduler updated and restarted successfully");
-                    toast.set_timeout(3);
+        // Handle result on main thread
+        glib::spawn_future_local(async move {
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        match result {
+                            Ok(_) => {
+                                println!("✓ Scheduler configuration saved and service restarted");
 
-                    if let Some(window) = parent_for_save.downcast_ref::<adw::ApplicationWindow>() {
-                        if let Some(toast_overlay) = window.content()
-                            .and_then(|w| w.downcast::<adw::ToastOverlay>().ok()) {
-                            toast_overlay.add_toast(toast);
+                                // Show success toast
+                                let toast = adw::Toast::new("Scheduler updated and restarted successfully");
+                                toast.set_timeout(3);
+
+                                if let Some(window) = parent_for_save.downcast_ref::<adw::ApplicationWindow>() {
+                                    if let Some(toast_overlay) = window.content()
+                                        .and_then(|w| w.downcast::<adw::ToastOverlay>().ok()) {
+                                        toast_overlay.add_toast(toast);
+                                    }
+                                }
+
+                                dialog_for_save.close();
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to save scheduler configuration: {}", e);
+                                let error_dialog = adw::MessageDialog::new(
+                                    Some(&dialog_for_error),
+                                    Some("Save Failed"),
+                                    Some(&format!("Failed to save scheduler configuration: {}", e))
+                                );
+                                error_dialog.add_response("ok", "OK");
+                                error_dialog.set_default_response(Some("ok"));
+                                error_dialog.present();
+                            }
                         }
+                        break;
                     }
-
-                    dialog_for_save.close();
-                }
-                Err(e) => {
-                    eprintln!("Failed to save scheduler configuration: {}", e);
-                    let error_dialog = adw::MessageDialog::new(
-                        Some(&dialog_for_error),
-                        Some("Save Failed"),
-                        Some(&format!("Failed to save scheduler configuration: {}", e))
-                    );
-                    error_dialog.add_response("ok", "OK");
-                    error_dialog.set_default_response(Some("ok"));
-                    error_dialog.present();
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        eprintln!("Channel disconnected");
+                        break;
+                    }
                 }
             }
         });
     });
 
-    // Update status asynchronously
+    // Update status in thread to avoid blocking UI
     let status_label_clone = status_label.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let result = WaypointHelperClient::new()
+            .and_then(|client| client.get_scheduler_status());
+        let _ = tx.send(result);
+    });
+
     glib::spawn_future_local(async move {
-        match WaypointHelperClient::new_async().await {
-            Ok(client) => {
-                match client.get_scheduler_status().await {
-                    Ok(status) => {
-                        if status == "running" {
-                            status_label_clone.set_text("● Running");
-                            status_label_clone.add_css_class("success");
-                        } else {
-                            status_label_clone.set_text("○ Stopped");
-                            status_label_clone.add_css_class("warning");
+        loop {
+            match rx.try_recv() {
+                Ok(result) => {
+                    match result {
+                        Ok(status) => {
+                            match status.as_str() {
+                                "running" => {
+                                    status_label_clone.set_text("● Running");
+                                    status_label_clone.add_css_class("success");
+                                }
+                                "stopped" => {
+                                    status_label_clone.set_text("○ Stopped");
+                                    status_label_clone.add_css_class("warning");
+                                }
+                                "disabled" => {
+                                    status_label_clone.set_text("○ Disabled");
+                                    status_label_clone.add_css_class("dim-label");
+                                }
+                                _ => {
+                                    status_label_clone.set_text("○ Unknown");
+                                    status_label_clone.add_css_class("dim-label");
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            status_label_clone.set_text("✗ Error");
+                            status_label_clone.add_css_class("error");
                         }
                     }
-                    Err(_) => {
-                        status_label_clone.set_text("○ Unknown");
-                        status_label_clone.add_css_class("dim-label");
-                    }
+                    break;
                 }
-            }
-            Err(_) => {
-                status_label_clone.set_text("✗ Error");
-                status_label_clone.add_css_class("error");
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    status_label_clone.set_text("✗ Error");
+                    status_label_clone.add_css_class("error");
+                    break;
+                }
             }
         }
     });
@@ -353,6 +509,87 @@ fn load_scheduler_config() -> (String, String, String, String) {
         Err(_) => {
             // Default values
             ("daily".to_string(), "02:00".to_string(), "0".to_string(), "auto".to_string())
+        }
+    }
+}
+
+/// Calculate when the next snapshot will be created based on the schedule
+fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_week: u32) -> String {
+    use chrono::{Local, Datelike, Timelike, Duration};
+
+    let now = Local::now();
+
+    match frequency {
+        0 => {
+            // Hourly
+            let next = now + Duration::hours(1);
+            format!("📅 Next snapshot: {} at {:02}:{:02} (in about 1 hour)",
+                    next.format("%A, %B %d"),
+                    next.hour(),
+                    next.minute())
+        }
+        1 => {
+            // Daily
+            let mut next = now
+                .date_naive()
+                .and_hms_opt(hour, minute, 0)
+                .unwrap();
+
+            // If today's time has passed, schedule for tomorrow
+            if now.time() > next.time() {
+                next = (now.date_naive() + Duration::days(1))
+                    .and_hms_opt(hour, minute, 0)
+                    .unwrap();
+            }
+
+            let time_until = next.signed_duration_since(now.naive_local());
+            let hours_until = time_until.num_hours();
+
+            if hours_until < 24 {
+                format!("📅 Next snapshot: Today at {:02}:{:02} (in {} hours)",
+                        hour, minute, hours_until)
+            } else {
+                format!("📅 Next snapshot: Tomorrow at {:02}:{:02}",
+                        hour, minute)
+            }
+        }
+        2 => {
+            // Weekly
+            let current_day = now.weekday().num_days_from_sunday();
+            let target_day = day_of_week;
+
+            let mut days_until = (target_day as i64 - current_day as i64 + 7) % 7;
+
+            // If it's the same day but time has passed, add 7 days
+            if days_until == 0 {
+                let target_time = now.date_naive()
+                    .and_hms_opt(hour, minute, 0)
+                    .unwrap();
+                if now.time() >= target_time.time() {
+                    days_until = 7;
+                }
+            }
+
+            let day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+            let day_name = day_names.get(target_day as usize).unwrap_or(&"Unknown");
+
+            if days_until == 0 {
+                format!("📅 Next snapshot: Today ({}) at {:02}:{:02}",
+                        day_name, hour, minute)
+            } else if days_until == 1 {
+                format!("📅 Next snapshot: Tomorrow ({}) at {:02}:{:02}",
+                        day_name, hour, minute)
+            } else {
+                format!("📅 Next snapshot: {} ({}) at {:02}:{:02} (in {} days)",
+                        day_name, day_name, hour, minute, days_until)
+            }
+        }
+        3 => {
+            // Custom
+            "📅 Custom schedule - refer to configuration file".to_string()
+        }
+        _ => {
+            "📅 Unknown schedule".to_string()
         }
     }
 }

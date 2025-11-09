@@ -46,6 +46,52 @@ check_dbus_service() {
     fi
 }
 
+validate_snapshot_name() {
+    local name="$1"
+
+    # Check if empty
+    if [[ -z "$name" ]]; then
+        echo "Error: Snapshot name cannot be empty" >&2
+        return 1
+    fi
+
+    # Check length (max 255 characters)
+    if [[ ${#name} -gt 255 ]]; then
+        echo "Error: Snapshot name too long (max 255 characters)" >&2
+        return 1
+    fi
+
+    # Check for forbidden characters and patterns
+    if [[ "$name" == *"/"* ]]; then
+        echo "Error: Snapshot name cannot contain '/'" >&2
+        return 1
+    fi
+
+    if [[ "$name" == *".."* ]]; then
+        echo "Error: Snapshot name cannot contain '..'" >&2
+        return 1
+    fi
+
+    # Check if starts with - or .
+    if [[ "$name" == -* ]]; then
+        echo "Error: Snapshot name cannot start with '-'" >&2
+        return 1
+    fi
+
+    if [[ "$name" == .* ]]; then
+        echo "Error: Snapshot name cannot start with '.'" >&2
+        return 1
+    fi
+
+    # Check for special names
+    if [[ "$name" == "." || "$name" == ".." ]]; then
+        echo "Error: Snapshot name cannot be '.' or '..'" >&2
+        return 1
+    fi
+
+    return 0
+}
+
 cmd_create() {
     local name="${1:-}"
     local description="${2:-Snapshot created via CLI}"
@@ -57,26 +103,34 @@ cmd_create() {
         exit 1
     fi
 
+    # Validate snapshot name
+    if ! validate_snapshot_name "$name"; then
+        echo "Usage: waypoint-cli create <name> [description]" >&2
+        exit 1
+    fi
+
     echo "Creating snapshot: $name"
     echo "Description: $description"
 
     # Convert subvolumes to array format for D-Bus
+    # The D-Bus method signature is CreateSnapshot(sas) - string, string, array of strings
     local result
     result=$(busctl call --system \
         "$DBUS_SERVICE" \
         "$DBUS_PATH" \
         "$DBUS_INTERFACE" \
-        create_snapshot \
-        'sss' \
+        CreateSnapshot \
+        'ssas' \
         "$name" \
         "$description" \
+        1 \
         "$subvolumes" 2>&1)
 
     # Parse result (format: "b s" true "message")
-    if echo "$result" | grep -q "^true"; then
-        echo "✓ Success: $(echo "$result" | cut -d'"' -f2)"
+    if echo "$result" | grep -q "^b true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^b true s "//' | sed 's/"$//')"
     else
-        echo "✗ Failed: $(echo "$result" | cut -d'"' -f2)" >&2
+        echo "✗ Failed: $(echo "$result" | sed 's/^b false s "//' | sed 's/"$//')" >&2
         exit 1
     fi
 }
@@ -88,7 +142,7 @@ cmd_list() {
         "$DBUS_SERVICE" \
         "$DBUS_PATH" \
         "$DBUS_INTERFACE" \
-        list_snapshots 2>&1)
+        ListSnapshots 2>&1)
 
     # Parse JSON result (format: "s" "json_data")
     local json
@@ -125,14 +179,14 @@ cmd_delete() {
         "$DBUS_SERVICE" \
         "$DBUS_PATH" \
         "$DBUS_INTERFACE" \
-        delete_snapshot \
+        DeleteSnapshot \
         's' \
         "$name" 2>&1)
 
-    if echo "$result" | grep -q "^true"; then
-        echo "✓ Success: $(echo "$result" | cut -d'"' -f2)"
+    if echo "$result" | grep -q "^b true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^b true s "//' | sed 's/"$//')"
     else
-        echo "✗ Failed: $(echo "$result" | cut -d'"' -f2)" >&2
+        echo "✗ Failed: $(echo "$result" | sed 's/^b false s "//' | sed 's/"$//')" >&2
         exit 1
     fi
 }
@@ -162,17 +216,17 @@ cmd_restore() {
         "$DBUS_SERVICE" \
         "$DBUS_PATH" \
         "$DBUS_INTERFACE" \
-        restore_snapshot \
+        RestoreSnapshot \
         's' \
         "$name" 2>&1)
 
-    if echo "$result" | grep -q "^true"; then
-        echo "✓ Success: $(echo "$result" | cut -d'"' -f2)"
+    if echo "$result" | grep -q "^b true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^b true s "//' | sed 's/"$//')"
         echo
         echo "IMPORTANT: You MUST reboot now for changes to take effect!"
         echo "Run: sudo reboot"
     else
-        echo "✗ Failed: $(echo "$result" | cut -d'"' -f2)" >&2
+        echo "✗ Failed: $(echo "$result" | sed 's/^b false s "//' | sed 's/"$//')" >&2
         exit 1
     fi
 }

@@ -1,4 +1,5 @@
 mod btrfs;
+mod cache;
 mod dbus_client;
 mod packages;
 mod retention;
@@ -22,6 +23,9 @@ fn main() -> glib::ExitCode {
 }
 
 fn build_ui(app: &Application) {
+    // Initialize filesystem cache
+    btrfs::init_cache();
+
     let window = ui::MainWindow::new(app);
     window.present();
 }

@@ -3,12 +3,43 @@
 use anyhow::{Context, Result};
 use waypoint_common::*;
 use zbus::blocking::Connection as BlockingConnection;
-use zbus::Connection as AsyncConnection;
+
+/// Verification result for a snapshot
+#[derive(Debug, serde::Deserialize)]
+pub struct VerificationResult {
+    pub is_valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Package change information for restore preview
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PackageChange {
+    pub name: String,
+    pub current_version: Option<String>,
+    pub snapshot_version: Option<String>,
+    pub change_type: String,
+}
+
+/// Preview of what will happen if a snapshot is restored
+#[derive(Debug, serde::Deserialize)]
+pub struct RestorePreview {
+    pub snapshot_name: String,
+    pub snapshot_timestamp: String,
+    pub snapshot_description: Option<String>,
+    pub current_kernel: Option<String>,
+    pub snapshot_kernel: Option<String>,
+    pub affected_subvolumes: Vec<String>,
+    pub packages_to_add: Vec<PackageChange>,
+    pub packages_to_remove: Vec<PackageChange>,
+    pub packages_to_upgrade: Vec<PackageChange>,
+    pub packages_to_downgrade: Vec<PackageChange>,
+    pub total_package_changes: usize,
+}
 
 /// Client for waypoint-helper D-Bus service
 pub struct WaypointHelperClient {
     connection: BlockingConnection,
-    async_connection: AsyncConnection,
 }
 
 impl WaypointHelperClient {
@@ -17,23 +48,7 @@ impl WaypointHelperClient {
         let connection = BlockingConnection::system()
             .context("Failed to connect to system bus")?;
 
-        // Create an async connection by using futures executor
-        let async_connection = futures_executor::block_on(async {
-            AsyncConnection::system().await
-        }).context("Failed to create async connection")?;
-
-        Ok(Self { connection, async_connection })
-    }
-
-    /// Connect to the waypoint-helper service (async)
-    pub async fn new_async() -> Result<Self> {
-        let connection = BlockingConnection::system()
-            .context("Failed to connect to system bus")?;
-
-        let async_connection = AsyncConnection::system().await
-            .context("Failed to create async connection")?;
-
-        Ok(Self { connection, async_connection })
+        Ok(Self { connection })
     }
 
     /// Create a snapshot
@@ -46,8 +61,8 @@ impl WaypointHelperClient {
         )?;
 
         let result: (bool, String) = proxy
-            .call("create_snapshot", &(name, description, subvolumes))
-            .context("Failed to call create_snapshot")?;
+            .call("CreateSnapshot", &(name, description, subvolumes))
+            .context("Failed to call CreateSnapshot")?;
 
         Ok(result)
     }
@@ -62,8 +77,8 @@ impl WaypointHelperClient {
         )?;
 
         let result: (bool, String) = proxy
-            .call("delete_snapshot", &(name,))
-            .context("Failed to call delete_snapshot")?;
+            .call("DeleteSnapshot", &(name,))
+            .context("Failed to call DeleteSnapshot")?;
 
         Ok(result)
     }
@@ -78,8 +93,8 @@ impl WaypointHelperClient {
         )?;
 
         let result: (bool, String) = proxy
-            .call("restore_snapshot", &(name,))
-            .context("Failed to call restore_snapshot")?;
+            .call("RestoreSnapshot", &(name,))
+            .context("Failed to call RestoreSnapshot")?;
 
         Ok(result)
     }
@@ -95,8 +110,8 @@ impl WaypointHelperClient {
         )?;
 
         let json: String = proxy
-            .call("list_snapshots", &())
-            .context("Failed to call list_snapshots")?;
+            .call("ListSnapshots", &())
+            .context("Failed to call ListSnapshots")?;
 
         let snapshots: Vec<SnapshotInfo> = serde_json::from_str(&json)
             .context("Failed to parse snapshot list")?;
@@ -104,53 +119,88 @@ impl WaypointHelperClient {
         Ok(snapshots)
     }
 
-    /// Update scheduler configuration
-    pub async fn update_scheduler_config(&self, config_content: String) -> Result<(bool, String)> {
-        let proxy = zbus::Proxy::new(
-            &self.async_connection,
+    /// Verify snapshot integrity
+    pub fn verify_snapshot(&self, name: String) -> Result<VerificationResult> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
             DBUS_SERVICE_NAME,
             DBUS_OBJECT_PATH,
             DBUS_INTERFACE_NAME,
-        ).await?;
+        )?;
+
+        let json: String = proxy
+            .call("VerifySnapshot", &(name,))
+            .context("Failed to call VerifySnapshot")?;
+
+        let result: VerificationResult = serde_json::from_str(&json)
+            .context("Failed to parse verification result")?;
+
+        Ok(result)
+    }
+
+    /// Preview what will happen if a snapshot is restored
+    pub fn preview_restore(&self, name: String) -> Result<RestorePreview> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let json: String = proxy
+            .call("PreviewRestore", &(name,))
+            .context("Failed to call PreviewRestore")?;
+
+        let result: RestorePreview = serde_json::from_str(&json)
+            .context("Failed to parse restore preview result")?;
+
+        Ok(result)
+    }
+
+    /// Update scheduler configuration
+    pub fn update_scheduler_config(&self, config_content: String) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
 
         let result: (bool, String) = proxy
-            .call("update_scheduler_config", &(config_content,))
-            .await
-            .context("Failed to call update_scheduler_config")?;
+            .call("UpdateSchedulerConfig", &(config_content,))
+            .context("Failed to call UpdateSchedulerConfig")?;
 
         Ok(result)
     }
 
     /// Restart scheduler service
-    pub async fn restart_scheduler(&self) -> Result<(bool, String)> {
-        let proxy = zbus::Proxy::new(
-            &self.async_connection,
+    pub fn restart_scheduler(&self) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
             DBUS_SERVICE_NAME,
             DBUS_OBJECT_PATH,
             DBUS_INTERFACE_NAME,
-        ).await?;
+        )?;
 
         let result: (bool, String) = proxy
-            .call("restart_scheduler", &())
-            .await
-            .context("Failed to call restart_scheduler")?;
+            .call("RestartScheduler", &())
+            .context("Failed to call RestartScheduler")?;
 
         Ok(result)
     }
 
     /// Get scheduler service status
-    pub async fn get_scheduler_status(&self) -> Result<String> {
-        let proxy = zbus::Proxy::new(
-            &self.async_connection,
+    pub fn get_scheduler_status(&self) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
             DBUS_SERVICE_NAME,
             DBUS_OBJECT_PATH,
             DBUS_INTERFACE_NAME,
-        ).await?;
+        )?;
 
         let status: String = proxy
-            .call("get_scheduler_status", &())
-            .await
-            .context("Failed to call get_scheduler_status")?;
+            .call("GetSchedulerStatus", &())
+            .context("Failed to call GetSchedulerStatus")?;
 
         Ok(status)
     }

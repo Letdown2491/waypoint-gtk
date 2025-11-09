@@ -1,8 +1,12 @@
 // Shared types and utilities for Waypoint
 
+pub mod config;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+pub use config::WaypointConfig;
 
 /// A package installed on the system
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,3 +90,59 @@ pub const POLKIT_ACTION_CREATE: &str = "tech.geektoshi.waypoint.create-snapshot"
 pub const POLKIT_ACTION_DELETE: &str = "tech.geektoshi.waypoint.delete-snapshot";
 pub const POLKIT_ACTION_RESTORE: &str = "tech.geektoshi.waypoint.restore-snapshot";
 pub const POLKIT_ACTION_CONFIGURE: &str = "tech.geektoshi.waypoint.configure-system";
+
+/// Validate snapshot name for security and filesystem compatibility
+///
+/// # Arguments
+/// * `name` - The snapshot name to validate
+///
+/// # Returns
+/// `Ok(())` if the name is valid, `Err` with description if invalid
+///
+/// # Validation Rules
+/// - Name must not be empty and must be ≤ 255 characters
+/// - Cannot contain `/`, null bytes, or `..`
+/// - Cannot start with `-` or `.`
+/// - Cannot be exactly `.` or `..`
+///
+/// # Security
+/// This prevents path traversal attacks and ensures filesystem safety.
+/// Even though we use `.arg()` which escapes properly, this provides defense-in-depth.
+pub fn validate_snapshot_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Snapshot name cannot be empty".to_string());
+    }
+
+    if name.len() > 255 {
+        return Err("Snapshot name too long (max 255 characters)".to_string());
+    }
+
+    // Reject names with problematic characters
+    if name.contains('/') {
+        return Err("Snapshot name cannot contain '/'".to_string());
+    }
+
+    if name.contains('\0') {
+        return Err("Snapshot name cannot contain null bytes".to_string());
+    }
+
+    if name.contains("..") {
+        return Err("Snapshot name cannot contain '..'".to_string());
+    }
+
+    // Reject names starting with - or .
+    if name.starts_with('-') {
+        return Err("Snapshot name cannot start with '-'".to_string());
+    }
+
+    if name.starts_with('.') {
+        return Err("Snapshot name cannot start with '.'".to_string());
+    }
+
+    // Reject special names
+    if name == "." || name == ".." {
+        return Err("Snapshot name cannot be '.' or '..'".to_string());
+    }
+
+    Ok(())
+}
