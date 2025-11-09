@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Quick preset buttons for common schedules
   - Real-time next snapshot calculation
   - Improved user experience with immediate feedback
+- **Setup script**: Preserves scheduler configuration on upgrades
+  - No longer overwrites /etc/waypoint/scheduler.conf on reinstall
+  - Installs scheduler.conf.example for reference when config exists
+  - Follows standard package manager behavior for config files
 
 ### Fixed
 - **Disk space indicator**: Now updates immediately after snapshot creation/deletion

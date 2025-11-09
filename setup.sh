@@ -234,8 +234,17 @@ install_scheduler_service() {
     sudo install -D -m755 services/waypoint-scheduler/log/run \
         /etc/sv/waypoint-scheduler/log/run
 
-    sudo install -D -m644 data/waypoint-scheduler.conf \
-        /etc/waypoint/scheduler.conf
+    # Only install config if it doesn't exist (preserve user settings on upgrade)
+    if [[ -f /etc/waypoint/scheduler.conf ]]; then
+        echo " ℹ Preserving existing scheduler configuration"
+        # Install example config for reference
+        sudo install -D -m644 data/waypoint-scheduler.conf \
+            /etc/waypoint/scheduler.conf.example
+    else
+        echo " → Installing default scheduler configuration"
+        sudo install -D -m644 data/waypoint-scheduler.conf \
+            /etc/waypoint/scheduler.conf
+    fi
 
     sudo install -d -m755 /var/log/waypoint-scheduler
 
@@ -400,6 +409,11 @@ uninstall_scheduler_service() {
     # Remove config (but preserve /etc/waypoint if waypoint.conf exists)
     if [[ -f /etc/waypoint/scheduler.conf ]]; then
         sudo rm -f /etc/waypoint/scheduler.conf
+    fi
+
+    # Remove example config if it exists
+    if [[ -f /etc/waypoint/scheduler.conf.example ]]; then
+        sudo rm -f /etc/waypoint/scheduler.conf.example
     fi
 
     # Remove log directory
