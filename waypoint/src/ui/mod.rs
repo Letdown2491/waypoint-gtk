@@ -139,12 +139,6 @@ impl MainWindow {
             .build();
         menu_list.append(&preferences_row);
 
-        let statistics_row = adw::ActionRow::builder()
-            .title("Snapshot Statistics")
-            .activatable(true)
-            .build();
-        menu_list.append(&statistics_row);
-
         let about_row = adw::ActionRow::builder()
             .title("About Waypoint")
             .activatable(true)
@@ -161,7 +155,7 @@ impl MainWindow {
         let (banner, is_btrfs) = Self::create_status_banner();
 
         // Toolbar with buttons
-        let (toolbar, create_btn, compare_btn) = toolbar::create_toolbar();
+        let (toolbar, create_btn, compare_btn, statistics_btn) = toolbar::create_toolbar();
 
         // Disable create button if not on Btrfs
         if !is_btrfs {
@@ -426,6 +420,14 @@ impl MainWindow {
             Self::show_compare_dialog(&win_clone2, &sm_clone2);
         });
 
+        // Connect statistics button
+        let sm_clone3 = snapshot_manager.clone();
+        let win_clone3 = window.clone();
+
+        statistics_btn.connect_clicked(move |_| {
+            Self::show_statistics_dialog(&win_clone3, &sm_clone3);
+        });
+
         // Connect theme buttons
         let style_manager = adw::StyleManager::default();
         system_btn.connect_clicked(move |_| {
@@ -455,14 +457,6 @@ impl MainWindow {
         preferences_row.connect_activated(move |_| {
             popover_clone_prefs.popdown();
             Self::show_preferences_dialog(&win_clone_menu_prefs);
-        });
-
-        let win_clone_menu_stats = window.clone();
-        let sm_clone_menu_stats = snapshot_manager.clone();
-        let popover_clone_stats = popover.clone();
-        statistics_row.connect_activated(move |_| {
-            popover_clone_stats.popdown();
-            Self::show_statistics_dialog(&win_clone_menu_stats, &sm_clone_menu_stats);
         });
 
         let win_clone_menu_retention = window.clone();
