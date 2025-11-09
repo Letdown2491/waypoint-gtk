@@ -10,22 +10,20 @@ use gtk::{Button, Label, Orientation};
 /// Creates a horizontal toolbar containing primary action buttons:
 /// - Create Restore Point (suggested action, pill-styled)
 /// - Compare Snapshots
-/// - Statistics
 ///
 /// # Returns
 /// A tuple containing:
 /// - `gtk::Box` - The toolbar container
 /// - `Button` - Create restore point button
 /// - `Button` - Compare snapshots button
-/// - `Button` - Statistics button
 ///
 /// # Example
 /// ```no_run
-/// let (toolbar, create_btn, compare_btn, statistics_btn) = toolbar::create_toolbar();
+/// let (toolbar, create_btn, compare_btn) = toolbar::create_toolbar();
 /// // Connect button handlers...
 /// container.append(&toolbar);
 /// ```
-pub fn create_toolbar() -> (gtk::Box, Button, Button, Button) {
+pub fn create_toolbar() -> (gtk::Box, Button, Button) {
     // Use Clamp for toolbar as well (GNOME HIG)
     let toolbar = gtk::Box::new(Orientation::Horizontal, 12);
     toolbar.set_margin_top(18);
@@ -60,13 +58,5 @@ pub fn create_toolbar() -> (gtk::Box, Button, Button, Button) {
 
     toolbar.append(&compare_btn);
 
-    // Statistics button
-    let statistics_btn = Button::builder()
-        .label("Statistics")
-        .build();
-    statistics_btn.add_css_class("flat");
-
-    toolbar.append(&statistics_btn);
-
-    (toolbar, create_btn, compare_btn, statistics_btn)
+    (toolbar, create_btn, compare_btn)
 }

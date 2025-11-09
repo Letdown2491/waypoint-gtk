@@ -25,7 +25,6 @@ Waypoint provides a simple, user-friendly interface for creating filesystem snap
 - **Package Diff Viewer**: Visual comparison of package changes between snapshots
 - **Browse Snapshots**: Open snapshot directories in your file manager
 - **Snapshot Search & Filter**: Find snapshots by name/description and filter by date ranges
-- **Statistics Dashboard**: View storage usage, timeline graphs, and snapshot metrics
 
 ### Automation & Integration
 
@@ -396,12 +395,6 @@ Available actions:
 - Use the search box to find snapshots by name or description
 - Quick filters: Last 7/30/90 days or show all
 - Match count shows how many snapshots match
-
-**Statistics:**
-- Click the statistics button (📊) to view:
-  - Total storage used by snapshots
-  - Timeline graph showing snapshot creation
-  - Package count trends
 
 **Preferences:**
 - Click the settings button (⚙️) to:

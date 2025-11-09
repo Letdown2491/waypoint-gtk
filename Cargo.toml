@@ -7,9 +7,9 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.0.1"
-edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+version = "1.0.0"
+edition = "2024"
+authors = ["Letdown2491 168875499+Letdown2491@users.noreply.github.com"]
 license = "MIT"
 
 [workspace.dependencies]

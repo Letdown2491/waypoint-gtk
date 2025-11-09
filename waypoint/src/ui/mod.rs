@@ -2,7 +2,6 @@ mod snapshot_row;
 mod dialogs;
 mod package_diff_dialog;
 pub mod preferences;
-mod statistics_dialog;
 mod create_snapshot_dialog;
 mod retention_editor_dialog;
 mod scheduler_dialog;
@@ -238,7 +237,7 @@ impl MainWindow {
         let (banner, is_btrfs) = Self::create_status_banner();
 
         // Toolbar with buttons
-        let (toolbar, create_btn, compare_btn, statistics_btn) = toolbar::create_toolbar();
+        let (toolbar, create_btn, compare_btn) = toolbar::create_toolbar();
 
         // Disable create button if not on Btrfs
         if !is_btrfs {
@@ -524,13 +523,6 @@ impl MainWindow {
             Self::show_compare_dialog(&win_clone2, &sm_clone2);
         });
 
-        // Connect statistics button
-        let sm_clone3 = snapshot_manager.clone();
-        let win_clone3 = window.clone();
-
-        statistics_btn.connect_clicked(move |_| {
-            Self::show_statistics_dialog(&win_clone3, &sm_clone3);
-        });
 
         // Connect theme buttons
         let style_manager = adw::StyleManager::default();
@@ -1822,10 +1814,6 @@ impl MainWindow {
         dialog.present();
     }
 
-    /// Show statistics dialog
-    fn show_statistics_dialog(window: &adw::ApplicationWindow, manager: &Rc<RefCell<SnapshotManager>>) {
-        statistics_dialog::show_statistics_dialog(window, manager);
-    }
 
     /// Show preferences dialog for subvolume selection
     fn show_preferences_dialog(window: &adw::ApplicationWindow) {

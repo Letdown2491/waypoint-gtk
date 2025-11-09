@@ -278,38 +278,6 @@ impl SnapshotManager {
         Ok(to_delete)
     }
 
-    /// Get summary statistics about snapshots
-    pub fn get_statistics(&self) -> Result<SnapshotStatistics> {
-        let snapshots = self.load_snapshots()?;
-
-        let total_count = snapshots.len();
-        let total_size = snapshots.iter()
-            .filter_map(|s| s.size_bytes)
-            .sum();
-
-        // Calculate age of oldest snapshot
-        let oldest_age_days = snapshots.iter()
-            .map(|s| {
-                let age = chrono::Utc::now().signed_duration_since(s.timestamp);
-                age.num_days()
-            })
-            .max()
-            .unwrap_or(0);
-
-        Ok(SnapshotStatistics {
-            total_count,
-            total_size,
-            oldest_age_days,
-        })
-    }
-}
-
-/// Statistics about all snapshots
-#[derive(Debug, Clone)]
-pub struct SnapshotStatistics {
-    pub total_count: usize,
-    pub total_size: u64,
-    pub oldest_age_days: i64,
 }
 
 #[cfg(test)]
