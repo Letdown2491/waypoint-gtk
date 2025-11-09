@@ -166,8 +166,8 @@ impl MainWindow {
         let system_btn = gtk::Button::builder()
             .label("◐")
             .tooltip_text("Match system theme")
-            .width_request(24)
-            .height_request(24)
+            .width_request(32)
+            .height_request(32)
             .build();
         system_btn.add_css_class("flat");
         system_btn.add_css_class("circular");
@@ -175,8 +175,8 @@ impl MainWindow {
         let light_btn = gtk::Button::builder()
             .label("○")
             .tooltip_text("Light theme")
-            .width_request(24)
-            .height_request(24)
+            .width_request(32)
+            .height_request(32)
             .build();
         light_btn.add_css_class("flat");
         light_btn.add_css_class("circular");
@@ -184,8 +184,8 @@ impl MainWindow {
         let dark_btn = gtk::Button::builder()
             .label("●")
             .tooltip_text("Dark theme")
-            .width_request(24)
-            .height_request(24)
+            .width_request(32)
+            .height_request(32)
             .build();
         dark_btn.add_css_class("flat");
         dark_btn.add_css_class("circular");
@@ -297,7 +297,7 @@ impl MainWindow {
         clamp.set_maximum_size(800);
         clamp.set_tightening_threshold(600);
         clamp.set_child(Some(&scrolled));
-        clamp.set_margin_top(24);
+        clamp.set_margin_top(12);
         clamp.set_margin_bottom(12);
         clamp.set_margin_start(12);
         clamp.set_margin_end(12);
@@ -332,7 +332,7 @@ impl MainWindow {
             .application(app)
             .title("Waypoint")
             .default_width(800)
-            .default_height(600)
+            .default_height(720)
             .content(&toast_overlay)
             .build();
 
@@ -1837,7 +1837,7 @@ impl MainWindow {
     fn show_about_dialog(window: &adw::ApplicationWindow) {
         let dialog = adw::Window::new();
         dialog.set_title(Some("About Waypoint"));
-        dialog.set_default_size(400, 500);
+        dialog.set_default_size(400, 380);
         dialog.set_modal(true);
         dialog.set_transient_for(Some(window));
 
@@ -1850,11 +1850,11 @@ impl MainWindow {
         main_box.append(&header);
 
         // Main content box
-        let content = gtk::Box::new(Orientation::Vertical, 24);
-        content.set_margin_top(48);
-        content.set_margin_bottom(48);
-        content.set_margin_start(48);
-        content.set_margin_end(48);
+        let content = gtk::Box::new(Orientation::Vertical, 18);
+        content.set_margin_top(24);
+        content.set_margin_bottom(24);
+        content.set_margin_start(32);
+        content.set_margin_end(32);
         content.set_valign(gtk::Align::Center);
 
         // Application icon

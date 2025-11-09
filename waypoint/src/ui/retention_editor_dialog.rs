@@ -20,7 +20,7 @@ pub fn show_retention_editor(
     let dialog = adw::Window::new();
     dialog.set_transient_for(Some(parent));
     dialog.set_modal(true);
-    dialog.set_title(Some("Retention Policy Settings"));
+    dialog.set_title(Some("Retention Policy"));
     dialog.set_default_size(500, 600);
 
     // Main container

@@ -41,6 +41,7 @@ pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: 
     dialog.set_title(Some("Snapshot Preferences"));
     dialog.set_modal(true);
     dialog.set_transient_for(Some(parent));
+    dialog.set_default_size(480, 450);
 
     // Create preferences page
     let page = adw::PreferencesPage::new();
