@@ -1831,6 +1831,7 @@ impl MainWindow {
         // Save the current preferences
         if let Err(e) = preferences::save_config(&prefs.get_enabled()) {
             eprintln!("Failed to save preferences: {}", e);
+            dialogs::show_toast(window, &format!("Warning: Failed to save preferences: {}", e));
         }
     }
 

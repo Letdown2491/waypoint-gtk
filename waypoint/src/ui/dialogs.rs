@@ -57,11 +57,16 @@ pub fn show_info(window: &adw::ApplicationWindow, title: &str, message: &str) {
 
 /// Show a toast notification
 pub fn show_toast(window: &adw::ApplicationWindow, message: &str) {
+    show_toast_with_timeout(window, message, 3);
+}
+
+/// Show a toast notification with custom timeout
+pub fn show_toast_with_timeout(window: &adw::ApplicationWindow, message: &str, timeout_seconds: u32) {
     // Get the ToastOverlay from the window content
     if let Some(content) = window.content() {
         if let Ok(toast_overlay) = content.downcast::<adw::ToastOverlay>() {
             let toast = adw::Toast::new(message);
-            toast.set_timeout(3); // 3 seconds
+            toast.set_timeout(timeout_seconds);
             toast_overlay.add_toast(toast);
             return;
         }

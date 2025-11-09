@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use crate::retention::RetentionPolicy;
 use crate::snapshot::SnapshotManager;
+use super::dialogs;
 
 /// Create and show the retention policy editor dialog
 pub fn show_retention_editor(
@@ -317,17 +318,9 @@ pub fn show_retention_editor(
 
         match policy.save() {
             Ok(_) => {
-                println!("✓ Retention policy saved successfully");
-
                 // Show success toast
-                let toast = adw::Toast::new("Retention policy saved successfully");
-                toast.set_timeout(3);
-
                 if let Some(window) = parent_for_save.downcast_ref::<adw::ApplicationWindow>() {
-                    if let Some(toast_overlay) = window.content()
-                        .and_then(|w| w.downcast::<adw::ToastOverlay>().ok()) {
-                        toast_overlay.add_toast(toast);
-                    }
+                    dialogs::show_toast(window, "Retention policy saved successfully");
                 }
 
                 dialog_for_save.close();

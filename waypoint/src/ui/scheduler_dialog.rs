@@ -3,6 +3,7 @@ use gtk::prelude::*;
 use gtk::{Box, Button, Label, Orientation, SpinButton};
 use libadwaita as adw;
 use adw::prelude::*;
+use super::dialogs;
 
 /// Show the scheduler configuration dialog
 pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
@@ -289,17 +290,9 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
                     Ok(result) => {
                         match result {
                             Ok(_) => {
-                                println!("✓ Scheduler configuration saved and service restarted");
-
                                 // Show success toast
-                                let toast = adw::Toast::new("Scheduler updated and restarted successfully");
-                                toast.set_timeout(3);
-
                                 if let Some(window) = parent_for_save.downcast_ref::<adw::ApplicationWindow>() {
-                                    if let Some(toast_overlay) = window.content()
-                                        .and_then(|w| w.downcast::<adw::ToastOverlay>().ok()) {
-                                        toast_overlay.add_toast(toast);
-                                    }
+                                    dialogs::show_toast(window, "Scheduler updated and restarted successfully");
                                 }
 
                                 dialog_for_save.close();
