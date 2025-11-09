@@ -18,6 +18,9 @@ pub struct PackageChange {
     pub name: String,
     pub current_version: Option<String>,
     pub snapshot_version: Option<String>,
+    /// Change type is redundant since packages are categorized into separate vectors,
+    /// but kept for JSON schema consistency
+    #[allow(dead_code)]
     pub change_type: String,
 }
 

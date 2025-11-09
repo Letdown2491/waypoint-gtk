@@ -1469,15 +1469,46 @@ impl MainWindow {
 
         if !preview.packages_to_add.is_empty() {
             preview_parts.push(format!("  ➕ {} to install", preview.packages_to_add.len()));
+            // Show first few examples
+            for pkg in preview.packages_to_add.iter().take(3) {
+                let version = pkg.snapshot_version.as_deref().unwrap_or("unknown");
+                preview_parts.push(format!("     • {} ({})", pkg.name, version));
+            }
+            if preview.packages_to_add.len() > 3 {
+                preview_parts.push(format!("     • ... and {} more", preview.packages_to_add.len() - 3));
+            }
         }
         if !preview.packages_to_remove.is_empty() {
             preview_parts.push(format!("  ➖ {} to remove", preview.packages_to_remove.len()));
+            for pkg in preview.packages_to_remove.iter().take(3) {
+                let version = pkg.current_version.as_deref().unwrap_or("unknown");
+                preview_parts.push(format!("     • {} ({})", pkg.name, version));
+            }
+            if preview.packages_to_remove.len() > 3 {
+                preview_parts.push(format!("     • ... and {} more", preview.packages_to_remove.len() - 3));
+            }
         }
         if !preview.packages_to_upgrade.is_empty() {
             preview_parts.push(format!("  ⬆️  {} to upgrade", preview.packages_to_upgrade.len()));
+            for pkg in preview.packages_to_upgrade.iter().take(3) {
+                let curr = pkg.current_version.as_deref().unwrap_or("?");
+                let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
+                preview_parts.push(format!("     • {} ({} → {})", pkg.name, curr, snap));
+            }
+            if preview.packages_to_upgrade.len() > 3 {
+                preview_parts.push(format!("     • ... and {} more", preview.packages_to_upgrade.len() - 3));
+            }
         }
         if !preview.packages_to_downgrade.is_empty() {
             preview_parts.push(format!("  ⬇️  {} to downgrade", preview.packages_to_downgrade.len()));
+            for pkg in preview.packages_to_downgrade.iter().take(3) {
+                let curr = pkg.current_version.as_deref().unwrap_or("?");
+                let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
+                preview_parts.push(format!("     • {} ({} → {})", pkg.name, curr, snap));
+            }
+            if preview.packages_to_downgrade.len() > 3 {
+                preview_parts.push(format!("     • ... and {} more", preview.packages_to_downgrade.len() - 3));
+            }
         }
 
         // Affected subvolumes
