@@ -3,6 +3,7 @@ mod cache;
 mod dbus_client;
 mod packages;
 mod retention;
+mod signal_listener;
 mod snapshot;
 mod subvolume;
 mod ui;
@@ -25,6 +26,9 @@ fn main() -> glib::ExitCode {
 fn build_ui(app: &Application) {
     // Initialize filesystem cache
     btrfs::init_cache();
+
+    // Start D-Bus signal listener for snapshot creation events
+    signal_listener::start_signal_listener(app.clone());
 
     let window = ui::MainWindow::new(app);
     window.present();

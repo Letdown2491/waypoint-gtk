@@ -7,6 +7,7 @@ mod retention_editor_dialog;
 mod scheduler_dialog;
 mod toolbar;
 mod snapshot_list;
+pub mod notifications;
 
 use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
@@ -958,6 +959,11 @@ impl MainWindow {
 
                             dialogs::show_toast(&window_clone, &message);
 
+                            // Send desktop notification
+                            if let Some(app) = window_clone.application() {
+                                notifications::notify_snapshot_created(&app, &snapshot_name);
+                            }
+
                             // Calculate snapshot size and save metadata
                             Self::save_snapshot_metadata(
                                 &snapshot_name,
@@ -1119,6 +1125,11 @@ impl MainWindow {
                 if delete_count == 1 { "" } else { "s" }
             );
             dialogs::show_toast(window, &message);
+
+            // Send desktop notification
+            if let Some(app) = window.application() {
+                notifications::notify_retention_cleanup(&app, delete_count);
+            }
         }
     }
 
@@ -1359,6 +1370,7 @@ impl MainWindow {
                 let compare_btn = compare_btn_clone.clone();
                 let disk_space = disk_space_clone.clone();
                 let name = snapshot_basename.clone();
+                let name_for_notification = snapshot_basename.clone();
 
                 // Show loading state
                 dialogs::show_toast(&window, "Deleting snapshot...");
@@ -1401,6 +1413,12 @@ impl MainWindow {
                             match result {
                                 Ok((true, message)) => {
                                     dialogs::show_toast(&window, &message);
+
+                                    // Send desktop notification
+                                    if let Some(app) = window.application() {
+                                        notifications::notify_snapshot_deleted(&app, &name_for_notification);
+                                    }
+
                                     // Refresh the list
                                     Self::refresh_list_static(&window, &manager, &list, &compare_btn, &disk_space);
                                     // Update disk space after deletion
@@ -1611,6 +1629,7 @@ impl MainWindow {
             if response == "restore" {
                 let window = window_clone.clone();
                 let name = snapshot_name.clone();
+                let name_for_notification = snapshot_name.clone();
 
                 // Show loading state
                 dialogs::show_toast(&window, "Restoring snapshot...");
@@ -1652,6 +1671,11 @@ impl MainWindow {
                         if let Some(result) = result_opt {
                             match result {
                                 Ok((true, message)) => {
+                                    // Send desktop notification
+                                    if let Some(app) = window.application() {
+                                        notifications::notify_snapshot_restored(&app, &name_for_notification);
+                                    }
+
                                     // Show success message with reboot instructions
                                     let success_dialog = adw::MessageDialog::new(
                                         Some(&window),

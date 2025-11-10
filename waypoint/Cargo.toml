@@ -28,6 +28,8 @@ libc = "0.2"
 # D-Bus for IPC with helper
 zbus = { version = "4.0", default-features = false, features = ["blocking"] }
 futures-executor = "0.3"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 
 # Shared types
 waypoint-common = { path = "../waypoint-common" }

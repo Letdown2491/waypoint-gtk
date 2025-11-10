@@ -23,6 +23,11 @@ impl SnapshotRow {
         let row = adw::ActionRow::new();
         row.set_title(&snapshot.name);
 
+        // Add waypoint icon as prefix
+        let icon = gtk::Image::from_icon_name("waypoint");
+        icon.set_pixel_size(16);
+        row.add_prefix(&icon);
+
         // Build subtitle with metadata - cleaner format
         let mut subtitle_parts = vec![snapshot.format_timestamp()];
 

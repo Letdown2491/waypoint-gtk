@@ -26,11 +26,20 @@ struct WaypointHelper;
 
 #[interface(name = "tech.geektoshi.waypoint.Helper")]
 impl WaypointHelper {
+    /// Signal emitted when a snapshot is created
+    #[zbus(signal)]
+    async fn snapshot_created(
+        ctxt: &zbus::SignalContext<'_>,
+        snapshot_name: &str,
+        created_by: &str,
+    ) -> zbus::Result<()>;
+
     /// Create a new snapshot
     async fn create_snapshot(
         &self,
         #[zbus(header)] hdr: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &Connection,
+        #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>,
         name: String,
         description: String,
         subvolumes: Vec<String>,
@@ -42,7 +51,21 @@ impl WaypointHelper {
 
         // Create the snapshot
         match Self::create_snapshot_impl(&name, &description, subvolumes) {
-            Ok(msg) => (true, msg),
+            Ok(msg) => {
+                // Emit signal for successful snapshot creation
+                // Try to determine who created the snapshot
+                let created_by = if hdr.sender().map(|s| s.as_str()).unwrap_or("").contains("waypoint-scheduler") {
+                    "scheduler"
+                } else {
+                    "gui"
+                };
+
+                if let Err(e) = Self::snapshot_created(&ctxt, &name, created_by).await {
+                    eprintln!("Failed to emit snapshot_created signal: {}", e);
+                }
+
+                (true, msg)
+            },
             Err(e) => (false, format!("Failed to create snapshot: {}", e)),
         }
     }
