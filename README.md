@@ -1,5 +1,7 @@
 # Waypoint
 
+NOTE: APPLICATION STILL IN ALPHA TESTING. DO NOT USE IN PRODUCTION YET.
+
 Waypoint is a GTK/libadwaita snapshot and rollback tool with a built in scheduling service for Btrfs filesystems on Void Linux.
 
 For Void Linux users, Waypoint integration is available on [Nebula](https://github.com/Letdown2491/nebula-gtk) >= 1.3.0 to automatically create system snapshots when performing system upgrades.

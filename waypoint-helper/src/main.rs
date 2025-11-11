@@ -374,7 +374,7 @@ async fn check_authorization(
     }
 }
 
-/// Get process start time from /proc/[pid]/stat
+/// Get process start time from `/proc/[pid]/stat`
 fn get_process_start_time(pid: u32) -> Result<u64> {
     use std::fs;
 
@@ -384,23 +384,41 @@ fn get_process_start_time(pid: u32) -> Result<u64> {
 
     // The start time is the 22nd field in /proc/[pid]/stat
     // Fields are: pid (comm) state ppid ... starttime ...
-    // We need to handle the (comm) field which may contain spaces
+    // We need to handle the (comm) field which may contain spaces and special characters
 
     // Find the last ')' to skip the comm field
     let start_pos = stat_content.rfind(')')
-        .context("Invalid /proc/[pid]/stat format")?;
+        .context("Invalid /proc/[pid]/stat format: missing closing parenthesis")?;
+
+    // Ensure there's content after the ')' character
+    if start_pos + 1 >= stat_content.len() {
+        anyhow::bail!("Invalid /proc/[pid]/stat format: no fields after command name");
+    }
 
     let fields: Vec<&str> = stat_content[start_pos + 1..]
         .split_whitespace()
         .collect();
 
     // After skipping (comm), starttime is field 20 (0-indexed 19)
-    if fields.len() <= 19 {
-        anyhow::bail!("Not enough fields in /proc/[pid]/stat");
+    // According to proc(5) man page, there should be at least 44 fields in modern kernels
+    const MIN_REQUIRED_FIELDS: usize = 20;
+    if fields.len() < MIN_REQUIRED_FIELDS {
+        anyhow::bail!(
+            "Not enough fields in /proc/{}/stat (expected at least {}, got {})",
+            pid,
+            MIN_REQUIRED_FIELDS,
+            fields.len()
+        );
     }
 
-    let start_time: u64 = fields[19].parse()
-        .context("Failed to parse process start time")?;
+    let start_time_str = fields[19];
+    let start_time: u64 = start_time_str.parse()
+        .context(format!(
+            "Failed to parse process start time from field '{}' (field 20)",
+            start_time_str
+        ))?;
+
+    log::debug!("Process {} start time: {}", pid, start_time);
 
     Ok(start_time)
 }

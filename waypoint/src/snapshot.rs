@@ -88,54 +88,9 @@ impl<'de> Deserialize<'de> for Snapshot {
 }
 
 impl Snapshot {
-    /// Create a new snapshot with timestamp-based ID
-    #[allow(dead_code)]
-    pub fn new(name: String, path: PathBuf) -> Self {
-        let timestamp = Utc::now();
-        let id = format!("snapshot-{}", timestamp.format("%Y%m%d-%H%M%S"));
-
-        Self {
-            id,
-            name,
-            timestamp,
-            path,
-            description: None,
-            kernel_version: Self::get_kernel_version(),
-            package_count: None,
-            size_bytes: None,
-            packages: Rc::new(Vec::new()),
-            subvolumes: Rc::new(vec![PathBuf::from("/")]),
-        }
-    }
-
-    /// Set the packages for this snapshot
-    #[allow(dead_code)]
-    pub fn with_packages(mut self, packages: Vec<Package>) -> Self {
-        self.package_count = Some(packages.len());
-        self.packages = Rc::new(packages);
-        self
-    }
-
-    /// Get current kernel version
-    #[allow(dead_code)]
-    fn get_kernel_version() -> Option<String> {
-        fs::read_to_string("/proc/version")
-            .ok()
-            .and_then(|v| v.split_whitespace().nth(2).map(String::from))
-    }
-
     /// Format timestamp for display
     pub fn format_timestamp(&self) -> String {
         self.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
-    }
-
-    /// Format size for display
-    #[allow(dead_code)]
-    pub fn format_size(&self) -> String {
-        match self.size_bytes {
-            Some(bytes) => format_bytes(bytes),
-            None => "Unknown".to_string(),
-        }
     }
 }
 
@@ -160,6 +115,21 @@ pub struct SnapshotManager {
 
 impl SnapshotManager {
     /// Create a new snapshot manager
+    ///
+    /// Initializes the manager and ensures the metadata directory exists.
+    /// Uses the default metadata path from `WaypointConfig` (typically
+    /// `/home/user/.local/share/waypoint/snapshots.json`).
+    ///
+    /// # Errors
+    /// - Failed to create metadata directory
+    ///
+    /// # Example
+    /// ```no_run
+    /// use waypoint::snapshot::SnapshotManager;
+    ///
+    /// let manager = SnapshotManager::new()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn new() -> Result<Self> {
         let config = WaypointConfig::new();
         let metadata_file = config.metadata_file.clone();
@@ -178,7 +148,23 @@ impl SnapshotManager {
         &self.metadata_file
     }
 
-    /// Load all snapshots from disk
+    /// Load all snapshots from metadata file
+    ///
+    /// Reads the snapshots metadata JSON file and performs automatic cleanup:
+    /// - Removes phantom snapshots (metadata exists but directory doesn't)
+    /// - Removes duplicate entries (keeps most recent)
+    /// - Saves cleaned metadata back to disk if changes were made
+    ///
+    /// # Returns
+    /// Vector of valid snapshots, sorted by timestamp (oldest first)
+    ///
+    /// # Errors
+    /// - Failed to read metadata file
+    /// - Failed to parse JSON
+    /// - Failed to save cleaned metadata
+    ///
+    /// # Note
+    /// Returns empty vec if metadata file doesn't exist (not an error).
     pub fn load_snapshots(&self) -> Result<Vec<Snapshot>> {
         let path = self.metadata_path();
 
@@ -239,8 +225,27 @@ impl SnapshotManager {
         Ok(())
     }
 
-    /// Add or update a snapshot
-    /// If a snapshot with the same ID already exists, it will be replaced
+    /// Add or update a snapshot in metadata
+    ///
+    /// If a snapshot with the same ID already exists, it will be replaced.
+    /// This is useful for updating snapshot information (e.g., adding size).
+    ///
+    /// # Arguments
+    /// * `snapshot` - Snapshot to add or update
+    ///
+    /// # Errors
+    /// - Failed to load existing snapshots
+    /// - Failed to save updated metadata
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use waypoint::snapshot::{SnapshotManager, Snapshot};
+    /// # use std::path::PathBuf;
+    /// let manager = SnapshotManager::new()?;
+    /// let snapshot = Snapshot::new("backup".to_string(), PathBuf::from("/.snapshots/backup"));
+    /// manager.add_snapshot(snapshot)?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     #[allow(dead_code)]
     pub fn add_snapshot(&self, snapshot: Snapshot) -> Result<()> {
         let mut snapshots = self.load_snapshots()?;
@@ -253,21 +258,37 @@ impl SnapshotManager {
         self.save_snapshots(&snapshots)
     }
 
-    /// Remove a snapshot by ID
-    #[allow(dead_code)]
-    pub fn remove_snapshot(&self, id: &str) -> Result<()> {
-        let mut snapshots = self.load_snapshots()?;
-        snapshots.retain(|s| s.id != id);
-        self.save_snapshots(&snapshots)
-    }
-
     /// Get snapshot by ID
+    ///
+    /// Loads all snapshots and searches for one matching the given ID.
+    ///
+    /// # Arguments
+    /// * `id` - Snapshot ID to search for
+    ///
+    /// # Returns
+    /// * `Ok(Some(snapshot))` - Snapshot found
+    /// * `Ok(None)` - Snapshot not found
+    /// * `Err(_)` - Failed to load snapshots
     pub fn get_snapshot(&self, id: &str) -> Result<Option<Snapshot>> {
         let snapshots = self.load_snapshots()?;
         Ok(snapshots.into_iter().find(|s| s.id == id))
     }
 
-    /// Apply retention policy and get list of snapshots that should be deleted
+    /// Apply retention policy and get list of snapshots to delete
+    ///
+    /// Loads the current retention policy and applies it to all snapshots
+    /// to determine which ones should be removed based on age/count rules.
+    ///
+    /// # Returns
+    /// Vector of snapshot names that should be deleted
+    ///
+    /// # Errors
+    /// - Failed to load retention policy
+    /// - Failed to load snapshots
+    ///
+    /// # Note
+    /// This only identifies snapshots for deletion but doesn't delete them.
+    /// Call `WaypointHelperClient::delete_snapshot()` to actually remove them.
     pub fn get_snapshots_to_cleanup(&self) -> Result<Vec<String>> {
         use crate::retention::RetentionPolicy;
 

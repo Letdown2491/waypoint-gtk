@@ -912,3 +912,121 @@ fn create_writable_snapshot(source: &Path, dest: &Path) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_subvol_option_root_filesystem() {
+        // Test updating subvol option for root filesystem
+        let options = "rw,relatime,ssd,space_cache,subvol=/@";
+        let snapshot_name = "snapshot-20251111-120000";
+        let mount_point = PathBuf::from("/");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        // Should replace subvol=@ with subvol=@snapshots/snapshot-20251111-120000/root
+        assert!(result.contains("subvol=@snapshots/snapshot-20251111-120000/root"));
+        assert!(result.contains("rw,relatime,ssd,space_cache"));
+        assert!(!result.contains("subvol=/@"));
+    }
+
+    #[test]
+    fn test_update_subvol_option_home_filesystem() {
+        // Test updating subvol option for /home
+        let options = "rw,relatime,ssd,subvol=/@home";
+        let snapshot_name = "backup-2025";
+        let mount_point = PathBuf::from("/home");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        // Should use "home" as subvolume name
+        assert!(result.contains("subvol=@snapshots/backup-2025/home"));
+        assert!(!result.contains("subvol=/@home"));
+    }
+
+    #[test]
+    fn test_update_subvol_option_with_subvolid() {
+        // Test that subvolid= is also replaced
+        let options = "rw,subvolid=256";
+        let snapshot_name = "test-snapshot";
+        let mount_point = PathBuf::from("/");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        // subvolid should be replaced with subvol
+        assert!(result.contains("subvol=@snapshots/test-snapshot/root"));
+        assert!(!result.contains("subvolid=256"));
+    }
+
+    #[test]
+    fn test_update_subvol_option_no_existing_subvol() {
+        // Test adding subvol option when it doesn't exist
+        let options = "rw,relatime,ssd";
+        let snapshot_name = "new-snapshot";
+        let mount_point = PathBuf::from("/");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        // Should add subvol option
+        assert!(result.contains("subvol=@snapshots/new-snapshot/root"));
+        assert!(result.contains("rw,relatime,ssd"));
+    }
+
+    #[test]
+    fn test_update_subvol_option_complex_mount_point() {
+        // Test with nested mount point like /var/lib
+        let options = "rw,subvol=/@var_lib";
+        let snapshot_name = "snapshot-1";
+        let mount_point = PathBuf::from("/var/lib");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        // Should convert /var/lib to var_lib
+        assert!(result.contains("subvol=@snapshots/snapshot-1/var_lib"));
+    }
+
+    #[test]
+    fn test_update_subvol_option_preserves_other_options() {
+        // Test that all other mount options are preserved
+        let options = "rw,noatime,compress=zstd,space_cache=v2,subvol=/@,autodefrag";
+        let snapshot_name = "test";
+        let mount_point = PathBuf::from("/");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        // All options except subvol should be preserved
+        assert!(result.contains("rw"));
+        assert!(result.contains("noatime"));
+        assert!(result.contains("compress=zstd"));
+        assert!(result.contains("space_cache=v2"));
+        assert!(result.contains("autodefrag"));
+        assert!(result.contains("subvol=@snapshots/test/root"));
+    }
+
+    #[test]
+    fn test_update_subvol_option_snapshot_name_with_special_chars() {
+        // Test snapshot names with hyphens and underscores
+        let options = "rw,subvol=/@";
+        let snapshot_name = "pre-upgrade_2025-01-11";
+        let mount_point = PathBuf::from("/");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        assert!(result.contains("subvol=@snapshots/pre-upgrade_2025-01-11/root"));
+    }
+
+    #[test]
+    fn test_update_subvol_option_empty_options() {
+        // Test with empty options string
+        let options = "";
+        let snapshot_name = "test";
+        let mount_point = PathBuf::from("/");
+
+        let result = update_subvol_option(options, snapshot_name, &mount_point).unwrap();
+
+        // Should still add subvol option
+        assert!(result.contains("subvol=@snapshots/test/root"));
+    }
+}

@@ -128,34 +128,6 @@ fn get_subvolume_id(path: &Path) -> Result<u64> {
     anyhow::bail!("Could not find subvolume ID in btrfs output")
 }
 
-/// List all subvolumes in a Btrfs filesystem (for reference/debugging)
-#[allow(dead_code)]
-pub fn list_all_subvolumes(path: &Path) -> Result<Vec<String>> {
-    let output = Command::new("btrfs")
-        .arg("subvolume")
-        .arg("list")
-        .arg(path)
-        .output()
-        .context("Failed to run btrfs subvolume list")?;
-
-    if !output.status.success() {
-        anyhow::bail!("btrfs subvolume list failed");
-    }
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let subvolumes: Vec<String> = output_str
-        .lines()
-        .filter_map(|line| {
-            // Format: "ID 256 gen 123 top level 5 path @"
-            line.split_whitespace()
-                .last()
-                .map(|s| s.to_string())
-        })
-        .collect();
-
-    Ok(subvolumes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

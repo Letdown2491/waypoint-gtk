@@ -79,26 +79,6 @@ pub fn notify_snapshot_restored(app: &Application, snapshot_name: &str) {
     );
 }
 
-/// Send a notification about low disk space
-#[allow(dead_code)]
-pub fn notify_low_disk_space(app: &Application, available_gb: f64, percent_free: f64) {
-    let priority = if percent_free < 10.0 {
-        NotificationPriority::Urgent
-    } else {
-        NotificationPriority::High
-    };
-
-    send_notification(
-        app,
-        "Low Disk Space",
-        &format!(
-            "Only {:.1} GB available ({:.0}% free). Consider deleting old snapshots.",
-            available_gb, percent_free
-        ),
-        priority,
-    );
-}
-
 /// Send a notification about retention policy cleanup
 pub fn notify_retention_cleanup(app: &Application, count: usize) {
     send_notification(
@@ -120,36 +100,5 @@ pub fn notify_scheduled_snapshot(app: &Application, snapshot_name: &str) {
         "Scheduled Snapshot Created",
         &format!("Automated snapshot '{}' created successfully", snapshot_name),
         NotificationPriority::Low,
-    );
-}
-
-/// Send a notification about snapshot verification
-#[allow(dead_code)]
-pub fn notify_snapshot_verified(app: &Application, snapshot_name: &str, is_valid: bool) {
-    if is_valid {
-        send_notification(
-            app,
-            "Snapshot Verified",
-            &format!("Snapshot '{}' is valid and intact", snapshot_name),
-            NotificationPriority::Low,
-        );
-    } else {
-        send_notification(
-            app,
-            "Snapshot Verification Failed",
-            &format!("Snapshot '{}' has errors and may be corrupted", snapshot_name),
-            NotificationPriority::High,
-        );
-    }
-}
-
-/// Send a generic error notification
-#[allow(dead_code)]
-pub fn notify_error(app: &Application, title: &str, message: &str) {
-    send_notification(
-        app,
-        title,
-        message,
-        NotificationPriority::High,
     );
 }
