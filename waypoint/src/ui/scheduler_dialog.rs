@@ -298,7 +298,7 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
                                 dialog_for_save.close();
                             }
                             Err(e) => {
-                                eprintln!("Failed to save scheduler configuration: {}", e);
+                                log::error!("Failed to save scheduler configuration: {}", e);
                                 let error_dialog = adw::MessageDialog::new(
                                     Some(&dialog_for_error),
                                     Some("Save Failed"),
@@ -316,7 +316,7 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
                         continue;
                     }
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        eprintln!("Channel disconnected");
+                        log::error!("Channel disconnected");
                         break;
                     }
                 }

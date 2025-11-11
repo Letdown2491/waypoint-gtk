@@ -8,6 +8,9 @@ mod scheduler_dialog;
 mod toolbar;
 mod snapshot_list;
 pub mod notifications;
+mod validation;
+mod comparison_dialog;
+mod about_preferences;
 
 use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
@@ -25,50 +28,8 @@ use std::rc::Rc;
 
 use snapshot_list::DateFilter;
 
-/// Validate that a path is safe to open with xdg-open
-///
-/// # Arguments
-/// * `path` - The path to validate
-///
-/// # Returns
-/// `Ok(())` if path is safe to open, `Err` with description if invalid
-///
-/// # Security
-/// Only allows paths within known snapshot directories to prevent opening
-/// arbitrary files or directories that could be malicious.
-fn validate_path_for_open(path: &std::path::Path) -> Result<(), String> {
-    // Canonicalize the path to resolve symlinks and get absolute path
-    let canonical = match path.canonicalize() {
-        Ok(p) => p,
-        Err(e) => return Err(format!("Cannot resolve path: {}", e)),
-    };
-
-    // Define allowed base directories
-    let allowed_dirs = [
-        PathBuf::from("/.snapshots"),
-        PathBuf::from("/mnt/btrfs-root/@snapshots"),
-    ];
-
-    // Check if the canonical path starts with any allowed directory
-    for allowed_dir in &allowed_dirs {
-        // Try to canonicalize the allowed dir (it might not exist)
-        if let Ok(canonical_allowed) = allowed_dir.canonicalize() {
-            if canonical.starts_with(&canonical_allowed) {
-                return Ok(());
-            }
-        } else {
-            // If allowed dir doesn't exist yet, do string comparison
-            if canonical.starts_with(allowed_dir) {
-                return Ok(());
-            }
-        }
-    }
-
-    Err(format!(
-        "Path '{}' is outside allowed snapshot directories",
-        canonical.display()
-    ))
-}
+// Path validation moved to validation module
+use validation::validate_path_for_open;
 
 pub struct MainWindow {
     window: adw::ApplicationWindow,
@@ -86,7 +47,7 @@ impl MainWindow {
         let snapshot_manager = match SnapshotManager::new() {
             Ok(sm) => Rc::new(RefCell::new(sm)),
             Err(e) => {
-                eprintln!("Failed to initialize snapshot manager: {}", e);
+                log::error!("Failed to initialize snapshot manager: {}", e);
 
                 // Create a temporary window to show the error dialog
                 let temp_window = adw::ApplicationWindow::builder()
@@ -150,6 +111,7 @@ impl MainWindow {
             .margin_bottom(12)
             .margin_start(12)
             .margin_end(12)
+            .width_request(220)
             .build();
 
         // Theme section (using ListBox for proper styling)
@@ -162,34 +124,48 @@ impl MainWindow {
             .build();
 
         // Theme buttons
-        let theme_buttons_box = gtk::Box::new(Orientation::Horizontal, 6);
+        let theme_buttons_box = gtk::Box::new(Orientation::Horizontal, 12);
+        theme_buttons_box.set_valign(gtk::Align::Center);
 
         let system_btn = gtk::Button::builder()
-            .label("◐")
+            .label("")
             .tooltip_text("Match system theme")
-            .width_request(32)
-            .height_request(32)
+            .width_request(16)
+            .height_request(16)
             .build();
         system_btn.add_css_class("flat");
-        system_btn.add_css_class("circular");
+        system_btn.add_css_class("theme-circle");
+        system_btn.add_css_class("theme-circle-system");
 
         let light_btn = gtk::Button::builder()
-            .label("○")
+            .label("")
             .tooltip_text("Light theme")
-            .width_request(32)
-            .height_request(32)
+            .width_request(16)
+            .height_request(16)
             .build();
         light_btn.add_css_class("flat");
-        light_btn.add_css_class("circular");
+        light_btn.add_css_class("theme-circle");
+        light_btn.add_css_class("theme-circle-light");
 
         let dark_btn = gtk::Button::builder()
-            .label("●")
+            .label("")
             .tooltip_text("Dark theme")
-            .width_request(32)
-            .height_request(32)
+            .width_request(16)
+            .height_request(16)
             .build();
         dark_btn.add_css_class("flat");
-        dark_btn.add_css_class("circular");
+        dark_btn.add_css_class("theme-circle");
+        dark_btn.add_css_class("theme-circle-dark");
+
+        system_btn.set_hexpand(false);
+        system_btn.set_vexpand(false);
+        system_btn.set_valign(gtk::Align::Center);
+        light_btn.set_hexpand(false);
+        light_btn.set_vexpand(false);
+        light_btn.set_valign(gtk::Align::Center);
+        dark_btn.set_hexpand(false);
+        dark_btn.set_vexpand(false);
+        dark_btn.set_valign(gtk::Align::Center);
 
         theme_buttons_box.append(&system_btn);
         theme_buttons_box.append(&light_btn);
@@ -824,7 +800,7 @@ impl MainWindow {
                         continue;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        eprintln!("Disk space check thread disconnected");
+                        log::error!("Disk space check thread disconnected");
                         break Ok(MIN_SPACE_BYTES + 1); // Assume sufficient space
                     }
                 }
@@ -847,7 +823,7 @@ impl MainWindow {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Could not check available disk space: {}", e);
+                    log::warn!("Could not check available disk space: {}", e);
                     // Continue anyway - this is just a warning
                 }
             }
@@ -1036,7 +1012,7 @@ impl MainWindow {
 
         // Save metadata immediately
         if let Err(e) = manager.borrow().add_snapshot(snapshot) {
-            eprintln!("Warning: Failed to save snapshot metadata: {}", e);
+            log::warn!("Failed to save snapshot metadata: {}", e);
         }
 
         // Calculate snapshot size in background thread (non-blocking)
@@ -1056,17 +1032,17 @@ impl MainWindow {
                     Ok((name, size_result)) => {
                         match size_result {
                             Ok(size) => {
-                                eprintln!("Calculated snapshot size: {} bytes", size);
+                                log::debug!("Calculated snapshot size: {} bytes", size);
                                 // Update snapshot with size
                                 if let Ok(Some(mut snapshot)) = manager_clone.borrow().get_snapshot(&name) {
                                     snapshot.size_bytes = Some(size);
                                     if let Err(e) = manager_clone.borrow().add_snapshot(snapshot) {
-                                        eprintln!("Warning: Failed to update snapshot size: {}", e);
+                                        log::warn!("Failed to update snapshot size: {}", e);
                                     }
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Warning: Failed to calculate snapshot size: {}", e);
+                                log::warn!("Failed to calculate snapshot size: {}", e);
                             }
                         }
                         break;
@@ -1076,7 +1052,7 @@ impl MainWindow {
                         continue;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        eprintln!("Size calculation thread disconnected");
+                        log::error!("Size calculation thread disconnected");
                         break;
                     }
                 }
@@ -1093,7 +1069,7 @@ impl MainWindow {
         let to_delete = match manager.borrow().get_snapshots_to_cleanup() {
             Ok(list) => list,
             Err(e) => {
-                eprintln!("Warning: Failed to check retention policy: {}", e);
+                log::warn!("Failed to check retention policy: {}", e);
                 return;
             }
         };
@@ -1107,13 +1083,13 @@ impl MainWindow {
         for snapshot_name in to_delete {
             match client.delete_snapshot(snapshot_name.clone()) {
                 Ok((true, _)) => {
-                    eprintln!("Retention policy: deleted snapshot {}", snapshot_name);
+                    log::info!("Retention policy: deleted snapshot {}", snapshot_name);
                 }
                 Ok((false, msg)) => {
-                    eprintln!("Warning: Failed to delete snapshot {}: {}", snapshot_name, msg);
+                    log::warn!("Failed to delete snapshot {}: {}", snapshot_name, msg);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Error deleting snapshot {}: {}", snapshot_name, e);
+                    log::warn!("Error deleting snapshot {}: {}", snapshot_name, e);
                 }
             }
         }
@@ -1178,7 +1154,7 @@ impl MainWindow {
                 Self::browse_snapshot(window, manager, snapshot_id);
             }
             SnapshotAction::Verify => {
-                Self::verify_snapshot(window, snapshot_id);
+                Self::verify_snapshot(window, manager, snapshot_id);
             }
             SnapshotAction::Restore => {
                 Self::restore_snapshot(window, manager, list, snapshot_id);
@@ -1189,16 +1165,33 @@ impl MainWindow {
         }
     }
 
-    fn verify_snapshot(window: &adw::ApplicationWindow, snapshot_id: &str) {
+    fn verify_snapshot(
+        window: &adw::ApplicationWindow,
+        manager: &Rc<RefCell<SnapshotManager>>,
+        snapshot_id: &str,
+    ) {
+        // Get the snapshot to retrieve its actual name (directory name on disk)
+        let snapshot = match manager.borrow().get_snapshot(snapshot_id) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                Self::show_error_dialog(window, "Not Found", "Snapshot not found");
+                return;
+            }
+            Err(e) => {
+                Self::show_error_dialog(window, "Error", &format!("Failed to load snapshot: {}", e));
+                return;
+            }
+        };
+
         let window_clone = window.clone();
-        let snapshot_id_owned = snapshot_id.to_string();
+        let snapshot_name = snapshot.name.clone();
 
         // Run verification in background thread
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<crate::dbus_client::VerificationResult> {
                 let client = WaypointHelperClient::new()?;
-                client.verify_snapshot(snapshot_id_owned)
+                client.verify_snapshot(snapshot_name)
             })();
             let _ = tx.send(result);
         });
@@ -1740,205 +1733,17 @@ impl MainWindow {
 
     /// Show dialog to compare two snapshots
     fn show_compare_dialog(window: &adw::ApplicationWindow, manager: &Rc<RefCell<SnapshotManager>>) {
-        let snapshots = match manager.borrow().load_snapshots() {
-            Ok(s) => s,
-            Err(e) => {
-                dialogs::show_error(window, "Error", &format!("Failed to load snapshots: {}", e));
-                return;
-            }
-        };
-
-        if snapshots.len() < 2 {
-            dialogs::show_error(
-                window,
-                "Not Enough Snapshots",
-                "You need at least 2 snapshots to compare.\n\nCreate more snapshots first.",
-            );
-            return;
-        }
-
-        // Create selection dialog
-        let dialog = adw::MessageDialog::new(
-            Some(window),
-            Some("Compare Snapshots"),
-            Some("Select two snapshots to compare their packages:"),
-        );
-
-        // Add snapshot list as custom widget
-        let content = gtk::Box::new(Orientation::Vertical, 12);
-        content.set_margin_top(12);
-        content.set_margin_bottom(12);
-
-        // First snapshot dropdown
-        let label1 = Label::new(Some("First Snapshot (older):"));
-        label1.set_halign(gtk::Align::Start);
-        content.append(&label1);
-
-        let snapshot_names: Vec<String> = snapshots
-            .iter()
-            .map(|s| format!("{} - {}", s.name, s.format_timestamp()))
-            .collect();
-
-        let snapshot_strs: Vec<&str> = snapshot_names.iter().map(|s| s.as_str()).collect();
-        let dropdown1 = gtk::DropDown::from_strings(&snapshot_strs);
-        content.append(&dropdown1);
-
-        // Second snapshot dropdown
-        let label2 = Label::new(Some("Second Snapshot (newer):"));
-        label2.set_halign(gtk::Align::Start);
-        label2.set_margin_top(12);
-        content.append(&label2);
-
-        let dropdown2 = gtk::DropDown::from_strings(&snapshot_strs);
-        // Select last snapshot by default
-        if !snapshots.is_empty() {
-            dropdown2.set_selected(snapshots.len() as u32 - 1);
-        }
-        content.append(&dropdown2);
-
-        dialog.set_extra_child(Some(&content));
-
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("compare", "Compare");
-        dialog.set_response_appearance("compare", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("compare"));
-        dialog.set_close_response("cancel");
-
-        let window_clone = window.clone();
-        let snapshots_clone = snapshots.clone();
-
-        dialog.connect_response(None, move |_, response| {
-            if response == "compare" {
-                let idx1 = dropdown1.selected() as usize;
-                let idx2 = dropdown2.selected() as usize;
-
-                if idx1 == idx2 {
-                    dialogs::show_error(
-                        &window_clone,
-                        "Same Snapshot",
-                        "Please select two different snapshots to compare.",
-                    );
-                    return;
-                }
-
-                let snap1 = &snapshots_clone[idx1];
-                let snap2 = &snapshots_clone[idx2];
-
-                // Show the comparison
-                package_diff_dialog::show_package_diff_dialog(
-                    &window_clone,
-                    &snap1.name,
-                    &snap1.packages,
-                    &snap2.name,
-                    &snap2.packages,
-                );
-            }
-        });
-
-        dialog.present();
+        comparison_dialog::show_compare_dialog(window, manager);
     }
 
 
     /// Show preferences dialog for subvolume selection
     fn show_preferences_dialog(window: &adw::ApplicationWindow) {
-        // Load current configuration
-        let current_config = preferences::load_config();
-
-        // Show preferences dialog
-        let prefs = preferences::show_preferences_dialog(window, current_config);
-
-        // The dialog will be shown immediately and preferences will be saved
-        // when the user closes it. We save on close by connecting to the dialog's
-        // close signal in a more complete implementation. For now, we save
-        // whenever the checkboxes change, which happens in preferences.rs.
-        //
-        // Save the current preferences
-        if let Err(e) = preferences::save_config(&prefs.get_enabled()) {
-            eprintln!("Failed to save preferences: {}", e);
-            dialogs::show_toast(window, &format!("Warning: Failed to save preferences: {}", e));
-        }
+        about_preferences::show_preferences_dialog(window);
     }
 
     fn show_about_dialog(window: &adw::ApplicationWindow) {
-        let dialog = adw::Window::new();
-        dialog.set_title(Some("About Waypoint"));
-        dialog.set_default_size(400, 380);
-        dialog.set_modal(true);
-        dialog.set_transient_for(Some(window));
-
-        // Create header bar with close button
-        let header = adw::HeaderBar::new();
-        header.set_show_end_title_buttons(true);
-
-        // Main container
-        let main_box = gtk::Box::new(Orientation::Vertical, 0);
-        main_box.append(&header);
-
-        // Main content box
-        let content = gtk::Box::new(Orientation::Vertical, 18);
-        content.set_margin_top(24);
-        content.set_margin_bottom(24);
-        content.set_margin_start(32);
-        content.set_margin_end(32);
-        content.set_valign(gtk::Align::Center);
-
-        // Application icon
-        let icon = if let Ok(icon_path) = std::fs::canonicalize("assets/icons/hicolor/scalable/waypoint.svg") {
-            gtk::Image::from_file(&icon_path)
-        } else {
-            gtk::Image::from_icon_name("waypoint")
-        };
-        icon.set_pixel_size(96);
-        content.append(&icon);
-
-        // Application name
-        let name_label = Label::new(Some("Waypoint"));
-        name_label.add_css_class("title-1");
-        content.append(&name_label);
-
-        // Version
-        let version_label = Label::new(Some(&format!("Version {}", env!("CARGO_PKG_VERSION"))));
-        version_label.add_css_class("dim-label");
-        content.append(&version_label);
-
-        // Description
-        let description = Label::new(Some(
-            "A GTK-based snapshot and rollback tool for Btrfs filesystems on Void Linux."
-        ));
-        description.set_wrap(true);
-        description.set_justify(gtk::Justification::Center);
-        description.set_max_width_chars(40);
-        content.append(&description);
-
-        // Links section
-        let links_box = gtk::Box::new(Orientation::Vertical, 12);
-        links_box.set_margin_top(12);
-
-        // GitHub link
-        let github_btn = gtk::Button::with_label("View on GitHub");
-        github_btn.add_css_class("flat");
-        github_btn.connect_clicked(|_| {
-            let _ = std::process::Command::new("xdg-open")
-                .arg("https://github.com/Letdown2491/waypoint-gtk/")
-                .spawn();
-        });
-        links_box.append(&github_btn);
-
-        // Report issue link
-        let issue_btn = gtk::Button::with_label("Report an issue");
-        issue_btn.add_css_class("flat");
-        issue_btn.connect_clicked(|_| {
-            let _ = std::process::Command::new("xdg-open")
-                .arg("https://github.com/Letdown2491/waypoint-gtk/issues")
-                .spawn();
-        });
-        links_box.append(&issue_btn);
-
-        content.append(&links_box);
-
-        main_box.append(&content);
-        dialog.set_content(Some(&main_box));
-        dialog.present();
+        about_preferences::show_about_dialog(window);
     }
 
     #[allow(dead_code)]

@@ -103,7 +103,7 @@ pub fn create_snapshot(
         // Use the mount point directly as the source
         let source_path = subvol_mount;
 
-        println!("Creating snapshot: {} -> {}", source_path.display(), snapshot_path.display());
+        log::info!("Creating snapshot: {} -> {}", source_path.display(), snapshot_path.display());
 
         // Create the btrfs snapshot
         let output = Command::new("btrfs")
@@ -201,7 +201,7 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("Warning: Failed to delete {}: {}", subvol_path.display(), stderr);
+                    log::warn!("Failed to delete {}: {}", subvol_path.display(), stderr);
                 }
             }
         }
@@ -280,7 +280,7 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
             update_fstab_for_snapshot(&fstab_path, name, &snapshot_meta.subvolumes)
                 .context("Failed to update fstab")?;
         } else {
-            eprintln!("Warning: /etc/fstab not found in snapshot, multi-subvolume restore may not work correctly");
+            log::warn!("/etc/fstab not found in snapshot, multi-subvolume restore may not work correctly");
         }
 
         writable_root
@@ -334,20 +334,7 @@ pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
-    // Get snapshot metadata
-    let snapshot_meta = match get_snapshot_metadata(name) {
-        Ok(meta) => meta,
-        Err(e) => {
-            errors.push(format!("Failed to load snapshot metadata: {}", e));
-            return Ok(VerificationResult {
-                is_valid: false,
-                errors,
-                warnings,
-            });
-        }
-    };
-
-    // Check snapshot base directory exists
+    // Check snapshot base directory exists first
     let snapshot_base_path = snapshot_dir().join(name);
     if !snapshot_base_path.exists() {
         errors.push(format!("Snapshot directory does not exist: {}", snapshot_base_path.display()));
@@ -358,59 +345,93 @@ pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
         });
     }
 
-    // Check if it's a directory or single subvolume
+    // Try to get snapshot metadata - warn if missing but continue verification
+    let snapshot_meta_opt = match get_snapshot_metadata(name) {
+        Ok(meta) => Some(meta),
+        Err(e) => {
+            warnings.push(format!("Snapshot metadata not found (this is normal for older snapshots): {}", e));
+            None
+        }
+    };
+
+    // Check if snapshot is a directory (multi-subvolume) or single subvolume
     if snapshot_base_path.is_dir() {
-        // New format: directory with subvolumes
-        // Check each expected subvolume
-        for subvol_mount in &snapshot_meta.subvolumes {
-            let subvol_name = if subvol_mount == &PathBuf::from("/") {
-                "root".to_string()
-            } else {
-                subvol_mount
-                    .to_string_lossy()
-                    .trim_start_matches('/')
-                    .replace('/', "_")
-            };
+        // Directory format - could be multi-subvolume or old single-subvolume in directory
+        if let Some(snapshot_meta) = snapshot_meta_opt {
+            // We have metadata - verify expected subvolumes
+            for subvol_mount in &snapshot_meta.subvolumes {
+                let subvol_name = if subvol_mount == &PathBuf::from("/") {
+                    "root".to_string()
+                } else {
+                    subvol_mount
+                        .to_string_lossy()
+                        .trim_start_matches('/')
+                        .replace('/', "_")
+                };
 
-            let subvol_path = snapshot_base_path.join(&subvol_name);
+                let subvol_path = snapshot_base_path.join(&subvol_name);
 
-            // Check if subvolume exists
-            if !subvol_path.exists() {
-                errors.push(format!(
-                    "Subvolume snapshot missing: {} (expected at {})",
-                    subvol_name,
-                    subvol_path.display()
-                ));
-                continue;
-            }
-
-            // Verify it's a valid btrfs subvolume
-            match Command::new("btrfs")
-                .arg("subvolume")
-                .arg("show")
-                .arg(&subvol_path)
-                .output()
-            {
-                Ok(output) if output.status.success() => {
-                    // Subvolume is valid
-                }
-                Ok(_) => {
+                // Check if subvolume exists
+                if !subvol_path.exists() {
                     errors.push(format!(
-                        "Path exists but is not a valid btrfs subvolume: {}",
+                        "Subvolume snapshot missing: {} (expected at {})",
+                        subvol_name,
                         subvol_path.display()
                     ));
+                    continue;
                 }
-                Err(e) => {
-                    warnings.push(format!(
-                        "Could not verify subvolume {}: {}",
-                        subvol_path.display(),
-                        e
-                    ));
+
+                // Verify it's a valid btrfs subvolume
+                match Command::new("btrfs")
+                    .arg("subvolume")
+                    .arg("show")
+                    .arg(&subvol_path)
+                    .output()
+                {
+                    Ok(output) if output.status.success() => {
+                        // Subvolume is valid
+                    }
+                    Ok(_) => {
+                        errors.push(format!(
+                            "Path exists but is not a valid btrfs subvolume: {}",
+                            subvol_path.display()
+                        ));
+                    }
+                    Err(e) => {
+                        warnings.push(format!(
+                            "Could not verify subvolume {}: {}",
+                            subvol_path.display(),
+                            e
+                        ));
+                    }
                 }
+            }
+        } else {
+            // No metadata - just verify the directory contains at least one valid subvolume
+            let mut found_valid_subvol = false;
+            if let Ok(entries) = fs::read_dir(&snapshot_base_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Ok(output) = Command::new("btrfs")
+                        .arg("subvolume")
+                        .arg("show")
+                        .arg(&path)
+                        .output()
+                    {
+                        if output.status.success() {
+                            found_valid_subvol = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !found_valid_subvol {
+                errors.push(format!("No valid btrfs subvolumes found in {}", snapshot_base_path.display()));
             }
         }
     } else {
-        // Old format: single subvolume
+        // Single subvolume (old format or direct subvolume)
         // Verify it's a valid btrfs subvolume
         match Command::new("btrfs")
             .arg("subvolume")
@@ -748,7 +769,7 @@ fn backup_fstab(fstab_path: &Path) -> Result<PathBuf> {
     fs::copy(fstab_path, &final_backup_path)
         .context(format!("Failed to create fstab backup at {}", final_backup_path.display()))?;
 
-    println!("Created fstab backup: {}", final_backup_path.display());
+    log::info!("Created fstab backup: {}", final_backup_path.display());
 
     Ok(final_backup_path)
 }

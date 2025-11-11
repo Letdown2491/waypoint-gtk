@@ -326,7 +326,7 @@ pub fn show_retention_editor(
                 dialog_for_save.close();
             }
             Err(e) => {
-                eprintln!("Failed to save retention policy: {}", e);
+                log::error!("Failed to save retention policy: {}", e);
                 let error_dialog = adw::MessageDialog::new(Some(&dialog_for_save), Some("Save Failed"), Some(&format!("Failed to save retention policy: {}", e)));
                 error_dialog.add_response("ok", "OK");
                 error_dialog.set_default_response(Some("ok"));

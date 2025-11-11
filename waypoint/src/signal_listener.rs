@@ -29,7 +29,7 @@ pub fn start_signal_listener(app: Application) {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
             if let Err(e) = listen_for_signals(sender).await {
-                eprintln!("Signal listener error: {}", e);
+                log::error!("Signal listener error: {}", e);
             }
         });
     });
@@ -97,7 +97,7 @@ async fn listen_for_signals(sender: std::sync::mpsc::Sender<SnapshotCreatedEvent
                             };
 
                             if let Err(e) = sender.send(event) {
-                                eprintln!("Failed to send event to main thread: {}", e);
+                                log::error!("Failed to send event to main thread: {}", e);
                             }
                         }
                     }

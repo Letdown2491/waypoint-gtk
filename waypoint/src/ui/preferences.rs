@@ -60,7 +60,7 @@ pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: 
     let subvolumes = match detect_mounted_subvolumes() {
         Ok(subvols) => subvols,
         Err(e) => {
-            eprintln!("Failed to detect subvolumes: {}", e);
+            log::error!("Failed to detect subvolumes: {}", e);
             Vec::new()
         }
     };
@@ -176,13 +176,13 @@ pub fn load_config() -> Vec<PathBuf> {
                     result
                 }
                 Err(e) => {
-                    eprintln!("Failed to parse config: {}", e);
+                    log::error!("Failed to parse config: {}", e);
                     vec![PathBuf::from("/")]
                 }
             }
         }
         Err(e) => {
-            eprintln!("Failed to read config: {}", e);
+            log::error!("Failed to read config: {}", e);
             vec![PathBuf::from("/")]
         }
     }

@@ -61,7 +61,7 @@ impl WaypointHelper {
                 };
 
                 if let Err(e) = Self::snapshot_created(&ctxt, &name, created_by).await {
-                    eprintln!("Failed to emit snapshot_created signal: {}", e);
+                    log::error!("Failed to emit snapshot_created signal: {}", e);
                 }
 
                 (true, msg)
@@ -121,7 +121,7 @@ impl WaypointHelper {
                 serde_json::to_string(&snapshot_infos).unwrap_or_else(|_| "[]".to_string())
             }
             Err(e) => {
-                eprintln!("Failed to list snapshots: {}", e);
+                log::error!("Failed to list snapshots: {}", e);
                 "[]".to_string()
             }
         }
@@ -137,7 +137,7 @@ impl WaypointHelper {
                 })
             }
             Err(e) => {
-                eprintln!("Failed to verify snapshot: {}", e);
+                log::error!("Failed to verify snapshot: {}", e);
                 serde_json::to_string(&btrfs::VerificationResult {
                     is_valid: false,
                     errors: vec![format!("Verification failed: {}", e)],
@@ -159,7 +159,7 @@ impl WaypointHelper {
                 })
             }
             Err(e) => {
-                eprintln!("Failed to preview restore: {}", e);
+                log::error!("Failed to preview restore: {}", e);
                 format!(r#"{{"error":"Failed to preview restore: {}"}}"#, e.to_string().replace('"', "\\\""))
             }
         }
@@ -300,14 +300,14 @@ async fn check_authorization(
     use zbus::zvariant::{ObjectPath, Value};
     use std::collections::HashMap;
 
-    println!("Authorization requested for action: {}", action_id);
+    log::debug!("Authorization requested for action: {}", action_id);
 
     // Get the caller's bus name from the message header
     let caller = hdr.sender()
         .context("No sender in message header")?
         .to_owned();
 
-    println!("Caller bus name: {}", caller);
+    log::debug!("Caller bus name: {}", caller);
 
     // Get the caller's PID from D-Bus
     let response = connection.call_method(
@@ -322,7 +322,7 @@ async fn check_authorization(
     let caller_pid: u32 = response.body().deserialize()
         .context("Failed to deserialize caller PID")?;
 
-    println!("Caller PID: {}", caller_pid);
+    log::debug!("Caller PID: {}", caller_pid);
 
     // Get process start time from /proc
     let start_time = get_process_start_time(caller_pid)?;
@@ -364,7 +364,7 @@ async fn check_authorization(
         msg.body().deserialize()
             .context("Failed to deserialize Polkit response")?;
 
-    println!("Authorization result: authorized={}, challenge={}, details={:?}",
+    log::debug!("Authorization result: authorized={}, challenge={}, details={:?}",
              is_authorized, is_challenge, auth_details);
 
     if is_authorized {
@@ -407,16 +407,19 @@ fn get_process_start_time(pid: u32) -> Result<u64> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize logging
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     // Must run as root
     if unsafe { libc::geteuid() } != 0 {
-        eprintln!("waypoint-helper must be run as root");
+        log::error!("waypoint-helper must be run as root");
         std::process::exit(1);
     }
 
     // Initialize configuration
     btrfs::init_config();
 
-    println!("Starting Waypoint Helper service...");
+    log::info!("Starting Waypoint Helper service v{}", env!("CARGO_PKG_VERSION"));
 
     // Build the D-Bus connection
     let _connection = ConnectionBuilder::system()?
@@ -425,15 +428,15 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    println!("Waypoint Helper is ready at {}", DBUS_OBJECT_PATH);
+    log::info!("Waypoint Helper is ready at {}", DBUS_OBJECT_PATH);
 
     // Wait for termination signal
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
     tokio::select! {
-        _ = sigterm.recv() => println!("Received SIGTERM, shutting down..."),
-        _ = sigint.recv() => println!("Received SIGINT, shutting down..."),
+        _ = sigterm.recv() => log::info!("Received SIGTERM, shutting down..."),
+        _ = sigint.recv() => log::info!("Received SIGINT, shutting down..."),
     }
 
     Ok(())

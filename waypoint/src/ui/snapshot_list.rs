@@ -67,7 +67,7 @@ pub fn refresh_snapshot_list_internal(
     let all_snapshots = match manager.borrow().load_snapshots() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Failed to load snapshots: {}", e);
+            log::error!("Failed to load snapshots: {}", e);
             return;
         }
     };

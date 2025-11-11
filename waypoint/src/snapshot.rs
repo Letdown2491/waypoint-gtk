@@ -213,10 +213,10 @@ impl SnapshotManager {
 
         // If we cleaned anything, save the cleaned list
         if after_phantom_cleanup < initial_count {
-            eprintln!("Cleaned up {} phantom snapshot(s) from metadata", initial_count - after_phantom_cleanup);
+            log::info!("Cleaned up {} phantom snapshot(s) from metadata", initial_count - after_phantom_cleanup);
         }
         if after_dedup < after_phantom_cleanup {
-            eprintln!("Cleaned up {} duplicate snapshot(s) from metadata", after_phantom_cleanup - after_dedup);
+            log::info!("Cleaned up {} duplicate snapshot(s) from metadata", after_phantom_cleanup - after_dedup);
         }
 
         if after_dedup < initial_count {

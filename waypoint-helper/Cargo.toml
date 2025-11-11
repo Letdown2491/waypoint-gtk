@@ -16,6 +16,8 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
+log.workspace = true
+env_logger = "0.11"
 
 # D-Bus service and Polkit authorization
 zbus = { version = "4.0", features = ["tokio"] }
