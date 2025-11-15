@@ -19,7 +19,7 @@
 - Retention policies with visual GUI for configuring automatic snapshot cleanup.
 - Configurable max snapshots, max age, minimum count, and keep patterns for pinned snapshots.
 - Real-time preview of snapshots to be deleted by retention policy.
-- Snapshot analytics with system insights.
+- Snapshot analytics dialog with overview statistics, space usage trends, growth analysis, actionable insights and recommendations, and visual size comparison of largest snapshots.
 - GTK4 + libadwaita modern interface following GNOME HIG with header bar and boxed-list styling.
 - Hamburger menu with theme switcher (system/light/dark mode, 32x32 circular buttons).
 - Custom Waypoint icons in multiple sizes (128x128, 256x256, 512x512, SVG).
