@@ -16,6 +16,7 @@ mod about_preferences;
 mod error_helpers;
 mod file_restore_dialog;
 mod file_diff_dialog;
+mod analytics_dialog;
 
 use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
@@ -200,6 +201,12 @@ impl MainWindow {
         let menu_list = ListBox::new();
         menu_list.set_selection_mode(gtk::SelectionMode::None);
         menu_list.add_css_class("boxed-list");
+
+        let analytics_row = adw::ActionRow::builder()
+            .title("Analytics")
+            .activatable(true)
+            .build();
+        menu_list.append(&analytics_row);
 
         let cleanup_row = adw::ActionRow::builder()
             .title("Clean Up Old Snapshots")
@@ -637,6 +644,14 @@ impl MainWindow {
         });
 
         // Connect hamburger menu items
+        let win_clone_menu_analytics = window.clone();
+        let sm_clone_menu_analytics = snapshot_manager.clone();
+        let popover_clone_analytics = popover.clone();
+        analytics_row.connect_activated(move |_| {
+            popover_clone_analytics.popdown();
+            Self::show_analytics_dialog(&win_clone_menu_analytics, &sm_clone_menu_analytics);
+        });
+
         let win_clone_menu_prefs = window.clone();
         let popover_clone_prefs = popover.clone();
         preferences_row.connect_activated(move |_| {
@@ -2336,6 +2351,19 @@ impl MainWindow {
     /// Show preferences dialog
     fn show_preferences_dialog(window: &adw::ApplicationWindow) {
         preferences_window::show_preferences_window(window);
+    }
+
+    /// Show analytics dialog
+    fn show_analytics_dialog(window: &adw::ApplicationWindow, snapshot_manager: &std::rc::Rc<std::cell::RefCell<SnapshotManager>>) {
+        // Load snapshots
+        let snapshots = match snapshot_manager.borrow().load_snapshots() {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to load snapshots for analytics: {}", e);
+                Vec::new()
+            }
+        };
+        analytics_dialog::show_analytics_dialog(window, &snapshots);
     }
 
     fn show_about_dialog(window: &adw::ApplicationWindow) {
