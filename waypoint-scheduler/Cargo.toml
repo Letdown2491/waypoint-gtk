@@ -1,0 +1,23 @@
+[package]
+name = "waypoint-scheduler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Waypoint snapshot scheduler service"
+
+[[bin]]
+name = "waypoint-scheduler"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+anyhow.workspace = true
+chrono.workspace = true
+log.workspace = true
+
+# Local dependencies
+waypoint-common = { path = "../waypoint-common" }
+
+# Additional dependencies for scheduler
+env_logger = "0.11"

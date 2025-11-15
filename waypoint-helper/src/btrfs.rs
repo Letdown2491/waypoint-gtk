@@ -76,6 +76,11 @@ pub fn create_snapshot(
         subvolumes
     };
 
+    // Load exclude patterns
+    let exclude_config = waypoint_common::ExcludeConfig::load()
+        .unwrap_or_default();
+    let enabled_patterns = exclude_config.enabled_patterns();
+
     // Ensure snapshot directory exists
     let snap_dir = snapshot_dir();
     fs::create_dir_all(snap_dir)
@@ -105,11 +110,10 @@ pub fn create_snapshot(
 
         log::info!("Creating snapshot: {} -> {}", source_path.display(), snapshot_path.display());
 
-        // Create the btrfs snapshot
+        // Create the btrfs snapshot as WRITABLE (no -r flag) so we can apply exclusions
         let output = Command::new("btrfs")
             .arg("subvolume")
             .arg("snapshot")
-            .arg("-r") // Read-only
             .arg(&source_path)
             .arg(&snapshot_path)
             .output()
@@ -130,6 +134,32 @@ pub fn create_snapshot(
                 stdout
             );
         }
+
+        // Apply exclude patterns by deleting matching files
+        if !enabled_patterns.is_empty() {
+            log::info!("Applying {} exclude patterns to {}", enabled_patterns.len(), snapshot_path.display());
+            if let Err(e) = apply_exclusions(&snapshot_path, &enabled_patterns) {
+                log::error!("Failed to apply exclusions to {}: {}", snapshot_path.display(), e);
+                // Don't fail the whole snapshot, just log the error
+            }
+        }
+
+        // Now make the snapshot read-only
+        let output = Command::new("btrfs")
+            .arg("property")
+            .arg("set")
+            .arg("-ts")
+            .arg(&snapshot_path)
+            .arg("ro")
+            .arg("true")
+            .output()
+            .context("Failed to make snapshot read-only")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!("Failed to make snapshot read-only: {}", stderr);
+            // Continue anyway - writable snapshots still work
+        }
     }
 
     // Save metadata
@@ -146,6 +176,96 @@ pub fn create_snapshot(
     };
 
     add_snapshot_metadata(snapshot)?;
+
+    Ok(())
+}
+
+/// Apply exclude patterns to a snapshot by deleting matching files
+fn apply_exclusions(
+    snapshot_path: &Path,
+    patterns: &[&waypoint_common::ExcludePattern],
+) -> Result<()> {
+    use walkdir::WalkDir;
+
+    let mut deleted_count = 0;
+    let mut failed_count = 0;
+
+    // Walk the snapshot directory and find files matching patterns
+    for entry in WalkDir::new(snapshot_path)
+        .follow_links(false) // Don't follow symlinks
+        .into_iter()
+        .filter_entry(|e| {
+            // Filter at directory level for efficiency
+            // If a directory matches a prefix pattern, we can skip its entire contents
+            let path = e.path();
+            let relative_path = path.strip_prefix(snapshot_path).ok();
+
+            if let Some(rel_path) = relative_path {
+                // Convert to absolute path within the original filesystem for pattern matching
+                let absolute_path = Path::new("/").join(rel_path);
+
+                // Check if any pattern matches this path
+                for pattern in patterns {
+                    if pattern.matches(&absolute_path) {
+                        return false; // Don't descend into this directory
+                    }
+                }
+            }
+
+            true // Continue descending
+        })
+    {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("Error walking directory: {}", e);
+                continue;
+            }
+        };
+
+        let path = entry.path();
+
+        // Get relative path for pattern matching
+        let relative_path = match path.strip_prefix(snapshot_path) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        // Convert to absolute path for pattern matching
+        let absolute_path = Path::new("/").join(relative_path);
+
+        // Check if this path matches any pattern
+        let matches = patterns.iter().any(|pattern| pattern.matches(&absolute_path));
+
+        if matches {
+            // Delete this file or directory
+            if path.is_dir() {
+                match fs::remove_dir_all(path) {
+                    Ok(_) => {
+                        log::debug!("Excluded directory: {}", absolute_path.display());
+                        deleted_count += 1;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to delete excluded directory {}: {}", absolute_path.display(), e);
+                        failed_count += 1;
+                    }
+                }
+            } else if path.is_file() {
+                match fs::remove_file(path) {
+                    Ok(_) => {
+                        log::debug!("Excluded file: {}", absolute_path.display());
+                        deleted_count += 1;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to delete excluded file {}: {}", absolute_path.display(), e);
+                        failed_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("Exclusion complete: {} items excluded, {} failures", deleted_count, failed_count);
 
     Ok(())
 }

@@ -1,4 +1,5 @@
 use crate::snapshot::{Snapshot, format_bytes};
+use crate::user_preferences::SnapshotPreferences;
 use gtk::prelude::*;
 use gtk::{Box, Button, Orientation};
 use libadwaita as adw;
@@ -13,10 +14,25 @@ pub enum SnapshotAction {
     Verify,
     Restore,
     Delete,
+    ToggleFavorite,
+    EditNote,
 }
 
 impl SnapshotRow {
+    #[allow(dead_code)]
     pub fn new<F>(snapshot: &Snapshot, on_action: F) -> adw::ActionRow
+    where
+        F: Fn(String, SnapshotAction) + 'static,
+    {
+        Self::new_with_context(snapshot, &SnapshotPreferences::default(), on_action, None)
+    }
+
+    pub fn new_with_context<F>(
+        snapshot: &Snapshot,
+        preferences: &SnapshotPreferences,
+        on_action: F,
+        max_size: Option<u64>,
+    ) -> adw::ActionRow
     where
         F: Fn(String, SnapshotAction) + 'static,
     {
@@ -47,26 +63,68 @@ impl SnapshotRow {
             }
         }
 
-        row.set_subtitle(&subtitle_parts.join("  •  "));
+        // Build subtitle text with optional note
+        let subtitle = if let Some(note) = &preferences.note {
+            // Truncate note if too long (show first 60 chars + ellipsis)
+            let note_preview = if note.len() > 60 {
+                format!("{}…", &note.chars().take(60).collect::<String>().trim())
+            } else {
+                note.to_string()
+            };
+            format!("{}\nNote: {}", subtitle_parts.join("  •  "), note_preview)
+        } else {
+            subtitle_parts.join("  •  ")
+        };
 
-        // Add action buttons with better spacing
-        let button_box = Box::new(Orientation::Horizontal, 0);
-        button_box.add_css_class("linked");
+        row.set_subtitle(&subtitle);
 
-        let browse_btn = Button::builder()
-            .icon_name("folder-open-symbolic")
-            .tooltip_text("Browse Files")
+        // Add size indicator if size is available and max_size is provided
+        if let (Some(size), Some(max)) = (snapshot.size_bytes, max_size) {
+            if max > 0 {
+                let size_box = Box::new(Orientation::Vertical, 4);
+                size_box.set_valign(gtk::Align::Center);
+                size_box.set_margin_end(12);
+
+                // Size label
+                let size_label = gtk::Label::new(Some(&format_bytes(size)));
+                size_label.add_css_class("caption");
+                size_label.add_css_class("dim-label");
+                size_label.set_halign(gtk::Align::End);
+                size_box.append(&size_label);
+
+                // Level bar showing relative size
+                let level_bar = gtk::LevelBar::new();
+                level_bar.set_min_value(0.0);
+                level_bar.set_max_value(1.0);
+                level_bar.set_value((size as f64) / (max as f64));
+                level_bar.set_width_request(80);
+                level_bar.set_valign(gtk::Align::Center);
+                size_box.append(&level_bar);
+
+                row.add_suffix(&size_box);
+            }
+        }
+
+        // Add action buttons - primary action + menu
+        let button_box = Box::new(Orientation::Horizontal, 6);
+
+        // Star/favorite button
+        let star_btn = Button::builder()
+            .icon_name(if preferences.is_favorite {
+                "starred-symbolic"
+            } else {
+                "non-starred-symbolic"
+            })
+            .tooltip_text(if preferences.is_favorite {
+                "Unpin Restore Point"
+            } else {
+                "Pin Restore Point"
+            })
             .valign(gtk::Align::Center)
             .build();
-        browse_btn.add_css_class("flat");
+        star_btn.add_css_class("flat");
 
-        let verify_btn = Button::builder()
-            .icon_name("emblem-ok-symbolic")
-            .tooltip_text("Verify Snapshot Integrity")
-            .valign(gtk::Align::Center)
-            .build();
-        verify_btn.add_css_class("flat");
-
+        // Primary action: Restore button
         let restore_btn = Button::builder()
             .icon_name("view-refresh-symbolic")
             .tooltip_text("Restore System to This Point")
@@ -74,46 +132,100 @@ impl SnapshotRow {
             .build();
         restore_btn.add_css_class("flat");
 
-        let delete_btn = Button::builder()
-            .icon_name("user-trash-symbolic")
-            .tooltip_text("Delete Restore Point")
-            .valign(gtk::Align::Center)
-            .build();
-        delete_btn.add_css_class("flat");
-        delete_btn.add_css_class("destructive-action");
+        // Menu button for secondary actions
+        let menu_btn = gtk::MenuButton::new();
+        menu_btn.set_icon_name("view-more-symbolic");
+        menu_btn.set_tooltip_text(Some("More Actions"));
+        menu_btn.set_valign(gtk::Align::Center);
+        menu_btn.add_css_class("flat");
 
-        // Connect button signals
+        // Create popover menu
+        let menu = gtk::gio::Menu::new();
+
+        // Browse action
+        let browse_action_name = format!("snapshot.browse-{}", snapshot.id.replace('/', "-"));
+        menu.append(Some("Browse Files"), Some(&browse_action_name));
+
+        // Verify action
+        let verify_action_name = format!("snapshot.verify-{}", snapshot.id.replace('/', "-"));
+        menu.append(Some("Verify Integrity"), Some(&verify_action_name));
+
+        // Edit Note action
+        let edit_note_action_name = format!("snapshot.edit-note-{}", snapshot.id.replace('/', "-"));
+        menu.append(Some("Edit Note"), Some(&edit_note_action_name));
+
+        // Delete action in a separate section (creates visual separator)
+        let delete_section = gtk::gio::Menu::new();
+        let delete_action_name = format!("snapshot.delete-{}", snapshot.id.replace('/', "-"));
+        delete_section.append(Some("Delete Restore Point"), Some(&delete_action_name));
+        menu.append_section(None, &delete_section);
+
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        menu_btn.set_popover(Some(&popover));
+
+        // Connect buttons
         let snapshot_id = snapshot.id.clone();
         let callback = std::rc::Rc::new(on_action);
 
+        // Connect star button
         let id_clone = snapshot_id.clone();
         let cb_clone = callback.clone();
-        browse_btn.connect_clicked(move |_| {
-            cb_clone(id_clone.clone(), SnapshotAction::Browse);
+        star_btn.connect_clicked(move |_| {
+            cb_clone(id_clone.clone(), SnapshotAction::ToggleFavorite);
         });
 
-        let id_clone = snapshot_id.clone();
-        let cb_clone = callback.clone();
-        verify_btn.connect_clicked(move |_| {
-            cb_clone(id_clone.clone(), SnapshotAction::Verify);
-        });
-
+        // Connect restore button
         let id_clone = snapshot_id.clone();
         let cb_clone = callback.clone();
         restore_btn.connect_clicked(move |_| {
             cb_clone(id_clone.clone(), SnapshotAction::Restore);
         });
 
-        let id_clone = snapshot_id.clone();
-        let cb_clone = callback.clone();
-        delete_btn.connect_clicked(move |_| {
-            cb_clone(id_clone.clone(), SnapshotAction::Delete);
-        });
+        // Create action group for this row's menu actions
+        let action_group = gtk::gio::SimpleActionGroup::new();
 
-        button_box.append(&browse_btn);
-        button_box.append(&verify_btn);
+        // Browse action
+        let browse_action = gtk::gio::SimpleAction::new(&format!("browse-{}", snapshot.id.replace('/', "-")), None);
+        let browse_id = snapshot.id.clone();
+        let browse_cb = callback.clone();
+        browse_action.connect_activate(move |_, _| {
+            browse_cb(browse_id.clone(), SnapshotAction::Browse);
+        });
+        action_group.add_action(&browse_action);
+
+        // Verify action
+        let verify_action = gtk::gio::SimpleAction::new(&format!("verify-{}", snapshot.id.replace('/', "-")), None);
+        let verify_id = snapshot.id.clone();
+        let verify_cb = callback.clone();
+        verify_action.connect_activate(move |_, _| {
+            verify_cb(verify_id.clone(), SnapshotAction::Verify);
+        });
+        action_group.add_action(&verify_action);
+
+        // Edit Note action
+        let edit_note_action = gtk::gio::SimpleAction::new(&format!("edit-note-{}", snapshot.id.replace('/', "-")), None);
+        let edit_note_id = snapshot.id.clone();
+        let edit_note_cb = callback.clone();
+        edit_note_action.connect_activate(move |_, _| {
+            edit_note_cb(edit_note_id.clone(), SnapshotAction::EditNote);
+        });
+        action_group.add_action(&edit_note_action);
+
+        // Delete action
+        let delete_action = gtk::gio::SimpleAction::new(&format!("delete-{}", snapshot.id.replace('/', "-")), None);
+        let delete_id = snapshot.id.clone();
+        let delete_cb = callback.clone();
+        delete_action.connect_activate(move |_, _| {
+            delete_cb(delete_id.clone(), SnapshotAction::Delete);
+        });
+        action_group.add_action(&delete_action);
+
+        // Insert the action group into the row
+        row.insert_action_group("snapshot", Some(&action_group));
+
+        button_box.append(&star_btn);
         button_box.append(&restore_btn);
-        button_box.append(&delete_btn);
+        button_box.append(&menu_btn);
 
         row.add_suffix(&button_box);
         row.set_activatable(false);

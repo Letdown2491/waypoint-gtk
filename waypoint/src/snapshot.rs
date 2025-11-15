@@ -220,7 +220,7 @@ impl SnapshotManager {
             .context("Failed to serialize snapshots")?;
 
         fs::write(&path, content)
-            .context("Failed to write snapshots metadata")?;
+            .with_context(|| format!("Failed to write snapshots metadata to {}", path.display()))?;
 
         Ok(())
     }
@@ -273,32 +273,6 @@ impl SnapshotManager {
         let snapshots = self.load_snapshots()?;
         Ok(snapshots.into_iter().find(|s| s.id == id))
     }
-
-    /// Apply retention policy and get list of snapshots to delete
-    ///
-    /// Loads the current retention policy and applies it to all snapshots
-    /// to determine which ones should be removed based on age/count rules.
-    ///
-    /// # Returns
-    /// Vector of snapshot names that should be deleted
-    ///
-    /// # Errors
-    /// - Failed to load retention policy
-    /// - Failed to load snapshots
-    ///
-    /// # Note
-    /// This only identifies snapshots for deletion but doesn't delete them.
-    /// Call `WaypointHelperClient::delete_snapshot()` to actually remove them.
-    pub fn get_snapshots_to_cleanup(&self) -> Result<Vec<String>> {
-        use crate::retention::RetentionPolicy;
-
-        let policy = RetentionPolicy::load()?;
-        let snapshots = self.load_snapshots()?;
-        let to_delete = policy.apply(&snapshots);
-
-        Ok(to_delete)
-    }
-
 }
 
 #[cfg(test)]

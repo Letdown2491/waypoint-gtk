@@ -1,0 +1,43 @@
+# Waypoint Snapshot Schedules Configuration
+# Multiple schedules can run concurrently with different retention policies
+
+# Hourly snapshots (disabled by default)
+[[schedule]]
+enabled = false
+type = "hourly"
+prefix = "hourly"
+description = "Hourly snapshot"
+keep_count = 24
+keep_days = 1
+
+# Daily snapshots (enabled by default at 2 AM)
+[[schedule]]
+enabled = true
+type = "daily"
+time = "02:00"
+prefix = "daily"
+description = "Daily snapshot"
+keep_count = 7
+keep_days = 7
+
+# Weekly snapshots (disabled by default, runs Sunday at 3 AM)
+[[schedule]]
+enabled = false
+type = "weekly"
+time = "03:00"
+day_of_week = 0  # 0=Sunday, 1=Monday, ..., 6=Saturday
+prefix = "weekly"
+description = "Weekly snapshot"
+keep_count = 4
+keep_days = 28
+
+# Monthly snapshots (disabled by default, runs 1st of month at 4 AM)
+[[schedule]]
+enabled = false
+type = "monthly"
+time = "04:00"
+day_of_month = 1  # 1-31
+prefix = "monthly"
+description = "Monthly snapshot"
+keep_count = 3
+keep_days = 90

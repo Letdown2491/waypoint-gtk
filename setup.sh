@@ -101,12 +101,19 @@ install_binaries() {
         echo "Release binary missing: target/release/waypoint-helper" >&2
         exit 1
     fi
+    if [[ ! -f "target/release/waypoint-scheduler" ]]; then
+        echo "Release binary missing: target/release/waypoint-scheduler" >&2
+        exit 1
+    fi
 
     echo " → Installing waypoint to ${BINDIR}/waypoint"
     sudo install -D -m755 target/release/waypoint "${BINDIR}/waypoint"
 
     echo " → Installing waypoint-helper to ${BINDIR}/waypoint-helper"
     sudo install -D -m755 target/release/waypoint-helper "${BINDIR}/waypoint-helper"
+
+    echo " → Installing waypoint-scheduler to ${BINDIR}/waypoint-scheduler"
+    sudo install -D -m755 target/release/waypoint-scheduler "${BINDIR}/waypoint-scheduler"
 
     # Install CLI wrapper
     if [[ -f "waypoint-cli" ]]; then
@@ -177,6 +184,12 @@ install_dbus_service() {
 create_metadata_dir() {
     echo "Creating metadata directory..."
     sudo install -d -m755 /var/lib/waypoint
+
+    # Create empty metadata file with world-readable permissions if it doesn't exist
+    if [[ ! -f /var/lib/waypoint/snapshots.json ]]; then
+        echo "[]" | sudo tee /var/lib/waypoint/snapshots.json > /dev/null
+        sudo chmod 644 /var/lib/waypoint/snapshots.json
+    fi
 }
 
 install_icons() {
@@ -236,14 +249,25 @@ install_scheduler_service() {
 
     # Only install config if it doesn't exist (preserve user settings on upgrade)
     if [[ -f /etc/waypoint/scheduler.conf ]]; then
-        echo " ℹ Preserving existing scheduler configuration"
+        echo " ℹ Preserving existing scheduler configuration (deprecated)"
         # Install example config for reference
         sudo install -D -m644 data/waypoint-scheduler.conf \
             /etc/waypoint/scheduler.conf.example
     else
-        echo " → Installing default scheduler configuration"
+        echo " → Installing default scheduler configuration (deprecated)"
         sudo install -D -m644 data/waypoint-scheduler.conf \
             /etc/waypoint/scheduler.conf
+    fi
+
+    # Install new TOML-based schedules config
+    if [[ -f /etc/waypoint/schedules.toml ]]; then
+        echo " ℹ Preserving existing schedules configuration"
+        sudo install -D -m644 data/schedules.toml \
+            /etc/waypoint/schedules.toml.example
+    else
+        echo " → Installing default schedules configuration"
+        sudo install -D -m644 data/schedules.toml \
+            /etc/waypoint/schedules.toml
     fi
 
     sudo install -d -m755 /var/log/waypoint-scheduler
@@ -276,6 +300,17 @@ reload_dbus() {
 }
 
 clean_build_artifacts() {
+    echo
+    echo "Clean up build artifacts? (This will free up disk space)"
+    echo "Build files can be removed safely after installation."
+    read -p "Remove build files? [y/N] " -n 1 -r
+    echo
+
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Keeping build artifacts in target/ directory"
+        return
+    fi
+
     echo "Cleaning build artifacts..."
     if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
         sudo -u "$SUDO_USER" env PROJECT_ROOT="$PROJECT_ROOT" bash -lc '
@@ -295,6 +330,7 @@ clean_build_artifacts() {
             cargo clean
         fi
     fi
+    echo " ✓ Build artifacts cleaned"
 }
 
 uninstall_binaries() {
@@ -310,6 +346,10 @@ uninstall_binaries() {
     if [[ -f "${BINDIR}/waypoint-cli" ]]; then
         echo " → Removing ${BINDIR}/waypoint-cli"
         sudo rm -f "${BINDIR}/waypoint-cli"
+    fi
+    if [[ -f "${BINDIR}/waypoint-scheduler" ]]; then
+        echo " → Removing ${BINDIR}/waypoint-scheduler"
+        sudo rm -f "${BINDIR}/waypoint-scheduler"
     fi
 }
 

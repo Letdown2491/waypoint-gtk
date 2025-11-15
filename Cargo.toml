@@ -3,6 +3,7 @@ members = [
     "waypoint",
     "waypoint-helper",
     "waypoint-common",
+    "waypoint-scheduler",
 ]
 resolver = "2"
 
@@ -17,8 +18,10 @@ license = "MIT"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
+once_cell = "1.21"
 
 [profile.release]
 opt-level = 3

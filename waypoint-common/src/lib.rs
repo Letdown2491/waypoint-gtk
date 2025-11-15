@@ -1,12 +1,19 @@
 // Shared types and utilities for Waypoint
 
 pub mod config;
+pub mod exclude;
+pub mod quota;
+pub mod schedules;
+pub mod validation;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub use config::WaypointConfig;
+pub use exclude::{ExcludeConfig, ExcludePattern, PatternType};
+pub use quota::{QuotaConfig, QuotaType, QuotaUsage};
+pub use schedules::{Schedule, ScheduleType, SchedulesConfig};
 
 /// A package installed on the system
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

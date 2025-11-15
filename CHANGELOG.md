@@ -42,7 +42,7 @@
 - Polkit automation allowing root to bypass authentication for automated operations.
 - Disk space warnings requiring minimum 1GB free space before snapshot creation.
 - Filesystem query caching with TTL-based cache for expensive operations (5-minute snapshot size, 30-second disk space).
-- Memory optimization using Rc<T> for large data structures (12,500x improvement for package lists).
+- Memory optimization using Rc<T> for large data structures.
 - UI threading with all blocking operations moved to background threads.
 - Informative error dialogs with helpful troubleshooting steps instead of ungraceful exits.
 - Modular Rust codebase with separate modules for btrfs, snapshot, UI, signal_listener, and notifications.
@@ -52,3 +52,12 @@
 - Comprehensive setup.sh installation script with automatic dependency checking.
 - Desktop entry file, Polkit policy files, and D-Bus service configuration.
 - MIT license with comprehensive README and documentation.
+- Per-user snapshot notes with rich multi-line text editor and live character counter.
+- Note editor dialog with snapshot context (name, timestamp), placeholder text, and keyboard shortcuts (Ctrl+Enter to save, Escape to cancel).
+- Pin favorite snapshots to keep them at the top with visual starred/non-starred icons.
+- Pinned snapshots appear in dedicated "Pinned Restore Points" section above regular snapshots.
+- Lazy-loading preferences dialog - Scheduling tab only requests authentication when actually viewed.
+- User preference architecture with separated per-user data (favorites, notes) from system-wide snapshot metadata.
+- Notes and favorites stored per-user at ~/.local/share/waypoint/user-preferences.json allowing multiple users different preferences.
+- World-readable shared snapshot metadata at /var/lib/waypoint/snapshots.json accessible to all users.
+- Enhanced note display in snapshot list with 60-character truncation and clean "Note:" prefix.

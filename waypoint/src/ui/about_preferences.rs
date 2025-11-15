@@ -3,29 +3,6 @@ use gtk::prelude::*;
 use libadwaita as adw;
 use adw::prelude::*;
 
-use super::dialogs;
-use super::preferences;
-
-/// Show preferences dialog for subvolume selection
-pub fn show_preferences_dialog(window: &adw::ApplicationWindow) {
-    // Load current configuration
-    let current_config = preferences::load_config();
-
-    // Show preferences dialog
-    let prefs = preferences::show_preferences_dialog(window, current_config);
-
-    // The dialog will be shown immediately and preferences will be saved
-    // when the user closes it. We save on close by connecting to the dialog's
-    // close signal in a more complete implementation. For now, we save
-    // whenever the checkboxes change, which happens in preferences.rs.
-    //
-    // Save the current preferences
-    if let Err(e) = preferences::save_config(&prefs.get_enabled()) {
-        log::warn!("Failed to save preferences: {}", e);
-        dialogs::show_toast(window, &format!("Warning: Failed to save preferences: {}", e));
-    }
-}
-
 /// Show about dialog with app information
 pub fn show_about_dialog(window: &adw::ApplicationWindow) {
     let dialog = adw::Window::new();

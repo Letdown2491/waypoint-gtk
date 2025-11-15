@@ -1,154 +1,22 @@
 #!/bin/sh
 # Waypoint Scheduler - Runit Service
-# Automatically creates snapshots based on configured schedule
+# Calls Rust-based scheduler binary for multi-schedule support
 
 exec 2>&1
 
-CONFIG="/etc/waypoint/scheduler.conf"
-
-# Load configuration
-if [ -f "$CONFIG" ]; then
-    # shellcheck source=/dev/null
-    . "$CONFIG"
-else
-    echo "WARNING: Configuration not found at $CONFIG, using defaults"
-    SCHEDULE_FREQUENCY="daily"
-    SCHEDULE_TIME="02:00"
-    SNAPSHOT_PREFIX="auto"
-    SNAPSHOT_DESCRIPTION="Automated snapshot"
+# Check if waypoint-scheduler binary is available
+if ! command -v waypoint-scheduler >/dev/null 2>&1; then
+    echo "ERROR: waypoint-scheduler not found in PATH"
+    echo "Please install waypoint before running this service"
+    exit 1
 fi
 
-# Validate waypoint-cli is available
+# Check if waypoint-cli is available (used by scheduler)
 if ! command -v waypoint-cli >/dev/null 2>&1; then
     echo "ERROR: waypoint-cli not found in PATH"
     echo "Please install waypoint before running this service"
     exit 1
 fi
 
-# Calculate sleep interval based on frequency and current time
-calculate_sleep() {
-    case "$SCHEDULE_FREQUENCY" in
-        hourly)
-            echo 3600
-            ;;
-        daily)
-            # Calculate seconds until next occurrence of SCHEDULE_TIME
-            current_epoch=$(date +%s)
-            current_hour=$(date +%H)
-            current_min=$(date +%M)
-            current_sec=$(date +%S)
-
-            target_hour=$(echo "$SCHEDULE_TIME" | cut -d: -f1)
-            target_min=$(echo "$SCHEDULE_TIME" | cut -d: -f2)
-
-            # Remove leading zeros to avoid octal interpretation
-            target_hour=$(echo "$target_hour" | sed 's/^0*//')
-            target_min=$(echo "$target_min" | sed 's/^0*//')
-            current_hour=$(echo "$current_hour" | sed 's/^0*//')
-            current_min=$(echo "$current_min" | sed 's/^0*//')
-
-            # Default to 0 if empty after removing zeros
-            target_hour=${target_hour:-0}
-            target_min=${target_min:-0}
-            current_hour=${current_hour:-0}
-            current_min=${current_min:-0}
-
-            current_secs=$((current_hour * 3600 + current_min * 60 + current_sec))
-            target_secs=$((target_hour * 3600 + target_min * 60))
-
-            if [ $current_secs -lt $target_secs ]; then
-                # Target time is later today
-                echo $((target_secs - current_secs))
-            else
-                # Target time is tomorrow
-                echo $((86400 - current_secs + target_secs))
-            fi
-            ;;
-        weekly)
-            # Calculate seconds until next occurrence of SCHEDULE_DAY at SCHEDULE_TIME
-            current_day=$(date +%w)
-            target_day=${SCHEDULE_DAY:-0}
-
-            days_until=$((target_day - current_day))
-            if [ $days_until -le 0 ]; then
-                days_until=$((days_until + 7))
-            fi
-
-            # Calculate time component (reuse daily logic)
-            current_hour=$(date +%H | sed 's/^0*//')
-            current_min=$(date +%M | sed 's/^0*//')
-            current_sec=$(date +%S | sed 's/^0*//')
-            target_hour=$(echo "$SCHEDULE_TIME" | cut -d: -f1 | sed 's/^0*//')
-            target_min=$(echo "$SCHEDULE_TIME" | cut -d: -f2 | sed 's/^0*//')
-
-            current_hour=${current_hour:-0}
-            current_min=${current_min:-0}
-            target_hour=${target_hour:-0}
-            target_min=${target_min:-0}
-
-            current_secs=$((current_hour * 3600 + current_min * 60 + current_sec))
-            target_secs=$((target_hour * 3600 + target_min * 60))
-
-            if [ $days_until -eq 0 ] && [ $current_secs -ge $target_secs ]; then
-                # Same day but time passed, wait until next week
-                days_until=7
-            fi
-
-            echo $((days_until * 86400 + target_secs - current_secs))
-            ;;
-        custom)
-            echo "${SCHEDULE_INTERVAL:-86400}"
-            ;;
-        *)
-            echo "ERROR: Invalid SCHEDULE_FREQUENCY: $SCHEDULE_FREQUENCY"
-            echo "Valid options: hourly, daily, weekly, custom"
-            echo 86400  # Default to daily
-            ;;
-    esac
-}
-
-# Format seconds into human-readable duration
-format_duration() {
-    secs=$1
-    if [ $secs -lt 60 ]; then
-        echo "${secs}s"
-    elif [ $secs -lt 3600 ]; then
-        echo "$((secs / 60))m $((secs % 60))s"
-    elif [ $secs -lt 86400 ]; then
-        echo "$((secs / 3600))h $((secs % 3600 / 60))m"
-    else
-        echo "$((secs / 86400))d $((secs % 86400 / 3600))h"
-    fi
-}
-
-echo "================================================"
-echo "Waypoint Scheduler Service Starting"
-echo "================================================"
-echo "Configuration: $CONFIG"
-echo "Frequency: $SCHEDULE_FREQUENCY"
-[ "$SCHEDULE_FREQUENCY" = "daily" ] && echo "Time: $SCHEDULE_TIME"
-[ "$SCHEDULE_FREQUENCY" = "weekly" ] && echo "Day: $SCHEDULE_DAY (0=Sun) at $SCHEDULE_TIME"
-[ "$SCHEDULE_FREQUENCY" = "custom" ] && echo "Interval: ${SCHEDULE_INTERVAL}s"
-echo "Snapshot prefix: $SNAPSHOT_PREFIX"
-echo "================================================"
-
-# Main loop
-while true; do
-    sleep_time=$(calculate_sleep)
-    sleep_formatted=$(format_duration "$sleep_time")
-
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Next snapshot in $sleep_formatted ($sleep_time seconds)"
-
-    sleep "$sleep_time"
-
-    # Create snapshot
-    snapshot_name="${SNAPSHOT_PREFIX}-$(date +%Y%m%d-%H%M)"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Creating scheduled snapshot: $snapshot_name"
-
-    if waypoint-cli create "$snapshot_name" "$SNAPSHOT_DESCRIPTION" 2>&1; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✓ Snapshot created successfully: $snapshot_name"
-    else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✗ Failed to create snapshot: $snapshot_name"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Will retry at next scheduled time"
-    fi
-done
+# Run the Rust scheduler
+exec waypoint-scheduler

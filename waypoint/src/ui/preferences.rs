@@ -8,49 +8,39 @@ use std::cell::RefCell;
 
 use crate::subvolume::{detect_mounted_subvolumes, SubvolumeInfo};
 
-/// Configuration for subvolume snapshots
-#[derive(Clone)]
-pub struct SubvolumePreferences {
-    enabled_subvolumes: Rc<RefCell<Vec<PathBuf>>>,
+// Global state for current subvolume selection (used across dialogs)
+thread_local! {
+    static CURRENT_SUBVOLUMES: RefCell<Option<Rc<RefCell<Vec<PathBuf>>>>> = RefCell::new(None);
 }
 
-impl SubvolumePreferences {
-    pub fn new(enabled: Vec<PathBuf>) -> Self {
-        Self {
-            enabled_subvolumes: Rc::new(RefCell::new(enabled)),
-        }
-    }
-
-    pub fn get_enabled(&self) -> Vec<PathBuf> {
-        self.enabled_subvolumes.borrow().clone()
-    }
-
-    #[allow(dead_code)]
-    fn set_enabled(&self, enabled: Vec<PathBuf>) {
-        *self.enabled_subvolumes.borrow_mut() = enabled;
-    }
+/// Get the current subvolume selection
+pub fn get_current_subvolume_selection() -> Vec<PathBuf> {
+    CURRENT_SUBVOLUMES.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|rc| rc.borrow().clone())
+            .unwrap_or_else(load_config)
+    })
 }
 
-/// Show preferences dialog for selecting which subvolumes to snapshot
-pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: Vec<PathBuf>) -> SubvolumePreferences {
-    let prefs = SubvolumePreferences::new(current_config.clone());
-    let prefs_clone = prefs.clone();
+/// Create the subvolumes preferences page
+pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPage {
+    let current_config = load_config();
 
-    // Create preferences window
-    let dialog = adw::PreferencesWindow::new();
-    dialog.set_title(Some("Snapshot Preferences"));
-    dialog.set_modal(true);
-    dialog.set_transient_for(Some(parent));
-    dialog.set_default_size(480, 450);
+    // Store current selection in global state
+    let enabled_subvolumes = Rc::new(RefCell::new(current_config.clone()));
+    CURRENT_SUBVOLUMES.with(|cell| {
+        *cell.borrow_mut() = Some(enabled_subvolumes.clone());
+    });
 
     // Create preferences page
     let page = adw::PreferencesPage::new();
-    page.set_title("Subvolumes");
+    page.set_title("Snapshot Targets");
     page.set_icon_name(Some("drive-harddisk-symbolic"));
 
     // Create group for subvolume selection
     let group = adw::PreferencesGroup::new();
-    group.set_title("Subvolumes to Snapshot");
+    group.set_title("Snapshot Targets");
     group.set_description(Some(
         "Select which Btrfs subvolumes should be included when creating restore points. \
          The root filesystem (/) is always required."
@@ -74,6 +64,11 @@ pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: 
         let checkboxes: Vec<(SubvolumeInfo, CheckButton)> = subvolumes
             .into_iter()
             .filter_map(|subvol| {
+                // Filter out @snapshots and @swap - these should never be snapshotted
+                if subvol.subvol_path == "/@snapshots" || subvol.subvol_path == "/@swap" {
+                    return None;
+                }
+
                 let checkbox_row = create_subvolume_row(&subvol, &current_config);
                 let checkbox = checkbox_row.activatable_widget()
                     .and_then(|w| w.downcast::<CheckButton>().ok())?;
@@ -85,11 +80,12 @@ pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: 
 
         // Update preferences when checkboxes change
         for (subvol, checkbox) in checkboxes {
-            let prefs_clone2 = prefs_clone.clone();
+            let enabled_clone = enabled_subvolumes.clone();
             let mount_point = subvol.mount_point.clone();
+            let parent_clone = parent.clone();
 
             checkbox.connect_toggled(move |cb| {
-                let mut enabled = prefs_clone2.enabled_subvolumes.borrow().clone();
+                let mut enabled = enabled_clone.borrow().clone();
 
                 if cb.is_active() {
                     if !enabled.contains(&mount_point) {
@@ -99,18 +95,26 @@ pub fn show_preferences_dialog(parent: &adw::ApplicationWindow, current_config: 
                     enabled.retain(|p| p != &mount_point);
                 }
 
-                *prefs_clone2.enabled_subvolumes.borrow_mut() = enabled;
+                *enabled_clone.borrow_mut() = enabled.clone();
+
+                // Auto-save configuration
+                if let Err(e) = save_config(&enabled) {
+                    log::error!("Failed to save subvolume preferences: {}", e);
+                    super::dialogs::show_error(
+                        &parent_clone,
+                        "Save Failed",
+                        &format!("Failed to save snapshot target preferences: {}", e),
+                    );
+                } else {
+                    log::info!("Saved subvolume preferences: {:?}", enabled);
+                    super::dialogs::show_toast(&parent_clone, "Snapshot targets updated");
+                }
             });
         }
     }
 
     page.add(&group);
-    dialog.add(&page);
-
-    // Show dialog
-    dialog.present();
-
-    prefs
+    page
 }
 
 /// Create a row for a subvolume checkbox
@@ -135,12 +139,6 @@ fn create_subvolume_row(subvol: &SubvolumeInfo, current_config: &[PathBuf]) -> a
         checkbox.set_active(true);
         checkbox.set_sensitive(false);
         row.set_subtitle("Subvolume: @ (Required)");
-    }
-
-    // Disable @snapshots and @swap - these should not be snapshotted
-    if subvol.subvol_path == "@snapshots" || subvol.subvol_path == "@swap" {
-        checkbox.set_active(false);
-        checkbox.set_sensitive(false);
     }
 
     row.add_suffix(&checkbox);

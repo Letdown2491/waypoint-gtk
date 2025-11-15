@@ -17,12 +17,17 @@ For Void Linux users, Waypoint integration is available on [Nebula](https://gith
 
 - One-click system rollback with automatic backup creation
 - Rollback preview showing package changes before restoring
+- Snapshot integrity verification via D-Bus
 - Multi-subvolume support (/, /home, /var, etc.)
 - Package state tracking with XBPS integration
+- Package diff viewer with side-by-side comparison
+- Per-user snapshot notes and favorites
+- Search and filter with date ranges
+- Browse snapshots in file manager
 - Scheduled snapshots via runit service
 - Retention policies for automatic cleanup
 - Desktop notifications for snapshot events
-- Command-line interface for those that prefer it.
+- Command-line interface for scripting
 
 ## Requirements
 
@@ -49,7 +54,7 @@ The optimized binaries are written to `target/release/`. Use `cargo run --releas
 ## System Install
 
 ```sh
-sudo ./setup.sh install
+./setup.sh install
 ```
 
 The helper script builds the release binaries, installs them into `/usr/bin`, registers the desktop entry, D-Bus service, and Polkit policies. Use `sudo ./setup.sh uninstall` to remove those assets.
@@ -70,6 +75,9 @@ waypoint-cli restore "snapshot-name"
 
 # Delete a snapshot
 waypoint-cli delete "snapshot-name"
+
+# Apply retention policy cleanup
+waypoint-cli cleanup
 ```
 
 ## Scheduler Service

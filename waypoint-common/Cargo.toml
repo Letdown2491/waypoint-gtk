@@ -15,4 +15,8 @@ path = "src/lib.rs"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 chrono.workspace = true
+
+# Other dependencies
+dirs = "5.0"

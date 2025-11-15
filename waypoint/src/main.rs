@@ -2,11 +2,12 @@ mod btrfs;
 mod cache;
 mod dbus_client;
 mod packages;
-mod retention;
+mod performance;
 mod signal_listener;
 mod snapshot;
 mod subvolume;
 mod ui;
+mod user_preferences;
 
 use gtk::prelude::*;
 use gtk::{glib, Application};
@@ -15,6 +16,9 @@ const APP_ID: &str = "tech.geektoshi.waypoint";
 
 fn main() -> glib::ExitCode {
     // Initialize logging
+    // To enable performance profiling, set RUST_LOG=debug:
+    //   RUST_LOG=debug cargo run
+    // Performance statistics will be logged after each snapshot list refresh
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     log::info!("Starting Waypoint v{}", env!("CARGO_PKG_VERSION"));
 

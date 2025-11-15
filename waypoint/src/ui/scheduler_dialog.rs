@@ -5,34 +5,20 @@ use libadwaita as adw;
 use adw::prelude::*;
 use super::dialogs;
 
-/// Show the scheduler configuration dialog
-pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
-    let dialog = adw::Window::new();
-    dialog.set_transient_for(Some(parent));
-    dialog.set_modal(true);
-    dialog.set_title(Some("Scheduled Snapshots"));
-    dialog.set_default_size(550, 600);
+/// Create scheduler content box (for embedding in preferences or standalone dialog)
+///
+/// If `lazy_load` is true, status updates won't be fetched immediately (useful for preferences tabs)
+pub fn create_scheduler_content(parent: &adw::ApplicationWindow) -> Box {
+    create_scheduler_content_with_options(parent, false)
+}
 
-    // Main container
-    let main_box = Box::new(Orientation::Vertical, 0);
+/// Create scheduler content with lazy loading option
+pub fn create_scheduler_content_lazy(parent: &adw::ApplicationWindow) -> Box {
+    create_scheduler_content_with_options(parent, true)
+}
 
-    // Header bar
-    let header = adw::HeaderBar::new();
-    main_box.append(&header);
-
-    // Scrolled window for content
-    let scrolled = gtk::ScrolledWindow::new();
-    scrolled.set_vexpand(true);
-    scrolled.set_hexpand(true);
-    main_box.append(&scrolled);
-
-    // Content box
+fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_load: bool) -> Box {
     let content_box = Box::new(Orientation::Vertical, 24);
-    content_box.set_margin_top(24);
-    content_box.set_margin_bottom(24);
-    content_box.set_margin_start(24);
-    content_box.set_margin_end(24);
-    scrolled.set_child(Some(&content_box));
 
     // Service status group
     let status_group = adw::PreferencesGroup::new();
@@ -41,11 +27,29 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
 
     let status_row = adw::ActionRow::new();
     status_row.set_title("Scheduler Service");
-    let status_label = Label::new(Some("Checking..."));
+    let status_label = Label::new(Some(if lazy_load { "Not loaded" } else { "Checking..." }));
     status_label.add_css_class("dim-label");
     status_label.set_valign(gtk::Align::Center);
     status_row.add_suffix(&status_label);
     status_group.add(&status_row);
+
+    // Last snapshot row
+    let last_snapshot_row = adw::ActionRow::new();
+    last_snapshot_row.set_title("Last Snapshot");
+    let last_snapshot_label = Label::new(Some(if lazy_load { "Not loaded" } else { "Checking..." }));
+    last_snapshot_label.add_css_class("dim-label");
+    last_snapshot_label.set_valign(gtk::Align::Center);
+    last_snapshot_row.add_suffix(&last_snapshot_label);
+    status_group.add(&last_snapshot_row);
+
+    // Next snapshot row
+    let next_snapshot_row = adw::ActionRow::new();
+    next_snapshot_row.set_title("Next Snapshot");
+    let next_snapshot_label = Label::new(Some("Calculating..."));
+    next_snapshot_label.add_css_class("dim-label");
+    next_snapshot_label.set_valign(gtk::Align::Center);
+    next_snapshot_row.add_suffix(&next_snapshot_label);
+    status_group.add(&next_snapshot_row);
 
     // Load current config
     let (frequency, time, day, prefix) = load_scheduler_config();
@@ -139,28 +143,13 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
     time_row.set_visible(initial_freq == 1 || initial_freq == 2);
     day_row.set_visible(initial_freq == 2);
 
-    // Next snapshot preview
-    let preview_group = adw::PreferencesGroup::new();
-    preview_group.set_title("Schedule Preview");
-    content_box.append(&preview_group);
-
-    let preview_label = Label::new(Some("Calculating next snapshot time..."));
-    preview_label.set_wrap(true);
-    preview_label.set_halign(gtk::Align::Start);
-    preview_label.add_css_class("title-4");
-    preview_label.set_margin_top(12);
-    preview_label.set_margin_bottom(12);
-    preview_label.set_margin_start(12);
-    preview_label.set_margin_end(12);
-    preview_group.add(&preview_label);
-
-    // Function to update preview
-    let update_preview = {
+    // Function to update next snapshot preview
+    let update_next_snapshot = {
         let freq_dropdown = freq_dropdown.clone();
         let hour_spin = hour_spin.clone();
         let minute_spin = minute_spin.clone();
         let day_dropdown = day_dropdown.clone();
-        let preview_label = preview_label.clone();
+        let next_label = next_snapshot_label.clone();
 
         move || {
             let freq_selected = freq_dropdown.selected();
@@ -169,50 +158,41 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
             let day_val = day_dropdown.selected();
 
             let next_time = calculate_next_snapshot_time(freq_selected, hour_val, minute_val, day_val);
-            preview_label.set_text(&next_time);
+            next_label.set_text(&next_time);
         }
     };
 
-    // Initial preview
-    update_preview();
+    // Initial calculation
+    update_next_snapshot();
 
-    // Update preview when values change
-    let update_preview_clone1 = update_preview.clone();
-    freq_dropdown.connect_selected_notify(move |_| update_preview_clone1());
+    // Update when values change
+    let update_clone1 = update_next_snapshot.clone();
+    freq_dropdown.connect_selected_notify(move |_| update_clone1());
 
-    let update_preview_clone2 = update_preview.clone();
-    hour_spin.connect_value_changed(move |_| update_preview_clone2());
+    let update_clone2 = update_next_snapshot.clone();
+    hour_spin.connect_value_changed(move |_| update_clone2());
 
-    let update_preview_clone3 = update_preview.clone();
-    minute_spin.connect_value_changed(move |_| update_preview_clone3());
+    let update_clone3 = update_next_snapshot.clone();
+    minute_spin.connect_value_changed(move |_| update_clone3());
 
-    let update_preview_clone4 = update_preview.clone();
-    day_dropdown.connect_selected_notify(move |_| update_preview_clone4());
+    let update_clone4 = update_next_snapshot.clone();
+    day_dropdown.connect_selected_notify(move |_| update_clone4());
 
-    // Button box at bottom
+    // Save button at bottom (standalone, right-aligned)
     let button_box = Box::new(Orientation::Horizontal, 12);
-    button_box.set_margin_top(12);
+    button_box.set_margin_top(24);
     button_box.set_margin_bottom(12);
     button_box.set_margin_start(12);
     button_box.set_margin_end(12);
     button_box.set_halign(gtk::Align::End);
-    main_box.append(&button_box);
-
-    let cancel_btn = Button::with_label("Cancel");
-    button_box.append(&cancel_btn);
 
     let save_btn = Button::with_label("Save & Restart Service");
     save_btn.add_css_class("suggested-action");
     button_box.append(&save_btn);
 
-    // Cancel button handler
-    let dialog_for_cancel = dialog.clone();
-    cancel_btn.connect_clicked(move |_| {
-        dialog_for_cancel.close();
-    });
+    content_box.append(&button_box);
 
     // Save button handler
-    let dialog_for_save = dialog.clone();
     let parent_for_save = parent.clone();
     let freq_dropdown_for_save = freq_dropdown_clone.clone();
     let hour_spin_for_save = hour_spin.clone();
@@ -221,163 +201,77 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
     let prefix_entry_for_save = prefix_entry.clone();
 
     save_btn.connect_clicked(move |_| {
-        let freq_dropdown_clone = freq_dropdown_for_save.clone();
-        let hour_spin = hour_spin_for_save.clone();
-        let minute_spin = minute_spin_for_save.clone();
-        let day_dropdown = day_dropdown_for_save.clone();
-        let prefix_entry = prefix_entry_for_save.clone();
-        let dialog_for_save = dialog_for_save.clone();
-        let parent_for_save = parent_for_save.clone();
-        let freq_selected = freq_dropdown_clone.selected();
-        let frequency = match freq_selected {
-            0 => "hourly",
-            1 => "daily",
-            2 => "weekly",
-            3 => "custom",
-            _ => "daily",
-        };
-
-        let hour_val = hour_spin.value() as u32;
-        let minute_val = minute_spin.value() as u32;
-        let time_str = format!("{:02}:{:02}", hour_val, minute_val);
-
-        let day_val = day_dropdown.selected();
-
-        let prefix_str = prefix_entry.text().to_string();
-        let prefix_str = if prefix_str.is_empty() { "auto".to_string() } else { prefix_str };
-
-        // Build config file content
-        let config_content = format!(
-            "# Waypoint Snapshot Scheduler Configuration\n\
-             \n\
-             SCHEDULE_FREQUENCY=\"{}\"\n\
-             SCHEDULE_TIME=\"{}\"\n\
-             SCHEDULE_DAY=\"{}\"\n\
-             SCHEDULE_INTERVAL=\"86400\"\n\
-             SNAPSHOT_PREFIX=\"{}\"\n\
-             SNAPSHOT_DESCRIPTION=\"Automated snapshot\"\n",
-            frequency, time_str, day_val, prefix_str
+        save_scheduler_config(
+            &parent_for_save,
+            &freq_dropdown_for_save,
+            &hour_spin_for_save,
+            &minute_spin_for_save,
+            &day_dropdown_for_save,
+            &prefix_entry_for_save,
         );
-
-        // Save configuration via D-Bus (run in thread to avoid blocking UI)
-        let dialog_for_error = dialog_for_save.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        std::thread::spawn(move || {
-            let result = (|| -> anyhow::Result<()> {
-                let client = WaypointHelperClient::new()?;
-                let (success, message) = client.update_scheduler_config(config_content)?;
-                if !success {
-                    return Err(anyhow::anyhow!(message));
-                }
-
-                // Restart service
-                let (success, message) = client.restart_scheduler()?;
-                if !success {
-                    return Err(anyhow::anyhow!(message));
-                }
-
-                Ok(())
-            })();
-
-            let _ = tx.send(result);
-        });
-
-        // Handle result on main thread
-        glib::spawn_future_local(async move {
-            loop {
-                match rx.try_recv() {
-                    Ok(result) => {
-                        match result {
-                            Ok(_) => {
-                                // Show success toast
-                                if let Some(window) = parent_for_save.downcast_ref::<adw::ApplicationWindow>() {
-                                    dialogs::show_toast(window, "Scheduler updated and restarted successfully");
-                                }
-
-                                dialog_for_save.close();
-                            }
-                            Err(e) => {
-                                log::error!("Failed to save scheduler configuration: {}", e);
-                                let error_dialog = adw::MessageDialog::new(
-                                    Some(&dialog_for_error),
-                                    Some("Save Failed"),
-                                    Some(&format!("Failed to save scheduler configuration: {}", e))
-                                );
-                                error_dialog.add_response("ok", "OK");
-                                error_dialog.set_default_response(Some("ok"));
-                                error_dialog.present();
-                            }
-                        }
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        glib::timeout_future(std::time::Duration::from_millis(50)).await;
-                        continue;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        log::error!("Channel disconnected");
-                        break;
-                    }
-                }
-            }
-        });
     });
 
-    // Update status in thread to avoid blocking UI
-    let status_label_clone = status_label.clone();
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    std::thread::spawn(move || {
-        let result = WaypointHelperClient::new()
-            .and_then(|client| client.get_scheduler_status());
-        let _ = tx.send(result);
-    });
-
-    glib::spawn_future_local(async move {
-        loop {
-            match rx.try_recv() {
-                Ok(result) => {
-                    match result {
-                        Ok(status) => {
-                            match status.as_str() {
-                                "running" => {
-                                    status_label_clone.set_text("● Running");
-                                    status_label_clone.add_css_class("success");
-                                }
-                                "stopped" => {
-                                    status_label_clone.set_text("○ Stopped");
-                                    status_label_clone.add_css_class("warning");
-                                }
-                                "disabled" => {
-                                    status_label_clone.set_text("○ Disabled");
-                                    status_label_clone.add_css_class("dim-label");
-                                }
-                                _ => {
-                                    status_label_clone.set_text("○ Unknown");
-                                    status_label_clone.add_css_class("dim-label");
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            status_label_clone.set_text("✗ Error");
-                            status_label_clone.add_css_class("error");
-                        }
-                    }
-                    break;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    glib::timeout_future(std::time::Duration::from_millis(50)).await;
-                    continue;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    status_label_clone.set_text("✗ Error");
-                    status_label_clone.add_css_class("error");
-                    break;
-                }
-            }
+    // Update status in thread to avoid blocking UI (only if not lazy loading)
+    if !lazy_load {
+        update_service_status(&status_label);
+        update_last_snapshot(&last_snapshot_label);
+    } else {
+        // Store labels in content_box data for later lazy loading
+        // We'll use object data to store the labels
+        unsafe {
+            content_box.set_data("status_label", status_label.clone());
+            content_box.set_data("last_snapshot_label", last_snapshot_label.clone());
         }
-    });
+    }
+
+    content_box
+}
+
+/// Load the status data for a lazily-created scheduler content box
+pub fn load_scheduler_status(content_box: &Box) {
+    unsafe {
+        if let Some(status_label) = content_box.data::<Label>("status_label") {
+            let status_label_ref = status_label.as_ref();
+            status_label_ref.set_text("Checking...");
+            update_service_status(status_label_ref);
+        }
+        if let Some(last_snapshot_label) = content_box.data::<Label>("last_snapshot_label") {
+            let last_snapshot_label_ref = last_snapshot_label.as_ref();
+            last_snapshot_label_ref.set_text("Checking...");
+            update_last_snapshot(last_snapshot_label_ref);
+        }
+    }
+}
+
+/// Show the scheduler configuration dialog
+#[allow(dead_code)]
+pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
+    let dialog = adw::Window::new();
+    dialog.set_transient_for(Some(parent));
+    dialog.set_modal(true);
+    dialog.set_title(Some("Scheduled Snapshots"));
+    dialog.set_default_size(550, 700);
+
+    // Main container
+    let main_box = Box::new(Orientation::Vertical, 0);
+
+    // Header bar
+    let header = adw::HeaderBar::new();
+    main_box.append(&header);
+
+    // Scrolled window for content
+    let scrolled = gtk::ScrolledWindow::new();
+    scrolled.set_vexpand(true);
+    scrolled.set_hexpand(true);
+    main_box.append(&scrolled);
+
+    // Use the shared content creation function
+    let content_box = create_scheduler_content(parent);
+    content_box.set_margin_top(24);
+    content_box.set_margin_bottom(24);
+    content_box.set_margin_start(24);
+    content_box.set_margin_end(24);
+    scrolled.set_child(Some(&content_box));
 
     dialog.set_content(Some(&main_box));
     dialog.present();
@@ -418,6 +312,92 @@ fn load_scheduler_config() -> (String, String, String, String) {
     }
 }
 
+/// Save scheduler configuration
+fn save_scheduler_config(
+    parent: &adw::ApplicationWindow,
+    freq_dropdown: &gtk::DropDown,
+    hour_spin: &SpinButton,
+    minute_spin: &SpinButton,
+    day_dropdown: &gtk::DropDown,
+    prefix_entry: &gtk::Entry,
+) {
+    let freq_selected = freq_dropdown.selected();
+    let frequency = match freq_selected {
+        0 => "hourly",
+        1 => "daily",
+        2 => "weekly",
+        3 => "custom",
+        _ => "daily",
+    };
+
+    let hour_val = hour_spin.value() as u32;
+    let minute_val = minute_spin.value() as u32;
+    let time_str = format!("{:02}:{:02}", hour_val, minute_val);
+
+    let day_val = day_dropdown.selected();
+
+    let prefix_str = prefix_entry.text().to_string();
+    let prefix_str = if prefix_str.is_empty() { "auto".to_string() } else { prefix_str };
+
+    // Build config file content
+    let config_content = format!(
+        "# Waypoint Snapshot Scheduler Configuration\n\
+         \n\
+         SCHEDULE_FREQUENCY=\"{}\"\n\
+         SCHEDULE_TIME=\"{}\"\n\
+         SCHEDULE_DAY=\"{}\"\n\
+         SCHEDULE_INTERVAL=\"86400\"\n\
+         SNAPSHOT_PREFIX=\"{}\"\n\
+         SNAPSHOT_DESCRIPTION=\"Automated snapshot\"\n",
+        frequency, time_str, day_val, prefix_str
+    );
+
+    // Save configuration via D-Bus (run in thread to avoid blocking UI)
+    let parent_clone = parent.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let result = (|| -> anyhow::Result<()> {
+            let client = WaypointHelperClient::new()?;
+            let (success, message) = client.save_schedules_config(config_content)?;
+            if !success {
+                return Err(anyhow::anyhow!(message));
+            }
+
+            // Restart service
+            let (success, message) = client.restart_scheduler()?;
+            if !success {
+                return Err(anyhow::anyhow!(message));
+            }
+
+            Ok(())
+        })();
+
+        let _ = tx.send(result);
+    });
+
+    // Wait for result in main thread
+    gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        if let Ok(result) = rx.try_recv() {
+            match result {
+                Ok(_) => {
+                    dialogs::show_toast(&parent_clone, "Scheduler configuration saved and service restarted");
+                }
+                Err(e) => {
+                    dialogs::show_error(
+                        &parent_clone,
+                        "Save Failed",
+                        &format!("Failed to save scheduler configuration: {}", e),
+                    );
+                }
+            }
+            gtk::glib::ControlFlow::Break
+        } else {
+            gtk::glib::ControlFlow::Continue
+        }
+    });
+}
+
 /// Calculate when the next snapshot will be created based on the schedule
 fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_week: u32) -> String {
     use chrono::{Local, Datelike, Timelike, Duration};
@@ -428,7 +408,7 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
         0 => {
             // Hourly
             let next = now + Duration::hours(1);
-            format!("📅 Next snapshot: {} at {:02}:{:02} (in about 1 hour)",
+            format!("{} at {:02}:{:02} (in about 1 hour)",
                     next.format("%A, %B %d"),
                     next.hour(),
                     next.minute())
@@ -452,13 +432,13 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
             let minutes_until = time_until.num_minutes();
 
             if minutes_until < 60 {
-                format!("📅 Next snapshot: Today at {:02}:{:02} (in {} minutes)",
+                format!("Today at {:02}:{:02} (in {} minutes)",
                         hour, minute, minutes_until)
             } else if hours_until < 24 {
-                format!("📅 Next snapshot: Today at {:02}:{:02} (in {} hours)",
+                format!("Today at {:02}:{:02} (in {} hours)",
                         hour, minute, hours_until)
             } else {
-                format!("📅 Next snapshot: Tomorrow at {:02}:{:02}",
+                format!("Tomorrow at {:02}:{:02}",
                         hour, minute)
             }
         }
@@ -492,26 +472,97 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
                 let minutes_until = time_until.num_minutes();
 
                 if minutes_until < 60 {
-                    format!("📅 Next snapshot: Today ({}) at {:02}:{:02} (in {} minutes)",
+                    format!("Today ({}) at {:02}:{:02} (in {} minutes)",
                             day_name, hour, minute, minutes_until)
                 } else {
-                    format!("📅 Next snapshot: Today ({}) at {:02}:{:02} (in {} hours)",
+                    format!("Today ({}) at {:02}:{:02} (in {} hours)",
                             day_name, hour, minute, hours_until)
                 }
             } else if days_until == 1 {
-                format!("📅 Next snapshot: Tomorrow ({}) at {:02}:{:02}",
+                format!("Tomorrow ({}) at {:02}:{:02}",
                         day_name, hour, minute)
             } else {
-                format!("📅 Next snapshot: {} at {:02}:{:02} (in {} days)",
+                format!("{} at {:02}:{:02} (in {} days)",
                         day_name, hour, minute, days_until)
             }
         }
         3 => {
             // Custom
-            "📅 Custom schedule - refer to configuration file".to_string()
+            "Custom schedule - refer to configuration file".to_string()
         }
         _ => {
-            "📅 Unknown schedule".to_string()
+            "Unknown schedule".to_string()
         }
     }
+}
+
+/// Update the service status label
+fn update_service_status(status_label: &Label) {
+    let status_label_clone = status_label.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let status_text = match WaypointHelperClient::new() {
+            Ok(client) => {
+                match client.get_scheduler_status() {
+                    Ok(message) => message,
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            Err(_) => "Cannot connect to helper service".to_string(),
+        };
+
+        let _ = tx.send(status_text);
+    });
+
+    // Update UI from main thread
+    gtk::glib::idle_add_local_once(move || {
+        if let Ok(status_text) = rx.recv() {
+            status_label_clone.set_text(&status_text);
+        }
+    });
+}
+
+/// Update the last snapshot label
+fn update_last_snapshot(last_snapshot_label: &Label) {
+    let label_clone = last_snapshot_label.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let text = match WaypointHelperClient::new() {
+            Ok(client) => {
+                match client.list_snapshots() {
+                    Ok(snapshots) => {
+                        if let Some(latest) = snapshots.iter().max_by_key(|s| s.timestamp) {
+                            let now = chrono::Utc::now();
+                            let duration = now.signed_duration_since(latest.timestamp);
+
+                            if duration.num_days() > 0 {
+                                format!("{} days ago", duration.num_days())
+                            } else if duration.num_hours() > 0 {
+                                format!("{} hours ago", duration.num_hours())
+                            } else if duration.num_minutes() > 0 {
+                                format!("{} minutes ago", duration.num_minutes())
+                            } else {
+                                "Just now".to_string()
+                            }
+                        } else {
+                            "No snapshots yet".to_string()
+                        }
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            Err(_) => "Cannot connect to helper service".to_string(),
+        };
+
+        let _ = tx.send(text);
+    });
+
+    // Update UI from main thread
+    gtk::glib::idle_add_local_once(move || {
+        if let Ok(text) = rx.recv() {
+            label_clone.set_text(&text);
+        }
+    });
 }

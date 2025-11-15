@@ -11,6 +11,7 @@ use std::path::PathBuf;
 /// # Security
 /// Only allows paths within known snapshot directories to prevent opening
 /// arbitrary files or directories that could be malicious.
+#[allow(dead_code)]
 pub fn validate_path_for_open(path: &std::path::Path) -> Result<(), String> {
     // Canonicalize the path to resolve symlinks and get absolute path
     let canonical = match path.canonicalize() {

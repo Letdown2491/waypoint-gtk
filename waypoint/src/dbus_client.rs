@@ -378,28 +378,28 @@ impl WaypointHelperClient {
         Ok(result)
     }
 
-    /// Update the snapshot scheduler configuration
+    /// Save schedules TOML configuration file
     ///
-    /// Writes new configuration to the scheduler config file, which controls
-    /// automatic snapshot creation schedules.
+    /// Writes the schedules configuration in TOML format to the system config directory.
+    /// This requires elevated privileges.
     ///
     /// # Arguments
-    /// * `config_content` - Complete scheduler configuration as JSON string
+    /// * `toml_content` - Complete schedules configuration in TOML format
     ///
     /// # Returns
-    /// * `Ok((true, msg))` - Configuration updated successfully
-    /// * `Ok((false, msg))` - Update failed, `msg` contains error details
+    /// * `Ok((true, msg))` - Configuration saved successfully
+    /// * `Ok((false, msg))` - Save failed, `msg` contains error details
     /// * `Err(_)` - D-Bus communication error
     ///
     /// # Errors
     /// - D-Bus connection failure
     /// - Polkit authorization denied
-    /// - Invalid JSON configuration
+    /// - Invalid TOML configuration
     /// - File write permission error
     ///
     /// # Security
     /// Requires root privileges via Polkit authentication.
-    pub fn update_scheduler_config(&self, config_content: String) -> Result<(bool, String)> {
+    pub fn save_schedules_config(&self, toml_content: String) -> Result<(bool, String)> {
         let proxy = zbus::blocking::Proxy::new(
             &self.connection,
             DBUS_SERVICE_NAME,
@@ -408,8 +408,8 @@ impl WaypointHelperClient {
         )?;
 
         let result: (bool, String) = proxy
-            .call("UpdateSchedulerConfig", &(config_content,))
-            .context("Failed to call UpdateSchedulerConfig")?;
+            .call("SaveSchedulesConfig", &(toml_content,))
+            .context("Failed to call SaveSchedulesConfig")?;
 
         Ok(result)
     }
@@ -473,5 +473,237 @@ impl WaypointHelperClient {
             .context("Failed to call GetSchedulerStatus")?;
 
         Ok(status)
+    }
+
+    /// Clean up old snapshots based on retention policies
+    ///
+    /// Applies retention policies to delete old snapshots. Can use either
+    /// per-schedule retention (recommended) or legacy global retention.
+    ///
+    /// # Arguments
+    /// * `schedule_based` - If true, use per-schedule retention from schedules.toml.
+    ///                      If false, use legacy global retention policy.
+    ///
+    /// # Returns
+    /// * `Ok((true, msg))` - Cleanup completed successfully
+    /// * `Ok((false, msg))` - Cleanup failed, `msg` contains error details
+    /// * `Err(_)` - D-Bus communication error
+    ///
+    /// # Errors
+    /// - D-Bus connection failure
+    /// - Polkit authorization denied
+    /// - Snapshot deletion failure
+    ///
+    /// # Security
+    /// Requires root privileges via Polkit authentication.
+    ///
+    /// # Recommended Usage
+    /// Always use `schedule_based = true` for per-schedule retention policies.
+    pub fn cleanup_snapshots(&self, schedule_based: bool) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("CleanupSnapshots", &(schedule_based,))
+            .context("Failed to call CleanupSnapshots")?;
+
+        Ok(result)
+    }
+
+    /// Restore files from a snapshot to the filesystem
+    ///
+    /// Restores individual files or directories from a snapshot back to the live system.
+    /// Can restore to original locations or to a custom directory.
+    ///
+    /// # Arguments
+    /// * `snapshot_name` - Name of the snapshot to restore from
+    /// * `file_paths` - Paths within the snapshot to restore (e.g., vec!["/etc/fstab".to_string()])
+    /// * `target_directory` - Where to restore files. Empty string means original locations
+    /// * `overwrite` - Whether to overwrite existing files
+    ///
+    /// # Returns
+    /// * `Ok((true, msg))` - Files restored successfully
+    /// * `Ok((false, msg))` - Restoration failed, `msg` contains error details
+    /// * `Err(_)` - D-Bus communication error
+    ///
+    /// # Errors
+    /// - D-Bus connection failure
+    /// - Polkit authorization denied
+    /// - Snapshot not found
+    /// - File not found in snapshot
+    /// - Permission error during file copy
+    ///
+    /// # Security
+    /// Requires root privileges via Polkit authentication.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use waypoint::dbus_client::WaypointHelperClient;
+    /// let client = WaypointHelperClient::new()?;
+    /// // Restore /etc/fstab to its original location
+    /// let (success, msg) = client.restore_files(
+    ///     "backup-2025".to_string(),
+    ///     vec!["/etc/fstab".to_string()],
+    ///     "".to_string(),  // empty = original location
+    ///     true  // overwrite existing file
+    /// )?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn restore_files(
+        &self,
+        snapshot_name: String,
+        file_paths: Vec<String>,
+        target_directory: String,
+        overwrite: bool,
+    ) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call(
+                "RestoreFiles",
+                &(snapshot_name, file_paths, target_directory, overwrite),
+            )
+            .context("Failed to call RestoreFiles")?;
+
+        Ok(result)
+    }
+
+    /// Compare two snapshots and get list of changed files
+    ///
+    /// Returns JSON string containing array of changes
+    pub fn compare_snapshots(
+        &self,
+        old_snapshot_name: String,
+        new_snapshot_name: String,
+    ) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call(
+                "CompareSnapshots",
+                &(old_snapshot_name, new_snapshot_name),
+            )
+            .context("Failed to call CompareSnapshots")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        Ok(result.1)
+    }
+
+    /// Enable btrfs quotas on the snapshot filesystem
+    pub fn enable_quotas(&self, use_simple: bool) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("EnableQuotas", &(use_simple,))
+            .context("Failed to call EnableQuotas")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        Ok(result.1)
+    }
+
+    /// Disable btrfs quotas on the snapshot filesystem
+    pub fn disable_quotas(&self) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("DisableQuotas", &())
+            .context("Failed to call DisableQuotas")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        Ok(result.1)
+    }
+
+    /// Get quota usage information
+    pub fn get_quota_usage(&self) -> Result<waypoint_common::QuotaUsage> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("GetQuotaUsage", &())
+            .context("Failed to call GetQuotaUsage")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        let usage: waypoint_common::QuotaUsage = serde_json::from_str(&result.1)?;
+        Ok(usage)
+    }
+
+    /// Set quota limit in bytes
+    pub fn set_quota_limit(&self, limit_bytes: u64) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("SetQuotaLimit", &(limit_bytes,))
+            .context("Failed to call SetQuotaLimit")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        Ok(result.1)
+    }
+
+    /// Save quota configuration via D-Bus helper
+    pub fn save_quota_config(&self, config_toml: String) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("SaveQuotaConfig", &(config_toml,))
+            .context("Failed to call SaveQuotaConfig")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        Ok(result.1)
     }
 }

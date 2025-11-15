@@ -17,6 +17,7 @@ Usage:
     waypoint-cli list
     waypoint-cli delete <name>
     waypoint-cli restore <name>
+    waypoint-cli cleanup [--schedule-based]
     waypoint-cli help
 
 Commands:
@@ -24,6 +25,7 @@ Commands:
     list        List all snapshots
     delete      Delete a snapshot
     restore     Restore a snapshot (rollback system)
+    cleanup     Apply retention policy to delete old snapshots
     help        Show this help message
 
 Examples:
@@ -32,6 +34,7 @@ Examples:
     waypoint-cli list
     waypoint-cli delete "old-snapshot"
     waypoint-cli restore "before-upgrade"
+    waypoint-cli cleanup --schedule-based
 
 Note: All operations require authentication via Polkit.
 EOF
@@ -231,6 +234,38 @@ cmd_restore() {
     fi
 }
 
+cmd_cleanup() {
+    local schedule_based=false
+
+    # Parse flags
+    if [[ "${1:-}" == "--schedule-based" ]]; then
+        schedule_based=true
+    fi
+
+    echo "Running snapshot cleanup..."
+    if [[ "$schedule_based" == true ]]; then
+        echo "Using per-schedule retention policies from schedules.toml"
+    else
+        echo "Using legacy global retention policy"
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        CleanupSnapshots \
+        'b' \
+        "$schedule_based" 2>&1)
+
+    if echo "$result" | grep -q "true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
 # Main
 if [[ $# -eq 0 ]]; then
     usage
@@ -255,6 +290,10 @@ case "$COMMAND" in
     restore|rollback)
         check_dbus_service
         cmd_restore "$@"
+        ;;
+    cleanup)
+        check_dbus_service
+        cmd_cleanup "$@"
         ;;
     help|--help|-h)
         usage

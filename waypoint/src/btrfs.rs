@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::cache::TtlCache;
+use crate::performance;
 
 /// Global cache for snapshot sizes (5-minute TTL)
 static SIZE_CACHE: OnceLock<TtlCache<PathBuf, u64>> = OnceLock::new();
@@ -51,20 +52,24 @@ pub fn is_btrfs(path: &Path) -> Result<bool> {
 /// This function uses a cache with a 30-second TTL to avoid repeatedly
 /// querying the filesystem for the same path.
 pub fn get_available_space(path: &Path) -> Result<u64> {
+    let _timer = performance::tracker().start("get_available_space");
     let path_buf = path.to_path_buf();
 
     // Check cache first
     if let Some(cached_space) = space_cache().get(&path_buf) {
+        let _cache_timer = performance::tracker().start("get_available_space_cache_hit");
         return Ok(cached_space);
     }
 
     // Cache miss - query filesystem
+    let _df_timer = performance::tracker().start("df_command");
     let output = Command::new("df")
         .arg("-B1")
         .arg("--output=avail")
         .arg(path)
         .output()
         .context("Failed to execute df command")?;
+    drop(_df_timer);
 
     if !output.status.success() {
         bail!("Failed to get available space");
@@ -94,10 +99,12 @@ pub fn get_available_space(path: &Path) -> Result<u64> {
 /// This function uses a cache with a 5-minute TTL to avoid repeatedly
 /// running expensive `du` operations on the same snapshot.
 pub fn get_snapshot_size(path: &Path) -> Result<u64> {
+    let _timer = performance::tracker().start("get_snapshot_size");
     let path_buf = path.to_path_buf();
 
     // Check cache first
     if let Some(cached_size) = size_cache().get(&path_buf) {
+        let _cache_timer = performance::tracker().start("get_snapshot_size_cache_hit");
         return Ok(cached_size);
     }
 
@@ -106,11 +113,13 @@ pub fn get_snapshot_size(path: &Path) -> Result<u64> {
     // -s for summary, -b for bytes
     // Note: du may return non-zero exit code due to permission denied errors
     // on some directories in the snapshot, but it still returns a valid size
+    let _du_timer = performance::tracker().start("du_command");
     let output = Command::new("du")
         .arg("-sb")
         .arg(path)
         .output()
         .context("Failed to execute du command")?;
+    drop(_du_timer);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parts: Vec<&str> = stdout.split_whitespace().collect();
@@ -130,3 +139,4 @@ pub fn get_snapshot_size(path: &Path) -> Result<u64> {
 
     Ok(size)
 }
+

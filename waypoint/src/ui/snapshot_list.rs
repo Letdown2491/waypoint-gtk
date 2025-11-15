@@ -5,10 +5,13 @@
 use gtk::prelude::*;
 use gtk::{Button, Label, ListBox};
 use libadwaita as adw;
+use libadwaita::prelude::PreferencesRowExt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::snapshot::SnapshotManager;
+use crate::user_preferences::UserPreferencesManager;
+use crate::performance;
 use super::snapshot_row::{SnapshotRow, SnapshotAction};
 
 /// Date filter options for snapshot list
@@ -51,19 +54,26 @@ pub enum DateFilter {
 pub fn refresh_snapshot_list_internal(
     _window: &adw::ApplicationWindow,
     manager: &Rc<RefCell<SnapshotManager>>,
+    user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
     list: &ListBox,
     compare_btn: &Button,
     search_text: Option<&str>,
     date_filter: Option<DateFilter>,
     match_label: Option<&Label>,
     action_handler: impl Fn(&str, SnapshotAction) + 'static + Clone,
+    create_btn: Option<&Button>,
 ) {
+    let _timer = performance::tracker().start("refresh_snapshot_list");
+
     // Clear existing items
+    let _clear_timer = performance::tracker().start("clear_list_items");
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
+    drop(_clear_timer);
 
     // Load all snapshots
+    let _load_timer = performance::tracker().start("load_snapshots");
     let all_snapshots = match manager.borrow().load_snapshots() {
         Ok(s) => s,
         Err(e) => {
@@ -71,8 +81,10 @@ pub fn refresh_snapshot_list_internal(
             return;
         }
     };
+    drop(_load_timer);
 
     // Apply filters if provided
+    let _filter_timer = performance::tracker().start("filter_snapshots");
     let filtered_snapshots: Vec<_> = if let (Some(search), Some(filter)) = (search_text, date_filter) {
         let search_lower = search.to_lowercase();
         let now = chrono::Utc::now();
@@ -100,6 +112,7 @@ pub fn refresh_snapshot_list_internal(
         // No filtering, use all snapshots
         all_snapshots.iter().collect()
     };
+    drop(_filter_timer);
 
     // Update match count label if provided
     if let Some(label) = match_label {
@@ -124,17 +137,29 @@ pub fn refresh_snapshot_list_internal(
     }
 
     // Display snapshots or placeholder
+    let _ui_timer = performance::tracker().start("populate_ui");
     if filtered_snapshots.is_empty() {
         let placeholder = adw::StatusPage::new();
 
         if all_snapshots.is_empty() {
-            placeholder.set_title("No Restore Points");
-            placeholder.set_description(Some("Restore points let you roll back your system to a previous state.\n\nClick \"Create Restore Point\" to save your current system state."));
+            placeholder.set_title("No Restore Points Yet");
+            placeholder.set_description(Some("Restore points let you roll back your system to a previous state"));
+            placeholder.set_icon_name(Some("waypoint"));
 
-            // Create custom icon with specific size
-            let icon = gtk::Image::from_icon_name("document-save-symbolic");
-            icon.set_pixel_size(64);
-            placeholder.set_child(Some(&icon));
+            // Add prominent "Create Restore Point" button if create_btn is provided
+            if let Some(main_create_btn) = create_btn {
+                let create_button = gtk::Button::with_label("Create Your First Restore Point");
+                create_button.add_css_class("pill");
+                create_button.add_css_class("suggested-action");
+
+                // Wire up to activate the main create button
+                let main_btn_clone = main_create_btn.clone();
+                create_button.connect_clicked(move |_| {
+                    main_btn_clone.emit_clicked();
+                });
+
+                placeholder.set_child(Some(&create_button));
+            }
         } else {
             placeholder.set_title("No Matching Snapshots");
             placeholder.set_description(Some("No snapshots match your search criteria.\n\nTry adjusting your search or filter settings."));
@@ -148,15 +173,69 @@ pub fn refresh_snapshot_list_internal(
 
         list.append(&placeholder);
     } else {
+        // Calculate max size for relative sizing of level bars
+        let max_size = filtered_snapshots
+            .iter()
+            .filter_map(|s| s.size_bytes)
+            .max();
+
+        // Load user preferences
+        let user_prefs = user_prefs_manager.borrow().load().unwrap_or_default();
+
+        // Separate pinned and non-pinned snapshots based on user preferences
+        let (pinned, regular): (Vec<_>, Vec<_>) = filtered_snapshots
+            .into_iter()
+            .partition(|s| {
+                user_prefs.get(&s.id)
+                    .map(|p| p.is_favorite)
+                    .unwrap_or(false)
+            });
+
+        // Add pinned snapshots section if any exist
+        if !pinned.is_empty() {
+            // Add section header for pinned snapshots
+            let pinned_header = adw::ActionRow::new();
+            pinned_header.set_title("Pinned Restore Points");
+            pinned_header.add_css_class("header-row");
+            pinned_header.set_activatable(false);
+            list.append(&pinned_header);
+
+            // Add pinned snapshots (most recent first)
+            for snapshot in pinned.iter().rev() {
+                let prefs = user_prefs.get(&snapshot.id).cloned().unwrap_or_default();
+                let handler_clone = action_handler.clone();
+                let row = SnapshotRow::new_with_context(snapshot, &prefs, move |id, action| {
+                    handler_clone(&id, action);
+                }, max_size);
+                list.append(&row);
+            }
+
+            // Add section header for regular snapshots if any exist
+            if !regular.is_empty() {
+                let regular_header = adw::ActionRow::new();
+                regular_header.set_title("All Restore Points");
+                regular_header.add_css_class("header-row");
+                regular_header.set_activatable(false);
+                regular_header.set_margin_top(12);
+                list.append(&regular_header);
+            }
+        }
+
+        // Add regular snapshots (most recent first)
         // Note: action_handler is cloned for each row, but it's a closure which is relatively
         // lightweight. The Snapshot references passed to SnapshotRow::new use Rc<T> internally
         // for expensive fields (packages, subvolumes), so cloning snapshots is cheap.
-        for snapshot in filtered_snapshots.iter().rev() {
+        for snapshot in regular.iter().rev() {
+            let prefs = user_prefs.get(&snapshot.id).cloned().unwrap_or_default();
             let handler_clone = action_handler.clone();
-            let row = SnapshotRow::new(snapshot, move |id, action| {
+            let row = SnapshotRow::new_with_context(snapshot, &prefs, move |id, action| {
                 handler_clone(&id, action);
-            });
+            }, max_size);
             list.append(&row);
         }
     }
+    drop(_ui_timer);
+
+    // Log performance statistics at debug level
+    performance::log_stats();
 }

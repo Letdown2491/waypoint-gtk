@@ -80,6 +80,7 @@ pub fn notify_snapshot_restored(app: &Application, snapshot_name: &str) {
 }
 
 /// Send a notification about retention policy cleanup
+#[allow(dead_code)]
 pub fn notify_retention_cleanup(app: &Application, count: usize) {
     send_notification(
         app,
