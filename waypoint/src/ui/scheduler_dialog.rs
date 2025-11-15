@@ -279,37 +279,52 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
 
 /// Load scheduler configuration from file
 fn load_scheduler_config() -> (String, String, String, String) {
-    match std::fs::read_to_string("/etc/waypoint/scheduler.conf") {
-        Ok(content) => {
-            let mut frequency = "daily".to_string();
-            let mut time = "02:00".to_string();
-            let mut day = "0".to_string();
-            let mut prefix = "auto".to_string();
+    use waypoint_common::{SchedulesConfig, ScheduleType, WaypointConfig};
 
-            for line in content.lines() {
-                let line = line.trim();
-                if line.starts_with('#') || line.is_empty() {
-                    continue;
-                }
+    let config = WaypointConfig::new();
 
-                if let Some(value) = line.strip_prefix("SCHEDULE_FREQUENCY=") {
-                    frequency = value.trim_matches('"').to_string();
-                } else if let Some(value) = line.strip_prefix("SCHEDULE_TIME=") {
-                    time = value.trim_matches('"').to_string();
-                } else if let Some(value) = line.strip_prefix("SCHEDULE_DAY=") {
-                    day = value.trim_matches('"').to_string();
-                } else if let Some(value) = line.strip_prefix("SNAPSHOT_PREFIX=") {
-                    prefix = value.trim_matches('"').to_string();
-                }
-            }
-
-            (frequency, time, day, prefix)
+    // Try to load the new TOML format
+    let schedules_config = if config.schedules_config.exists() {
+        match SchedulesConfig::load_from_file(&config.schedules_config) {
+            Ok(cfg) => cfg,
+            Err(_) => SchedulesConfig::default(),
         }
-        Err(_) => {
-            // Default values
-            ("daily".to_string(), "02:00".to_string(), "0".to_string(), "auto".to_string())
-        }
-    }
+    } else {
+        SchedulesConfig::default()
+    };
+
+    // Find the first enabled schedule, or use daily as default
+    let enabled = schedules_config.enabled_schedules();
+    let schedule = if !enabled.is_empty() {
+        enabled[0]
+    } else if let Some(daily) = schedules_config.get_schedule(ScheduleType::Daily) {
+        daily
+    } else {
+        // Fallback to defaults
+        return ("daily".to_string(), "02:00".to_string(), "0".to_string(), "auto".to_string());
+    };
+
+    // Convert to the legacy format expected by the UI
+    let frequency = match schedule.schedule_type {
+        ScheduleType::Hourly => "hourly",
+        ScheduleType::Daily => "daily",
+        ScheduleType::Weekly => "weekly",
+        ScheduleType::Monthly => "monthly",
+    }.to_string();
+
+    let time = schedule.time.clone().unwrap_or_else(|| "02:00".to_string());
+
+    let day = if let Some(dow) = schedule.day_of_week {
+        dow.to_string()
+    } else if let Some(dom) = schedule.day_of_month {
+        dom.to_string()
+    } else {
+        "0".to_string()
+    };
+
+    let prefix = schedule.prefix.clone();
+
+    (frequency, time, day, prefix)
 }
 
 /// Save scheduler configuration
@@ -321,36 +336,73 @@ fn save_scheduler_config(
     day_dropdown: &gtk::DropDown,
     prefix_entry: &gtk::Entry,
 ) {
+    use waypoint_common::{ScheduleType, SchedulesConfig, WaypointConfig};
+
     let freq_selected = freq_dropdown.selected();
-    let frequency = match freq_selected {
-        0 => "hourly",
-        1 => "daily",
-        2 => "weekly",
-        3 => "custom",
-        _ => "daily",
+    let schedule_type = match freq_selected {
+        0 => ScheduleType::Hourly,
+        1 => ScheduleType::Daily,
+        2 => ScheduleType::Weekly,
+        3 => ScheduleType::Monthly,
+        _ => ScheduleType::Daily,
     };
 
     let hour_val = hour_spin.value() as u32;
     let minute_val = minute_spin.value() as u32;
     let time_str = format!("{:02}:{:02}", hour_val, minute_val);
 
-    let day_val = day_dropdown.selected();
+    let day_val = day_dropdown.selected() as u8;
 
     let prefix_str = prefix_entry.text().to_string();
     let prefix_str = if prefix_str.is_empty() { "auto".to_string() } else { prefix_str };
 
-    // Build config file content
-    let config_content = format!(
-        "# Waypoint Snapshot Scheduler Configuration\n\
-         \n\
-         SCHEDULE_FREQUENCY=\"{}\"\n\
-         SCHEDULE_TIME=\"{}\"\n\
-         SCHEDULE_DAY=\"{}\"\n\
-         SCHEDULE_INTERVAL=\"86400\"\n\
-         SNAPSHOT_PREFIX=\"{}\"\n\
-         SNAPSHOT_DESCRIPTION=\"Automated snapshot\"\n",
-        frequency, time_str, day_val, prefix_str
-    );
+    // Load existing config or create default
+    let config = WaypointConfig::new();
+    let mut schedules_config = if config.schedules_config.exists() {
+        match SchedulesConfig::load_from_file(&config.schedules_config) {
+            Ok(cfg) => cfg,
+            Err(_) => SchedulesConfig::default(),
+        }
+    } else {
+        SchedulesConfig::default()
+    };
+
+    // Update the schedule that matches the selected type
+    if let Some(schedule) = schedules_config.get_schedule_mut(schedule_type) {
+        schedule.enabled = true;
+        schedule.prefix = prefix_str;
+
+        // Set time for non-hourly schedules
+        if schedule_type != ScheduleType::Hourly {
+            schedule.time = Some(time_str);
+        }
+
+        // Set day_of_week for weekly schedules
+        if schedule_type == ScheduleType::Weekly {
+            schedule.day_of_week = Some(day_val);
+        }
+
+        // Set day_of_month for monthly schedules
+        if schedule_type == ScheduleType::Monthly {
+            schedule.day_of_month = Some(day_val);
+        }
+    }
+
+    // Serialize to TOML
+    let config_content = match toml::to_string_pretty(&schedules_config) {
+        Ok(content) => {
+            // Add header comment
+            format!("# Waypoint Snapshot Schedules Configuration\n# Multiple schedules can run concurrently with different retention policies\n\n{}", content)
+        }
+        Err(e) => {
+            dialogs::show_error(
+                parent,
+                "Configuration Error",
+                &format!("Failed to serialize configuration: {}", e),
+            );
+            return;
+        }
+    };
 
     // Save configuration via D-Bus (run in thread to avoid blocking UI)
     let parent_clone = parent.clone();
