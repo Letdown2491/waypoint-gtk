@@ -169,6 +169,11 @@ cmd_delete() {
         exit 1
     fi
 
+    if ! validate_snapshot_name "$name"; then
+        echo "Error: Invalid snapshot name" >&2
+        exit 1
+    fi
+
     echo "Deleting snapshot: $name"
     read -p "Are you sure? [y/N] " -n 1 -r
     echo
@@ -200,6 +205,11 @@ cmd_restore() {
     if [[ -z "$name" ]]; then
         echo "Error: Snapshot name is required" >&2
         echo "Usage: waypoint-cli restore <name>" >&2
+        exit 1
+    fi
+
+    if ! validate_snapshot_name "$name"; then
+        echo "Error: Invalid snapshot name" >&2
         exit 1
     fi
 
@@ -236,6 +246,14 @@ cmd_restore() {
 
 cmd_cleanup() {
     local schedule_based=false
+    local target="${1:-}"
+
+    if [[ -n "$target" && "$target" != "--schedule-based" ]]; then
+        if ! validate_snapshot_name "$target"; then
+            echo "Error: Invalid snapshot name for cleanup target" >&2
+            exit 1
+        fi
+    fi
 
     # Parse flags
     if [[ "${1:-}" == "--schedule-based" ]]; then

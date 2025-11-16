@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use tokio::signal::unix::{signal, SignalKind};
 use waypoint_common::*;
 use zbus::{interface, Connection, ConnectionBuilder};
+use std::process::Command;
+use serde::Deserialize;
 
 mod backup;
 mod btrfs;
@@ -208,10 +210,9 @@ impl WaypointHelper {
         }
 
         // Write configuration file
-        match std::fs::write(&schedules_path, toml_content) {
-            Ok(_) => (true, "Schedules configuration saved".to_string()),
-            Err(e) => (false, format!("Failed to save configuration: {}", e)),
-        }
+        std::fs::write(&schedules_path, toml_content)
+            .map(|_| (true, "Schedules configuration saved".to_string()))
+            .unwrap_or_else(|e| (false, format!("Failed to save configuration: {}", e)))
     }
 
     /// Restart scheduler service
@@ -225,53 +226,33 @@ impl WaypointHelper {
             return (false, format!("Authorization failed: {}", e));
         }
 
-        // Restart the service using sv
-        match std::process::Command::new("sv")
-            .arg("restart")
-            .arg("waypoint-scheduler")
-            .status()
-        {
-            Ok(status) if status.success() => {
-                (true, "Scheduler service restarted".to_string())
-            }
-            Ok(_) => (false, "Failed to restart scheduler service".to_string()),
-            Err(e) => (false, format!("Failed to execute sv command: {}", e)),
-        }
+        run_command("sv", &["restart", "waypoint-scheduler"])
+            .map(|_| (true, "Scheduler service restarted".to_string()))
+            .unwrap_or_else(|e| (false, format!("Failed to restart scheduler service: {}", e)))
     }
 
     /// Get scheduler service status
     async fn get_scheduler_status(&self) -> String {
-        // No authorization needed for status check (read-only)
-        // Note: waypoint-helper runs as root, so sv commands should work
-
-        // First check if service is enabled (linked in service directory)
         let service_enabled = std::path::Path::new(&scheduler_service_path()).exists();
 
         if !service_enabled {
             return "disabled".to_string();
         }
 
-        // Service is enabled, check if it's running
-        match std::process::Command::new("sv")
-            .arg("status")
-            .arg("waypoint-scheduler")
-            .output()
-        {
-            Ok(output) => {
-                let status_str = String::from_utf8_lossy(&output.stdout);
-                let stderr_str = String::from_utf8_lossy(&output.stderr);
-
-                // sv status returns "run:" when running, "down:" when stopped
-                if status_str.contains("run:") {
+        run_command_with_output("sv", &["status", "waypoint-scheduler"])
+            .map(|(stdout, stderr)| {
+                if stdout.contains("run:") {
                     "running".to_string()
-                } else if status_str.contains("down:") || stderr_str.contains("unable to") {
+                } else if stdout.contains("down:") || stderr.contains("unable to") {
                     "stopped".to_string()
                 } else {
                     "unknown".to_string()
                 }
-            }
-            Err(_) => "unknown".to_string(),
-        }
+            })
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to query scheduler status: {}", e);
+                "unknown".to_string()
+            })
     }
 
     /// Apply retention cleanup based on schedule-based or global retention rules
@@ -287,10 +268,9 @@ impl WaypointHelper {
         }
 
         // Perform cleanup
-        match Self::cleanup_snapshots_impl(schedule_based) {
-            Ok(msg) => (true, msg),
-            Err(e) => (false, format!("Cleanup failed: {}", e)),
-        }
+        Self::cleanup_snapshots_impl(schedule_based)
+            .map(|msg| (true, msg))
+            .unwrap_or_else(|e| (false, format!("Cleanup failed: {}", e)))
     }
 
     /// Restore files from a snapshot to the filesystem
@@ -597,12 +577,19 @@ impl WaypointHelper {
             .context("Failed to list snapshots")?;
 
         // Load snapshot metadata to check for pinned/favorited snapshots
+        #[derive(Deserialize)]
+        struct SnapshotMetadataEntry {
+            id: String,
+            #[serde(default)]
+            is_favorite: bool,
+        }
+
         let favorited_ids: HashSet<String> = {
             if let Ok(content) = std::fs::read_to_string(&config.metadata_file) {
-                if let Ok(metadata) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                if let Ok(metadata) = serde_json::from_str::<Vec<SnapshotMetadataEntry>>(&content) {
                     metadata.iter()
-                        .filter(|m| m.get("is_favorite").and_then(|v| v.as_bool()).unwrap_or(false))
-                        .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
+                        .filter(|m| m.is_favorite)
+                        .map(|m| m.id.clone())
                         .collect()
                 } else {
                     HashSet::new()
@@ -676,6 +663,11 @@ impl WaypointHelper {
         let mut failed = Vec::new();
 
         for snapshot_name in &to_delete {
+            if let Err(e) = btrfs::ensure_snapshot_name(snapshot_name) {
+                log::error!("Skipping snapshot '{}' due to invalid name/path: {}", snapshot_name, e);
+                failed.push(snapshot_name.clone());
+                continue;
+            }
             match btrfs::delete_snapshot(snapshot_name) {
                 Ok(_) => {
                     log::info!("Deleted old snapshot: {}", snapshot_name);
@@ -702,7 +694,10 @@ impl WaypointHelper {
         overwrite: bool,
     ) -> Result<String> {
         use std::fs;
-        use std::path::{Path, PathBuf};
+        use std::path::{Component, Path, PathBuf};
+
+        waypoint_common::validate_snapshot_name(snapshot_name)
+            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{}': {}", snapshot_name, e))?;
 
         let config = WaypointConfig::new();
         let snapshot_dir = config.snapshot_dir.join(snapshot_name).join("root");
@@ -716,9 +711,40 @@ impl WaypointHelper {
             anyhow::bail!("No files specified for restoration");
         }
 
+        fn ensure_safe_absolute(path: &Path) -> Result<()> {
+            if !path.is_absolute() {
+                anyhow::bail!("Path must be absolute: {}", path.display());
+            }
+            for component in path.components() {
+                match component {
+                    Component::RootDir | Component::Normal(_) => {}
+                    _ => {
+                        anyhow::bail!(
+                            "Path contains disallowed component '{}'",
+                            component.as_os_str().to_string_lossy()
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        fn sanitize_absolute_path(path: &str) -> Result<PathBuf> {
+            let candidate = Path::new(path);
+            ensure_safe_absolute(candidate)?;
+            Ok(candidate.to_path_buf())
+        }
+
         let mut restored_count = 0;
         let mut failed_files = Vec::new();
         let use_custom_target = !target_directory.is_empty();
+        let custom_target_base = if use_custom_target {
+            let base_path = Path::new(target_directory);
+            ensure_safe_absolute(base_path)?;
+            Some(base_path.to_path_buf())
+        } else {
+            None
+        };
 
         for file_path in &file_paths {
             // Ensure path starts with /
@@ -738,14 +764,14 @@ impl WaypointHelper {
             }
 
             // Determine target path
-            let target = if use_custom_target {
+            let target = if let Some(base_dir) = &custom_target_base {
                 // Restore to custom directory, preserving filename
                 let filename = source.file_name()
                     .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?;
-                Path::new(target_directory).join(filename)
+                base_dir.join(filename)
             } else {
                 // Restore to original location
-                PathBuf::from(&normalized_path)
+                sanitize_absolute_path(&normalized_path)?
             };
 
             // Check if target exists
@@ -804,6 +830,11 @@ impl WaypointHelper {
         use std::os::unix::process::ExitStatusExt;
         use std::process::{Command, Stdio};
 
+        waypoint_common::validate_snapshot_name(old_snapshot_name)
+            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{}': {}", old_snapshot_name, e))?;
+        waypoint_common::validate_snapshot_name(new_snapshot_name)
+            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{}': {}", new_snapshot_name, e))?;
+
         let config = WaypointConfig::new();
         let old_path = config.snapshot_dir.join(old_snapshot_name).join("root");
         let new_path = config.snapshot_dir.join(new_snapshot_name).join("root");
@@ -824,23 +855,39 @@ impl WaypointHelper {
             .arg(&old_path)
             .arg(&new_path)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .context("Failed to spawn btrfs send")?;
 
         let send_stdout = send_cmd.stdout.take()
             .context("Failed to capture btrfs send stdout")?;
+        let send_stderr_handle = send_cmd.stderr.take().map(|stderr| {
+            std::thread::spawn(move || -> Result<String> {
+                let mut reader = BufReader::new(stderr);
+                let mut buf = String::new();
+                reader.read_to_string(&mut buf)?;
+                Ok(buf)
+            })
+        });
 
         let mut receive_cmd = Command::new("btrfs")
             .arg("receive")
             .arg("--dump")
             .stdin(Stdio::from(send_stdout))
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .context("Failed to spawn btrfs receive")?;
         let receive_stdout = receive_cmd.stdout.take()
             .context("Failed to capture btrfs receive stdout")?;
+        let receive_stderr_handle = receive_cmd.stderr.take().map(|stderr| {
+            std::thread::spawn(move || -> Result<String> {
+                let mut reader = BufReader::new(stderr);
+                let mut buf = String::new();
+                reader.read_to_string(&mut buf)?;
+                Ok(buf)
+            })
+        });
 
         // Drain receive stdout concurrently to prevent pipe deadlocks
         let reader_handle = std::thread::spawn(move || -> Result<String> {
@@ -852,8 +899,19 @@ impl WaypointHelper {
 
         // Wait for receive first to ensure dump output is consumed
         let receive_status = receive_cmd.wait()?;
+        let receive_stderr = match receive_stderr_handle {
+            Some(handle) => handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("Failed to join receive stderr reader"))??,
+            None => String::new(),
+        };
         if !receive_status.success() {
-            anyhow::bail!("btrfs receive --dump failed with status: {}", receive_status);
+            let detail = if receive_stderr.is_empty() {
+                format!("{}", receive_status)
+            } else {
+                format!("{} - {}", receive_status, receive_stderr.trim())
+            };
+            anyhow::bail!("btrfs receive --dump failed: {}", detail);
         }
 
         let output = reader_handle
@@ -861,12 +919,23 @@ impl WaypointHelper {
             .map_err(|_| anyhow::anyhow!("Failed to join receive output reader"))??;
 
         let send_status = send_cmd.wait()?;
+        let send_stderr = match send_stderr_handle {
+            Some(handle) => handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("Failed to join send stderr reader"))??,
+            None => String::new(),
+        };
         if !send_status.success() {
             // btrfs send may emit SIGPIPE if receive exits after finishing.
             if send_status.signal() == Some(libc::SIGPIPE) {
                 log::debug!("btrfs send exited with SIGPIPE after receive completed");
             } else {
-                anyhow::bail!("btrfs send failed with status: {}", send_status);
+                let detail = if send_stderr.is_empty() {
+                    format!("{}", send_status)
+                } else {
+                    format!("{} - {}", send_status, send_stderr.trim())
+                };
+                anyhow::bail!("btrfs send failed: {}", detail);
             }
         }
 
@@ -880,41 +949,21 @@ impl WaypointHelper {
 
     /// Enable quotas on the btrfs filesystem
     fn enable_quotas_impl(use_simple: bool) -> Result<String> {
-        use std::process::Command;
-
         let config = WaypointConfig::new();
         let snapshot_dir = &config.snapshot_dir;
 
         // Check if quotas are already enabled
-        let check_output = Command::new("btrfs")
-            .arg("qgroup")
-            .arg("show")
-            .arg(snapshot_dir)
-            .output();
-
-        if let Ok(output) = check_output {
-            if output.status.success() {
-                return Ok("Quotas are already enabled".to_string());
-            }
+        if run_command("btrfs", &["qgroup", "show", snapshot_dir.to_str().unwrap_or_default()]).is_ok() {
+            return Ok("Quotas are already enabled".to_string());
         }
 
         // Enable quotas
-        let mut cmd = Command::new("btrfs");
-        cmd.arg("quota").arg("enable");
-
+        let mut args = vec!["quota", "enable"];
         if use_simple {
-            cmd.arg("--simple");
+            args.push("--simple");
         }
-
-        cmd.arg(snapshot_dir);
-
-        let output = cmd.output()
-            .context("Failed to execute btrfs quota enable")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to enable quotas: {}", stderr);
-        }
+        args.push(snapshot_dir.to_str().unwrap_or_default());
+        run_command("btrfs", &args)?;
 
         let quota_type = if use_simple { "simple" } else { "traditional" };
         Ok(format!("Successfully enabled {} quotas", quota_type))
@@ -922,49 +971,23 @@ impl WaypointHelper {
 
     /// Disable quotas on the btrfs filesystem
     fn disable_quotas_impl() -> Result<String> {
-        use std::process::Command;
-
         let config = WaypointConfig::new();
         let snapshot_dir = &config.snapshot_dir;
 
-        let output = Command::new("btrfs")
-            .arg("quota")
-            .arg("disable")
-            .arg(snapshot_dir)
-            .output()
-            .context("Failed to execute btrfs quota disable")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to disable quotas: {}", stderr);
-        }
+        run_command("btrfs", &["quota", "disable", snapshot_dir.to_str().unwrap_or_default()])?;
 
         Ok("Successfully disabled quotas".to_string())
     }
 
     /// Get quota usage information
     fn get_quota_usage_impl() -> Result<String> {
-        use std::process::Command;
         use waypoint_common::{QuotaUsage, QuotaConfig};
 
         let config = WaypointConfig::new();
         let snapshot_dir = &config.snapshot_dir;
 
         // Get qgroup information
-        let output = Command::new("btrfs")
-            .arg("qgroup")
-            .arg("show")
-            .arg("--raw")
-            .arg(snapshot_dir)
-            .output()
-            .context("Failed to execute btrfs qgroup show")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to get quota usage: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let (stdout, _) = run_command_with_output("btrfs", &["qgroup", "show", "--raw", snapshot_dir.to_str().unwrap_or_default()])?;
 
         // Parse qgroup output
         // Format: qgroupid rfer excl max_rfer max_excl
@@ -1479,4 +1502,24 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
+    let output = Command::new(cmd).args(args).output().context(format!("Failed to run {}", cmd))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(anyhow::anyhow!("{} failed: {}", cmd, stderr.trim()))
+    }
+}
+
+fn run_command_with_output(cmd: &str, args: &[&str]) -> Result<(String, String)> {
+    let output = Command::new(cmd).args(args).output().context(format!("Failed to run {}", cmd))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if output.status.success() {
+        Ok((stdout, stderr))
+    } else {
+        Err(anyhow::anyhow!("{} failed: {}", cmd, stderr.trim()))
+    }
 }

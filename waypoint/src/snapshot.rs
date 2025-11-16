@@ -5,6 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use waypoint_common::WaypointConfig;
+use std::io::{Read, Write};
+use std::fs::OpenOptions;
 
 use crate::packages::Package;
 
@@ -172,7 +174,7 @@ impl SnapshotManager {
             return Ok(Vec::new());
         }
 
-        let content = fs::read_to_string(&path)
+        let content = self.read_locked_file(path)
             .context("Failed to read snapshots metadata")?;
 
         let mut snapshots: Vec<Snapshot> = serde_json::from_str(&content)
@@ -216,13 +218,57 @@ impl SnapshotManager {
     #[allow(dead_code)]
     pub fn save_snapshots(&self, snapshots: &[Snapshot]) -> Result<()> {
         let path = self.metadata_path();
+        let _lock = self.locked_file(path, true)?;
         let content = serde_json::to_string_pretty(snapshots)
             .context("Failed to serialize snapshots")?;
 
-        fs::write(&path, content)
-            .with_context(|| format!("Failed to write snapshots metadata to {}", path.display()))?;
+        let tmp_path = path.with_extension("json.tmp");
+
+        {
+            let mut tmp_file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .with_context(|| format!("Failed to open temporary metadata file {}", tmp_path.display()))?;
+            tmp_file.write_all(content.as_bytes())
+                .context("Failed to write snapshots metadata")?;
+            tmp_file.sync_all()
+                .context("Failed to sync snapshots metadata")?;
+        }
+
+        fs::rename(&tmp_path, path)
+            .with_context(|| format!("Failed to atomically replace {}", path.display()))?;
 
         Ok(())
+    }
+
+    fn locked_file(&self, path: &PathBuf, write: bool) -> Result<std::fs::File> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(write)
+            .create(write)
+            .open(path)
+            .with_context(|| format!("Failed to open metadata file {}", path.display()))?;
+
+        if write {
+            fs2::FileExt::lock_exclusive(&file)
+                .context("Failed to lock metadata file for writing")?;
+        } else {
+            fs2::FileExt::lock_shared(&file)
+                .context("Failed to lock metadata file for reading")?;
+        }
+
+        Ok(file)
+    }
+
+    fn read_locked_file(&self, path: &PathBuf) -> Result<String> {
+        let mut file = self.locked_file(path, false)?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .context("Failed to read metadata file")?;
+        fs2::FileExt::unlock(&file).ok();
+        Ok(content)
     }
 
     /// Add or update a snapshot in metadata

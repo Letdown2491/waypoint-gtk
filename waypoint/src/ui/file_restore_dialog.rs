@@ -196,6 +196,7 @@ fn perform_file_restore(
     let parent_clone = parent.clone();
     let snapshot_name_owned = snapshot_name.to_string();
     let target_directory_owned = target_directory.to_string();
+    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
 
     // Run restoration in background thread
     let (tx, rx) = std::sync::mpsc::channel();
@@ -221,8 +222,17 @@ fn perform_file_restore(
     });
 
     // Handle result on main thread
+    let parent_for_close = parent.clone();
+    parent_for_close.connect_close_request(move |_| {
+        let _ = cancel_tx.send(());
+        gtk::glib::Propagation::Proceed
+    });
+
     gtk::glib::spawn_future_local(async move {
         loop {
+            if cancel_rx.try_recv().is_ok() {
+                break;
+            }
             match rx.try_recv() {
                 Ok(result) => {
                     match result {

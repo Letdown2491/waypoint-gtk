@@ -80,6 +80,8 @@ pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str
     let old_snapshot_owned = old_snapshot.to_string();
     let new_snapshot_owned = new_snapshot.to_string();
 
+    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
+
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<Vec<FileChange>> {
             use crate::dbus_client::WaypointHelperClient;
@@ -98,8 +100,18 @@ pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str
     let old_snapshot_owned = old_snapshot.to_string();
     let new_snapshot_owned = new_snapshot.to_string();
 
+    let _dialog_for_close = dialog.clone();
+    dialog.connect_close_request(move |_| {
+        let _ = cancel_tx.send(());
+        gtk::glib::Propagation::Proceed
+    });
+
     gtk::glib::spawn_future_local(async move {
         loop {
+            if cancel_rx.try_recv().is_ok() {
+                dialog_clone.close();
+                break;
+            }
             match rx.try_recv() {
                 Ok(result) => {
                     // Remove loading content

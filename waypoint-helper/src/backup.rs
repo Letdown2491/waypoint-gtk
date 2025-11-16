@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -208,6 +209,7 @@ pub fn backup_snapshot(
 
     send_cmd.arg(snapshot);
     send_cmd.stdout(std::process::Stdio::piped());
+    send_cmd.stderr(std::process::Stdio::piped());
 
     // Build btrfs receive command
     let mut receive_cmd = Command::new("btrfs");
@@ -222,6 +224,14 @@ pub fn backup_snapshot(
     let send_stdout = send_child.stdout.take()
         .ok_or_else(|| anyhow::anyhow!("Failed to capture send output"))?;
 
+    let send_stderr_handle = send_child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = stderr.read_to_string(&mut buf);
+            buf
+        })
+    });
+
     receive_cmd.stdin(send_stdout);
 
     let receive_output = receive_cmd.output()
@@ -230,8 +240,21 @@ pub fn backup_snapshot(
     let send_status = send_child.wait()
         .context("Failed to wait for btrfs send")?;
 
+    let send_stderr = match send_stderr_handle {
+        Some(handle) => handle.join().unwrap_or_default(),
+        None => String::new(),
+    };
+
     if !send_status.success() {
-        return Err(anyhow::anyhow!("btrfs send failed with status: {}", send_status));
+        return Err(anyhow::anyhow!(
+            "btrfs send failed: {}{}",
+            send_status,
+            if send_stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" - {}", send_stderr.trim())
+            }
+        ));
     }
 
     if !receive_output.status.success() {
@@ -272,12 +295,14 @@ pub fn list_backups(destination_mount: &str) -> Result<Vec<String>> {
             .arg("subvolume")
             .arg("show")
             .arg(&path)
-            .output();
+            .output()
+            .context("Failed to run btrfs subvolume show for backup entry")?;
 
-        if let Ok(output) = output {
-            if output.status.success() {
-                backups.push(path.to_string_lossy().to_string());
-            }
+        if output.status.success() {
+            backups.push(path.to_string_lossy().to_string());
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!("Skipping backup {}: {}", path.display(), stderr.trim());
         }
     }
 
@@ -292,26 +317,36 @@ pub fn restore_from_backup(
     let backup = Path::new(backup_path);
     let dest = Path::new(snapshots_dir);
 
+    if !backup.is_absolute() || !dest.is_absolute() {
+        return Err(anyhow::anyhow!("Paths must be absolute"));
+    }
+
+    let backup = backup.canonicalize()
+        .context("Failed to resolve backup path")?;
+    let dest = dest.canonicalize()
+        .context("Failed to resolve snapshots directory")?;
+
     if !backup.exists() {
-        return Err(anyhow::anyhow!("Backup does not exist: {}", backup_path));
+        return Err(anyhow::anyhow!("Backup does not exist: {}", backup.display()));
     }
 
     if !dest.exists() {
-        return Err(anyhow::anyhow!("Snapshots directory does not exist: {}", snapshots_dir));
+        return Err(anyhow::anyhow!("Snapshots directory does not exist: {}", dest.display()));
     }
 
     // Build send command
     let mut send_cmd = Command::new("btrfs");
     send_cmd
         .arg("send")
-        .arg(backup)
-        .stdout(std::process::Stdio::piped());
+        .arg(&backup)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
 
     // Build receive command
     let mut receive_cmd = Command::new("btrfs");
     receive_cmd
         .arg("receive")
-        .arg(dest);
+        .arg(&dest);
 
     // Execute pipeline
     let mut send_child = send_cmd.spawn()
@@ -319,6 +354,14 @@ pub fn restore_from_backup(
 
     let send_stdout = send_child.stdout.take()
         .ok_or_else(|| anyhow::anyhow!("Failed to capture send output"))?;
+
+    let send_stderr_handle = send_child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = stderr.read_to_string(&mut buf);
+            buf
+        })
+    });
 
     receive_cmd.stdin(send_stdout);
 
@@ -328,8 +371,21 @@ pub fn restore_from_backup(
     let send_status = send_child.wait()
         .context("Failed to wait for btrfs send")?;
 
+    let send_stderr = match send_stderr_handle {
+        Some(handle) => handle.join().unwrap_or_default(),
+        None => String::new(),
+    };
+
     if !send_status.success() {
-        return Err(anyhow::anyhow!("btrfs send failed"));
+        return Err(anyhow::anyhow!(
+            "btrfs send failed: {}{}",
+            send_status,
+            if send_stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" - {}", send_stderr.trim())
+            }
+        ));
     }
 
     if !receive_output.status.success() {

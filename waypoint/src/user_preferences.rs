@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::fs::OpenOptions;
 
 /// User preferences for a specific snapshot
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -58,8 +60,11 @@ impl UserPreferencesManager {
             return Ok(HashMap::new());
         }
 
-        let content = fs::read_to_string(&self.preferences_file)
+        let mut file = self.locked_file(false)?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)
             .context("Failed to read user preferences")?;
+        fs2::FileExt::unlock(&file).ok();
 
         let prefs: HashMap<String, SnapshotPreferences> = serde_json::from_str(&content)
             .context("Failed to parse user preferences")?;
@@ -72,8 +77,24 @@ impl UserPreferencesManager {
         let content = serde_json::to_string_pretty(preferences)
             .context("Failed to serialize user preferences")?;
 
-        fs::write(&self.preferences_file, content)
-            .with_context(|| format!("Failed to write user preferences to {}", self.preferences_file.display()))?;
+        let _lock = self.locked_file(true)?;
+        let tmp_path = self.preferences_file.with_extension("tmp");
+
+        {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .with_context(|| format!("Failed to open temporary preferences file {}", tmp_path.display()))?;
+            file.write_all(content.as_bytes())
+                .context("Failed to write user preferences")?;
+            file.sync_all()
+                .context("Failed to sync user preferences")?;
+        }
+
+        fs::rename(&tmp_path, &self.preferences_file)
+            .with_context(|| format!("Failed to replace {}", self.preferences_file.display()))?;
 
         Ok(())
     }
@@ -112,5 +133,24 @@ impl UserPreferencesManager {
         let mut prefs = self.get(snapshot_id)?;
         prefs.note = note;
         self.update(snapshot_id, prefs)
+    }
+
+    fn locked_file(&self, write: bool) -> Result<std::fs::File> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(write)
+            .create(write)
+            .open(&self.preferences_file)
+            .with_context(|| format!("Failed to open {}", self.preferences_file.display()))?;
+
+        if write {
+            fs2::FileExt::lock_exclusive(&file)
+                .context("Failed to lock preferences for writing")?;
+        } else {
+            fs2::FileExt::lock_shared(&file)
+                .context("Failed to lock preferences for reading")?;
+        }
+
+        Ok(file)
     }
 }

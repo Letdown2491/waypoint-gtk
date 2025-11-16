@@ -48,6 +48,7 @@ enum DriveType {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 struct BackupDestination {
     mount_point: String,
     label: String,

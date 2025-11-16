@@ -259,6 +259,8 @@ fn calculate_next_monthly(
 
 /// Create a snapshot for the given schedule
 fn create_snapshot(schedule: &Schedule) -> Result<()> {
+    waypoint_common::validate_snapshot_name(&schedule.prefix)
+        .map_err(|e| anyhow::anyhow!("Invalid schedule prefix '{}': {}", schedule.prefix, e))?;
     let snapshot_name = format!(
         "{}-{}",
         schedule.prefix,
