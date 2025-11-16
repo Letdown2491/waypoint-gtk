@@ -205,4 +205,4 @@ busctl call --system tech.geektoshi.waypoint /tech/geektoshi/waypoint tech.geekt
   ListSnapshots
 ```
 
-The helper follows standard D-Bus introspection, so `busctl introspect tech.geektoshi.waypoint /tech/geektoshi/waypoint` always reflects the live method list. Keep this document in sync with the implementation whenever the interface changes to avoid breaking downstream integrations.
+The helper follows standard D-Bus introspection, so `busctl introspect tech.geektoshi.waypoint /tech/geektoshi/waypoint` always reflects the live method list.
