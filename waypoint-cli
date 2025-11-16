@@ -14,7 +14,9 @@ Waypoint CLI - Btrfs snapshot management for Void Linux
 
 Usage:
     waypoint-cli create <name> [description] [subvolumes]
-    waypoint-cli list
+    waypoint-cli list [--verbose]
+    waypoint-cli show <name>
+    waypoint-cli diff <snapshot1> <snapshot2>
     waypoint-cli delete <name>
     waypoint-cli restore <name>
     waypoint-cli cleanup [--schedule-based]
@@ -23,6 +25,8 @@ Usage:
 Commands:
     create      Create a new snapshot
     list        List all snapshots
+    show        Display detailed information about a snapshot
+    diff        Compare two snapshots
     delete      Delete a snapshot
     restore     Restore a snapshot (rollback system)
     cleanup     Apply retention policy to delete old snapshots
@@ -34,11 +38,17 @@ Arguments for create:
     subvolumes  Comma-separated list of mount points to snapshot (optional, defaults to /)
                 Example: "/,/home" to snapshot both root and home
 
+Options for list:
+    --verbose   Show detailed information including subvolumes and package count
+
 Examples:
     waypoint-cli create "before-upgrade" "Snapshot before system upgrade"
     waypoint-cli create "test-$(date +%Y%m%d)" "Daily backup" "/,/home"
     waypoint-cli create "root-only" "Only root filesystem" "/"
     waypoint-cli list
+    waypoint-cli list --verbose
+    waypoint-cli show "before-upgrade"
+    waypoint-cli diff "before-upgrade" "after-upgrade"
     waypoint-cli delete "old-snapshot"
     waypoint-cli restore "before-upgrade"
     waypoint-cli cleanup --schedule-based
@@ -151,8 +161,42 @@ cmd_create() {
     fi
 }
 
+format_timestamp() {
+    local timestamp="$1"
+    if command -v date >/dev/null 2>&1; then
+        # Convert ISO 8601 to human readable with relative time
+        local epoch
+        epoch=$(date -d "$timestamp" +%s 2>/dev/null || echo "")
+        if [[ -n "$epoch" ]]; then
+            local now
+            now=$(date +%s)
+            local diff=$((now - epoch))
+            local age=""
+
+            if ((diff < 3600)); then
+                age="$((diff / 60))m ago"
+            elif ((diff < 86400)); then
+                age="$((diff / 3600))h ago"
+            elif ((diff < 604800)); then
+                age="$((diff / 86400))d ago"
+            else
+                age=$(date -d "$timestamp" "+%Y-%m-%d")
+            fi
+            echo "$age"
+        else
+            echo "$timestamp"
+        fi
+    else
+        echo "$timestamp"
+    fi
+}
+
 cmd_list() {
-    echo "Fetching snapshot list..."
+    local verbose=false
+    if [[ "${1:-}" == "--verbose" ]]; then
+        verbose=true
+    fi
+
     local result
     result=$(busctl call --system \
         "$DBUS_SERVICE" \
@@ -160,16 +204,261 @@ cmd_list() {
         "$DBUS_INTERFACE" \
         ListSnapshots 2>&1)
 
-    # Parse JSON result (format: "s" "json_data")
+    # Parse JSON result (format: s "json_data")
+    # The result has format: s "[{...}]" - we need to extract just the JSON part
     local json
-    json=$(echo "$result" | sed 's/^s "//' | sed 's/"$//')
+    json=$(echo "$result" | sed 's/^s "//' | sed 's/"$//' | sed 's/\\"/"/g')
 
-    if command -v jq >/dev/null 2>&1; then
-        # Pretty print with jq if available
-        echo "$json" | jq -r '.[] | "[\(.name)] \(.timestamp) - \(.description // "No description")"'
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required for listing snapshots" >&2
+        echo "Install with: sudo xbps-install -S jq" >&2
+        exit 1
+    fi
+
+    local count
+    count=$(echo "$json" | jq '. | length')
+    echo "Found $count snapshot(s):"
+    echo
+
+    if [[ "$verbose" == true ]]; then
+        # Verbose output with details
+        echo "$json" | jq -r '.[] |
+            "Name:        \(.name)\n" +
+            "Date:        \(.timestamp)\n" +
+            "Description: \(.description // "None")\n" +
+            "Packages:    \(.package_count // 0)\n" +
+            "Subvolumes:  \(.subvolumes | join(", "))\n"'
     else
-        # Fallback: just print raw JSON
-        echo "$json" | python3 -m json.tool 2>/dev/null || echo "$json"
+        # Compact table output
+        printf "%-30s %-20s %s\n" "NAME" "AGE" "DESCRIPTION"
+        printf "%-30s %-20s %s\n" "----" "---" "-----------"
+
+        echo "$json" | jq -r '.[] | "\(.name)|\(.timestamp)|\(.description // "No description")"' | \
+        while IFS='|' read -r name timestamp description; do
+            local age
+            age=$(format_timestamp "$timestamp")
+            printf "%-30s %-20s %s\n" "$name" "$age" "$description"
+        done
+    fi
+}
+
+cmd_show() {
+    local name="${1:-}"
+
+    if [[ -z "$name" ]]; then
+        echo "Error: Snapshot name is required" >&2
+        echo "Usage: waypoint-cli show <name>" >&2
+        exit 1
+    fi
+
+    if ! validate_snapshot_name "$name"; then
+        echo "Error: Invalid snapshot name" >&2
+        exit 1
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        ListSnapshots 2>&1)
+
+    local json
+    json=$(echo "$result" | sed 's/^s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required" >&2
+        exit 1
+    fi
+
+    # Find the snapshot by name
+    local snapshot
+    snapshot=$(echo "$json" | jq -r --arg name "$name" '.[] | select(.name == $name)')
+
+    if [[ -z "$snapshot" ]]; then
+        echo "Error: Snapshot '$name' not found" >&2
+        exit 1
+    fi
+
+    # Display detailed information
+    echo "Snapshot Details"
+    echo "================"
+    echo
+    echo "Name:        $(echo "$snapshot" | jq -r '.name')"
+    echo "Created:     $(echo "$snapshot" | jq -r '.timestamp')"
+    echo "Description: $(echo "$snapshot" | jq -r '.description // "None"')"
+    echo "Packages:    $(echo "$snapshot" | jq -r '.package_count // 0')"
+
+    local subvolumes
+    subvolumes=$(echo "$snapshot" | jq -r '.subvolumes | join(", ")')
+    echo "Subvolumes:  ${subvolumes:-/}"
+    echo
+
+    # Show top 10 packages if available
+    local pkg_count
+    pkg_count=$(echo "$snapshot" | jq -r '.packages | length')
+    if [[ "$pkg_count" -gt 0 ]]; then
+        echo "Sample Packages (first 10):"
+        echo "$snapshot" | jq -r '.packages[0:10][] | "  • \(.name) (\(.version))"'
+        if [[ "$pkg_count" -gt 10 ]]; then
+            echo "  ... and $((pkg_count - 10)) more packages"
+        fi
+    fi
+}
+
+cmd_diff() {
+    local snap1="${1:-}"
+    local snap2="${2:-}"
+
+    if [[ -z "$snap1" || -z "$snap2" ]]; then
+        echo "Error: Two snapshot names are required" >&2
+        echo "Usage: waypoint-cli diff <snapshot1> <snapshot2>" >&2
+        exit 1
+    fi
+
+    if ! validate_snapshot_name "$snap1" || ! validate_snapshot_name "$snap2"; then
+        echo "Error: Invalid snapshot name" >&2
+        exit 1
+    fi
+
+    echo "Comparing snapshots..."
+    echo "  Base:    $snap1"
+    echo "  Compare: $snap2"
+    echo
+
+    # First, compare packages (from snapshot metadata)
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        ListSnapshots 2>&1)
+
+    local json
+    json=$(echo "$result" | sed 's/^s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required" >&2
+        exit 1
+    fi
+
+    # Get packages for both snapshots
+    local snap1_packages
+    snap1_packages=$(echo "$json" | jq -r --arg name "$snap1" '.[] | select(.name == $name) | .packages')
+    local snap2_packages
+    snap2_packages=$(echo "$json" | jq -r --arg name "$snap2" '.[] | select(.name == $name) | .packages')
+
+    if [[ -z "$snap1_packages" || "$snap1_packages" == "null" ]]; then
+        echo "Error: Snapshot '$snap1' not found or has no package data" >&2
+        exit 1
+    fi
+
+    if [[ -z "$snap2_packages" || "$snap2_packages" == "null" ]]; then
+        echo "Error: Snapshot '$snap2' not found or has no package data" >&2
+        exit 1
+    fi
+
+    # Compare packages using jq
+    echo "Package Changes:"
+    echo "================"
+    echo
+
+    # Find added packages
+    local added
+    added=$(jq -n --argjson old "$snap1_packages" --argjson new "$snap2_packages" \
+        '$new | map(select(.name as $n | $old | map(.name) | contains([$n]) | not))')
+    local added_count
+    added_count=$(echo "$added" | jq '. | length')
+
+    # Find removed packages
+    local removed
+    removed=$(jq -n --argjson old "$snap1_packages" --argjson new "$snap2_packages" \
+        '$old | map(select(.name as $n | $new | map(.name) | contains([$n]) | not))')
+    local removed_count
+    removed_count=$(echo "$removed" | jq '. | length')
+
+    # Find updated packages
+    local updated
+    updated=$(jq -n --argjson old "$snap1_packages" --argjson new "$snap2_packages" '
+        [$old[] as $op | $new[] as $np |
+         select($op.name == $np.name and $op.version != $np.version) |
+         {name: $op.name, old_version: $op.version, new_version: $np.version}] | unique')
+    local updated_count
+    updated_count=$(echo "$updated" | jq '. | length')
+
+    echo "Summary:"
+    echo "  $added_count packages added"
+    echo "  $removed_count packages removed"
+    echo "  $updated_count packages updated"
+    echo
+
+    if [[ "$added_count" -gt 0 ]]; then
+        echo "Added Packages:"
+        echo "$added" | jq -r '.[] | "  + \(.name) (\(.version))"'
+        echo
+    fi
+
+    if [[ "$removed_count" -gt 0 ]]; then
+        echo "Removed Packages:"
+        echo "$removed" | jq -r '.[] | "  - \(.name) (\(.version))"'
+        echo
+    fi
+
+    if [[ "$updated_count" -gt 0 ]]; then
+        echo "Updated Packages:"
+        echo "$updated" | jq -r '.[] | "  ~ \(.name) (\(.old_version) → \(.new_version))"'
+        echo
+    fi
+
+    if [[ "$added_count" -eq 0 && "$removed_count" -eq 0 && "$updated_count" -eq 0 ]]; then
+        echo "No package changes detected."
+        echo
+    fi
+
+    # Optionally show file changes
+    echo "File Changes:"
+    echo "============="
+    echo "Analyzing file differences (this may take a moment)..."
+    echo
+
+    local file_result
+    file_result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        CompareSnapshots \
+        'ss' \
+        "$snap1" \
+        "$snap2" 2>&1)
+
+    if echo "$file_result" | grep -q "bs true"; then
+        local file_json
+        file_json=$(echo "$file_result" | sed 's/^bs true s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+        local file_changes
+        file_changes=$(echo "$file_json" | jq -r '.')
+        local total_files
+        total_files=$(echo "$file_changes" | jq '. | length')
+
+        if [[ "$total_files" -gt 0 ]]; then
+            local added_files
+            added_files=$(echo "$file_changes" | jq -r '[.[] | select(.change_type == "Added")] | length')
+            local modified_files
+            modified_files=$(echo "$file_changes" | jq -r '[.[] | select(.change_type == "Modified")] | length')
+            local deleted_files
+            deleted_files=$(echo "$file_changes" | jq -r '[.[] | select(.change_type == "Deleted")] | length')
+
+            echo "  $added_files files added"
+            echo "  $modified_files files modified"
+            echo "  $deleted_files files deleted"
+            echo
+            echo "Run with --verbose to see file list (not yet implemented)"
+        else
+            echo "  No file changes detected"
+        fi
+    else
+        echo "  Warning: File comparison failed or timed out"
+        echo "  (This is normal for very large snapshots)"
     fi
 }
 
@@ -313,6 +602,14 @@ case "$COMMAND" in
     list|ls)
         check_dbus_service
         cmd_list "$@"
+        ;;
+    show|info)
+        check_dbus_service
+        cmd_show "$@"
+        ;;
+    diff|compare)
+        check_dbus_service
+        cmd_diff "$@"
         ;;
     delete|del|rm)
         check_dbus_service

@@ -70,9 +70,17 @@ The CLI tool provides scriptable snapshot management:
 ```sh
 # List all snapshots
 waypoint-cli list
+waypoint-cli list --verbose  # Show detailed info
+
+# Show detailed information about a snapshot
+waypoint-cli show "snapshot-name"
+
+# Compare two snapshots
+waypoint-cli diff "snapshot1" "snapshot2"
 
 # Create a snapshot
 waypoint-cli create "snapshot-name" "Optional description"
+waypoint-cli create "snapshot-name" "Description" "/,/home"  # Multiple subvolumes
 
 # Restore a snapshot
 waypoint-cli restore "snapshot-name"
@@ -82,6 +90,7 @@ waypoint-cli delete "snapshot-name"
 
 # Apply retention policy cleanup
 waypoint-cli cleanup
+waypoint-cli cleanup --schedule-based  # Use per-schedule retention
 ```
 
 ## Scheduler Service
