@@ -21,8 +21,71 @@ fn create_empty_state() -> adw::StatusPage {
     status_page
 }
 
+/// Persist calculated snapshot sizes back to metadata for future use
+fn persist_snapshot_sizes(
+    snapshots: &[Snapshot],
+    sizes: &std::collections::HashMap<String, u64>,
+    snapshot_manager: &std::rc::Rc<std::cell::RefCell<crate::snapshot::SnapshotManager>>,
+) {
+    // Update any snapshots that didn't have size_bytes cached
+    for snapshot in snapshots {
+        if snapshot.size_bytes.is_none() {
+            if let Some(&size) = sizes.get(&snapshot.name) {
+                // Create updated snapshot with size
+                let mut updated_snapshot = snapshot.clone();
+                updated_snapshot.size_bytes = Some(size);
+
+                // Save back to metadata
+                if let Err(e) = snapshot_manager.borrow().add_snapshot(updated_snapshot) {
+                    log::warn!("Failed to persist size for snapshot {}: {}", snapshot.name, e);
+                }
+            }
+        }
+    }
+}
+
+/// Calculate all snapshot sizes once and store in a map
+/// Uses parallel processing for significant speedup
+fn calculate_all_sizes(snapshots: &[Snapshot]) -> std::collections::HashMap<String, u64> {
+    use std::collections::HashMap;
+
+    // First, check which snapshots already have cached sizes
+    let mut sizes = HashMap::new();
+    let mut paths_to_calculate = Vec::new();
+
+    for snapshot in snapshots {
+        if let Some(cached_size) = snapshot.size_bytes {
+            // Use cached size from metadata
+            sizes.insert(snapshot.name.clone(), cached_size);
+        } else {
+            // Need to calculate this one
+            paths_to_calculate.push(snapshot.path.clone());
+        }
+    }
+
+    // Calculate remaining sizes in parallel using the optimized bulk function
+    if !paths_to_calculate.is_empty() {
+        let calculated_sizes = btrfs::get_all_snapshot_sizes(&paths_to_calculate);
+
+        // Map paths back to snapshot names
+        for snapshot in snapshots {
+            if !sizes.contains_key(&snapshot.name) {
+                if let Some(&size) = calculated_sizes.get(&snapshot.path) {
+                    sizes.insert(snapshot.name.clone(), size);
+                }
+            }
+        }
+    }
+
+    sizes
+}
+
 /// Show analytics dialog with snapshot statistics
-pub fn show_analytics_dialog(parent: &adw::ApplicationWindow, snapshots: &[Snapshot]) {
+pub fn show_analytics_dialog(
+    parent: &adw::ApplicationWindow,
+    snapshots: &[Snapshot],
+    snapshot_manager: &std::rc::Rc<std::cell::RefCell<crate::snapshot::SnapshotManager>>,
+) {
     let dialog = adw::Window::new();
     dialog.set_title(Some("Analytics"));
     dialog.set_default_size(700, 650);
@@ -53,14 +116,21 @@ pub fn show_analytics_dialog(parent: &adw::ApplicationWindow, snapshots: &[Snaps
     clamp.set_maximum_size(800);
     clamp.set_tightening_threshold(600);
 
+    // Calculate all snapshot sizes once (this is the optimization)
+    let snapshot_sizes = calculate_all_sizes(snapshots);
+
+    // Persist newly calculated sizes back to metadata for future use
+    persist_snapshot_sizes(snapshots, &snapshot_sizes, snapshot_manager);
+
+    // Calculate statistics using the pre-calculated sizes
+    let stats = calculate_statistics_with_sizes(snapshots, &snapshot_sizes);
+
+    // Build UI with all sections
     let main_box = gtk::Box::new(Orientation::Vertical, 0);
     main_box.set_margin_start(12);
     main_box.set_margin_end(12);
     main_box.set_margin_top(24);
     main_box.set_margin_bottom(24);
-
-    // Calculate statistics
-    let stats = calculate_statistics(snapshots);
 
     // Overview section
     main_box.append(&create_overview_section(&stats));
@@ -68,12 +138,13 @@ pub fn show_analytics_dialog(parent: &adw::ApplicationWindow, snapshots: &[Snaps
     // Space usage section
     main_box.append(&create_space_section(&stats));
 
-    // Insights and recommendations (includes growth analysis)
-    main_box.append(&create_insights_section(&stats, snapshots));
+    // Insights and recommendations
+    main_box.append(&create_insights_section(&stats, snapshots, &snapshot_sizes));
 
     // Largest snapshots section
     main_box.append(&create_largest_snapshots_section(
         snapshots,
+        &snapshot_sizes,
         stats.total_size,
     ));
 
@@ -95,26 +166,16 @@ struct SnapshotStats {
     growth_rate_per_week: Option<f64>,
 }
 
-/// Calculate statistics from snapshot list
-fn calculate_statistics(snapshots: &[Snapshot]) -> SnapshotStats {
+/// Calculate statistics using pre-calculated sizes (optimized - no redundant btrfs calls)
+fn calculate_statistics_with_sizes(
+    snapshots: &[Snapshot],
+    sizes: &std::collections::HashMap<String, u64>,
+) -> SnapshotStats {
     let total_count = snapshots.len();
 
-    // Calculate total size - get from metadata or calculate on-the-fly
-    let mut total_size: u64 = 0;
-    let mut counted = 0;
-
-    for snapshot in snapshots {
-        if let Some(size) = snapshot.size_bytes {
-            total_size += size;
-            counted += 1;
-        } else {
-            // Try to calculate size if not in metadata
-            if let Ok(size) = btrfs::get_snapshot_size(&snapshot.path) {
-                total_size += size;
-                counted += 1;
-            }
-        }
-    }
+    // Calculate total size from pre-calculated map
+    let total_size: u64 = sizes.values().sum();
+    let counted = sizes.len();
 
     let average_size = if counted > 0 {
         total_size / counted as u64
@@ -134,20 +195,14 @@ fn calculate_statistics(snapshots: &[Snapshot]) -> SnapshotStats {
         .map(|s| (now - s.timestamp).num_hours())
         .min();
 
-    // Calculate growth rate (GB per week)
+    // Calculate growth rate (GB per week) using pre-calculated sizes
     let growth_rate_per_week = if snapshots.len() >= 2 {
         let mut sorted = snapshots.to_vec();
         sorted.sort_by_key(|s| s.timestamp);
 
         if let (Some(oldest), Some(newest)) = (sorted.first(), sorted.last()) {
-            let oldest_size = oldest
-                .size_bytes
-                .or_else(|| btrfs::get_snapshot_size(&oldest.path).ok())
-                .unwrap_or(0);
-            let newest_size = newest
-                .size_bytes
-                .or_else(|| btrfs::get_snapshot_size(&newest.path).ok())
-                .unwrap_or(0);
+            let oldest_size = sizes.get(&oldest.name).copied().unwrap_or(0);
+            let newest_size = sizes.get(&newest.name).copied().unwrap_or(0);
             let time_diff_days = (newest.timestamp - oldest.timestamp).num_days();
 
             if time_diff_days > 0 && newest_size > oldest_size {
@@ -264,22 +319,21 @@ fn create_space_section(stats: &SnapshotStats) -> adw::PreferencesGroup {
     group
 }
 
-/// Create largest snapshots section with visual size indicators
+/// Create largest snapshots section with visual size indicators (optimized)
 fn create_largest_snapshots_section(
     snapshots: &[Snapshot],
+    sizes: &std::collections::HashMap<String, u64>,
     total_size: u64,
 ) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
     group.set_title("Largest Snapshots");
     group.set_description(Some("Top 5 snapshots consuming the most disk space"));
 
-    // Build list with sizes (calculate if needed)
+    // Build list with sizes from pre-calculated map
     let mut snapshots_with_sizes: Vec<(&Snapshot, u64)> = snapshots
         .iter()
         .filter_map(|s| {
-            let size = s
-                .size_bytes
-                .or_else(|| btrfs::get_snapshot_size(&s.path).ok())?;
+            let size = sizes.get(&s.name).copied()?;
             Some((s, size))
         })
         .collect();
@@ -291,9 +345,6 @@ fn create_largest_snapshots_section(
     if top_5.is_empty() {
         return group;
     }
-
-    // Find max size for scaling the visual bars
-    let max_size = top_5.first().map(|(_, size)| *size).unwrap_or(1);
 
     for (idx, (snapshot, size)) in top_5.iter().enumerate() {
         // Create ActionRow with custom content
@@ -339,9 +390,13 @@ fn create_largest_snapshots_section(
         let row_container = gtk::Box::new(Orientation::Vertical, 6);
         row_container.append(&row);
 
-        // Progress bar
+        // Progress bar - shows size relative to total storage (matches percentage label)
         let progress_bar = gtk::ProgressBar::new();
-        let fraction = (*size as f64) / (max_size as f64);
+        let fraction = if total_size > 0 {
+            (*size as f64) / (total_size as f64)
+        } else {
+            0.0
+        };
         progress_bar.set_fraction(fraction);
         progress_bar.set_show_text(false);
         progress_bar.set_margin_start(12);
@@ -358,7 +413,11 @@ fn create_largest_snapshots_section(
 }
 
 /// Create insights and recommendations section
-fn create_insights_section(stats: &SnapshotStats, snapshots: &[Snapshot]) -> adw::PreferencesGroup {
+fn create_insights_section(
+    stats: &SnapshotStats,
+    _snapshots: &[Snapshot],
+    sizes: &std::collections::HashMap<String, u64>,
+) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
     group.set_title("Insights and Recommendations");
     group.set_margin_bottom(18);
@@ -430,14 +489,7 @@ fn create_insights_section(stats: &SnapshotStats, snapshots: &[Snapshot]) -> adw
     }
 
     // Insight 3: Size distribution
-    let largest_size = snapshots
-        .iter()
-        .filter_map(|s| {
-            s.size_bytes
-                .or_else(|| btrfs::get_snapshot_size(&s.path).ok())
-        })
-        .max()
-        .unwrap_or(0);
+    let largest_size = sizes.values().copied().max().unwrap_or(0);
 
     if largest_size > 0 && stats.average_size > 0 {
         let ratio = largest_size as f64 / stats.average_size as f64;

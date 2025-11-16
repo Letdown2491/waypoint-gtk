@@ -93,6 +93,61 @@ pub fn get_available_space(path: &Path) -> Result<u64> {
     Ok(space)
 }
 
+/// Get all snapshot sizes efficiently via D-Bus helper
+/// Returns a HashMap mapping snapshot paths to sizes in bytes
+///
+/// This uses the privileged D-Bus helper which:
+/// 1. Runs with root permissions (no password prompts)
+/// 2. Uses parallel processing for speed
+pub fn get_all_snapshot_sizes(paths: &[std::path::PathBuf]) -> std::collections::HashMap<std::path::PathBuf, u64> {
+    use std::collections::HashMap;
+
+    let _timer = performance::tracker().start("get_all_snapshot_sizes");
+
+    // Try to use D-Bus helper to get sizes (runs with privileges, no password prompt)
+    if let Ok(client) = crate::dbus_client::WaypointHelperClient::new() {
+        // Extract snapshot names from paths
+        let snapshot_names: Vec<String> = paths
+            .iter()
+            .filter_map(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+
+        if !snapshot_names.is_empty() {
+            if let Ok(sizes_by_name) = client.get_snapshot_sizes(snapshot_names) {
+                // Convert back from name->size to path->size
+                let mut result = HashMap::new();
+                for path in paths {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if let Some(&size) = sizes_by_name.get(name) {
+                            result.insert(path.clone(), size);
+                        }
+                    }
+                }
+                return result;
+            } else {
+                log::warn!("D-Bus call to get snapshot sizes failed, falling back to local du");
+            }
+        }
+    } else {
+        log::warn!("Could not connect to D-Bus helper, falling back to local du");
+    }
+
+    // Fallback: use local du calls (may prompt for password)
+    use rayon::prelude::*;
+    let _parallel_timer = performance::tracker().start("parallel_du_calls_fallback");
+    paths
+        .par_iter()
+        .filter_map(|path| {
+            let size = get_snapshot_size(path).ok()?;
+            Some((path.clone(), size))
+        })
+        .collect()
+}
+
 /// Get the disk usage of a snapshot or subvolume
 /// Returns size in bytes
 ///

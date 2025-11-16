@@ -463,6 +463,54 @@ pub fn list_snapshots() -> Result<Vec<Snapshot>> {
     load_snapshot_metadata()
 }
 
+/// Get sizes for multiple snapshots efficiently
+/// Returns a HashMap mapping snapshot names to sizes in bytes
+///
+/// This runs as root via D-Bus, so it can access snapshot directories
+/// without permission issues. Uses parallel processing for speed.
+pub fn get_snapshot_sizes(snapshot_names: Vec<String>) -> Result<std::collections::HashMap<String, u64>> {
+    use rayon::prelude::*;
+    use std::collections::HashMap;
+
+    // Get all snapshots to map names to paths
+    let snapshots = load_snapshot_metadata()?;
+    let name_to_path: HashMap<String, PathBuf> = snapshots
+        .iter()
+        .map(|s| (s.name.clone(), s.path.clone()))
+        .collect();
+
+    // Calculate sizes in parallel
+    let results: HashMap<String, u64> = snapshot_names
+        .par_iter()
+        .filter_map(|name| {
+            let path = name_to_path.get(name)?;
+            let size = get_snapshot_size_impl(path).ok()?;
+            Some((name.clone(), size))
+        })
+        .collect();
+
+    Ok(results)
+}
+
+/// Internal implementation to get a single snapshot's size
+fn get_snapshot_size_impl(path: &Path) -> Result<u64> {
+    let output = Command::new("du")
+        .arg("-sb")
+        .arg(path)
+        .output()
+        .context("Failed to execute du command")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parts: Vec<&str> = stdout.split_whitespace().collect();
+
+    if parts.is_empty() {
+        bail!("Failed to get snapshot size");
+    }
+
+    let size: u64 = parts[0].parse().context("Failed to parse snapshot size")?;
+    Ok(size)
+}
+
 /// Verification result for a snapshot
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct VerificationResult {

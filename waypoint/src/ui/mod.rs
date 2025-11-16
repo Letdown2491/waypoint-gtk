@@ -3177,7 +3177,7 @@ impl MainWindow {
                 Vec::new()
             }
         };
-        analytics_dialog::show_analytics_dialog(window, &snapshots);
+        analytics_dialog::show_analytics_dialog(window, &snapshots, snapshot_manager);
     }
 
     fn show_about_dialog(window: &adw::ApplicationWindow) {

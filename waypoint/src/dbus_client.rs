@@ -304,6 +304,38 @@ impl WaypointHelperClient {
         Ok(snapshots)
     }
 
+    /// Get sizes for multiple snapshots via privileged helper
+    ///
+    /// This method uses the D-Bus helper which runs with privileges,
+    /// so it can access snapshot directories without password prompts.
+    /// Uses parallel processing for efficiency.
+    ///
+    /// # Arguments
+    /// * `snapshot_names` - Vec of snapshot names to get sizes for
+    ///
+    /// # Returns
+    /// HashMap mapping snapshot names to sizes in bytes
+    pub fn get_snapshot_sizes(
+        &self,
+        snapshot_names: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let json: String = proxy
+            .call("GetSnapshotSizes", &(snapshot_names,))
+            .context("Failed to call GetSnapshotSizes")?;
+
+        let sizes: std::collections::HashMap<String, u64> =
+            serde_json::from_str(&json).context("Failed to parse snapshot sizes")?;
+
+        Ok(sizes)
+    }
+
     /// Verify snapshot integrity and consistency
     ///
     /// Checks if a snapshot is valid by verifying:

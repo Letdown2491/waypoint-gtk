@@ -138,6 +138,20 @@ impl WaypointHelper {
         }
     }
 
+    /// Get sizes for multiple snapshots
+    /// Returns JSON object mapping snapshot names to sizes in bytes
+    /// This method runs with privileges, so it can access snapshot directories
+    async fn get_snapshot_sizes(&self, snapshot_names: Vec<String>) -> String {
+        // Getting sizes is read-only, no authorization needed
+        match btrfs::get_snapshot_sizes(snapshot_names) {
+            Ok(sizes) => serde_json::to_string(&sizes).unwrap_or_else(|_| "{}".to_string()),
+            Err(e) => {
+                log::error!("Failed to get snapshot sizes: {}", e);
+                "{}".to_string()
+            }
+        }
+    }
+
     /// Verify snapshot integrity
     async fn verify_snapshot(&self, name: String) -> String {
         // Verification is read-only, no authorization needed

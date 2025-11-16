@@ -28,6 +28,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 # System utilities
 libc = "0.2"
 walkdir = "2.4"
+rayon = "1.10"
 
 # Shared types
 waypoint-common = { path = "../waypoint-common" }
