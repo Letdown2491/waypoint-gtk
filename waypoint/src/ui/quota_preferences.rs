@@ -1,10 +1,10 @@
 //! Quota configuration preferences UI
 
 use crate::dbus_client::WaypointHelperClient;
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Orientation, SpinButton};
 use libadwaita as adw;
-use adw::prelude::*;
 use waypoint_common::{QuotaConfig, QuotaType};
 
 use super::dialogs;
@@ -23,7 +23,7 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
     basic_group.set_title("Quota Settings");
     basic_group.set_description(Some(
         "Control snapshot disk space usage with btrfs quotas. \
-         Quotas prevent snapshots from consuming all available storage."
+         Quotas prevent snapshots from consuming all available storage.",
     ));
 
     // Enable quotas switch
@@ -54,21 +54,19 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
     // Try to get current usage
     let usage_text = if config.enabled {
         match WaypointHelperClient::new() {
-            Ok(client) => {
-                match client.get_quota_usage() {
-                    Ok(usage) => {
-                        let used = QuotaConfig::format_size(usage.referenced);
-                        if let Some(limit) = usage.limit {
-                            let limit_str = QuotaConfig::format_size(limit);
-                            let pct = usage.usage_percent().unwrap_or(0.0) * 100.0;
-                            format!("{} / {} ({:.1}%)", used, limit_str, pct)
-                        } else {
-                            format!("{} (no limit set)", used)
-                        }
+            Ok(client) => match client.get_quota_usage() {
+                Ok(usage) => {
+                    let used = QuotaConfig::format_size(usage.referenced);
+                    if let Some(limit) = usage.limit {
+                        let limit_str = QuotaConfig::format_size(limit);
+                        let pct = usage.usage_percent().unwrap_or(0.0) * 100.0;
+                        format!("{} / {} ({:.1}%)", used, limit_str, pct)
+                    } else {
+                        format!("{} (no limit set)", used)
                     }
-                    Err(e) => format!("Error: {}", e),
                 }
-            }
+                Err(e) => format!("Error: {}", e),
+            },
             Err(_) => "Cannot connect to helper service".to_string(),
         }
     } else {
@@ -101,7 +99,8 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
 
     // Create spin button for limit in GB
     let limit_spin = SpinButton::with_range(0.0, 10000.0, 1.0);
-    let current_limit_gb = config.total_limit_bytes
+    let current_limit_gb = config
+        .total_limit_bytes
         .map(|bytes| bytes as f64 / (1024.0 * 1024.0 * 1024.0))
         .unwrap_or(0.0);
     limit_spin.set_value(current_limit_gb);
@@ -233,7 +232,10 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
 }
 
 /// Apply quota settings via D-Bus
-fn apply_quota_settings(_parent: &adw::ApplicationWindow, config: &QuotaConfig) -> anyhow::Result<()> {
+fn apply_quota_settings(
+    _parent: &adw::ApplicationWindow,
+    config: &QuotaConfig,
+) -> anyhow::Result<()> {
     let client = WaypointHelperClient::new()?;
 
     // First, save the configuration via D-Bus

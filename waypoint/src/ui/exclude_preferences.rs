@@ -1,9 +1,9 @@
 //! Exclude pattern configuration preferences UI
 
-use gtk::prelude::*;
-use gtk::Orientation;
-use libadwaita as adw;
 use adw::prelude::*;
+use gtk::Orientation;
+use gtk::prelude::*;
+use libadwaita as adw;
 use waypoint_common::{ExcludeConfig, ExcludePattern, PatternType};
 
 /// Create the exclude patterns preferences page
@@ -20,7 +20,7 @@ pub fn create_exclude_page(parent: &adw::ApplicationWindow) -> adw::PreferencesP
     info_group.set_title("Exclude Patterns");
     info_group.set_description(Some(
         "Files and directories matching these patterns will be excluded from snapshots. \
-         This saves disk space by skipping caches, temporary files, and other non-essential data."
+         This saves disk space by skipping caches, temporary files, and other non-essential data.",
     ));
     page.add(&info_group);
 
@@ -29,7 +29,9 @@ pub fn create_exclude_page(parent: &adw::ApplicationWindow) -> adw::PreferencesP
     defaults_group.set_title("System Defaults");
     defaults_group.set_description(Some("Built-in patterns (can be disabled but not deleted)"));
 
-    let system_patterns: Vec<_> = config.patterns.iter()
+    let system_patterns: Vec<_> = config
+        .patterns
+        .iter()
         .filter(|p| p.system_default)
         .collect();
 
@@ -45,7 +47,9 @@ pub fn create_exclude_page(parent: &adw::ApplicationWindow) -> adw::PreferencesP
     custom_group.set_title("Custom Patterns");
     custom_group.set_description(Some("Your own exclusion patterns"));
 
-    let custom_patterns: Vec<_> = config.patterns.iter()
+    let custom_patterns: Vec<_> = config
+        .patterns
+        .iter()
         .enumerate()
         .filter(|(_, p)| !p.system_default)
         .collect();
@@ -90,11 +94,17 @@ pub fn create_exclude_page(parent: &adw::ApplicationWindow) -> adw::PreferencesP
 }
 
 /// Create a row for a pattern
-fn create_pattern_row(pattern: &ExcludePattern, _index: usize, is_system: bool, parent: &adw::ApplicationWindow) -> adw::ActionRow {
+fn create_pattern_row(
+    pattern: &ExcludePattern,
+    _index: usize,
+    is_system: bool,
+    parent: &adw::ApplicationWindow,
+) -> adw::ActionRow {
     let row = adw::ActionRow::new();
     row.set_title(&pattern.pattern);
 
-    let subtitle = format!("{} - {}",
+    let subtitle = format!(
+        "{} - {}",
         match pattern.pattern_type {
             PatternType::Exact => "Exact match",
             PatternType::Prefix => "Prefix match",
@@ -115,7 +125,11 @@ fn create_pattern_row(pattern: &ExcludePattern, _index: usize, is_system: bool, 
         let mut config = ExcludeConfig::load().unwrap_or_default();
 
         // Find and toggle this pattern
-        if let Some(p) = config.patterns.iter_mut().find(|p| p.pattern == pattern_str) {
+        if let Some(p) = config
+            .patterns
+            .iter_mut()
+            .find(|p| p.pattern == pattern_str)
+        {
             p.enabled = sw.is_active();
         }
 
@@ -202,7 +216,7 @@ fn show_add_pattern_dialog(parent: &adw::ApplicationWindow) {
         "Examples:\n\
          • Prefix: /var/cache (excludes /var/cache/*)\n\
          • Exact: /swapfile (excludes only /swapfile)\n\
-         • Glob: /home/*/.cache (excludes all user caches)"
+         • Glob: /home/*/.cache (excludes all user caches)",
     ));
     examples_label.set_xalign(0.0);
     examples_label.add_css_class("dim-label");
@@ -238,7 +252,7 @@ fn show_add_pattern_dialog(parent: &adw::ApplicationWindow) {
                     "Custom pattern".to_string()
                 } else {
                     description
-                }
+                },
             );
 
             let mut config = ExcludeConfig::load().unwrap_or_default();

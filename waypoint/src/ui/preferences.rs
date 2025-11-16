@@ -1,12 +1,12 @@
-use gtk::{CheckButton, Label};
-use gtk::prelude::*;
-use libadwaita as adw;
 use adw::prelude::*;
+use gtk::prelude::*;
+use gtk::{CheckButton, Label};
+use libadwaita as adw;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::cell::RefCell;
 
-use crate::subvolume::{detect_mounted_subvolumes, SubvolumeInfo};
+use crate::subvolume::{SubvolumeInfo, detect_mounted_subvolumes};
 
 // Global state for current subvolume selection (used across dialogs)
 thread_local! {
@@ -43,7 +43,7 @@ pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::Preferenc
     group.set_title("Snapshot Targets");
     group.set_description(Some(
         "Select which Btrfs subvolumes should be included when creating restore points. \
-         The root filesystem (/) is always required."
+         The root filesystem (/) is always required.",
     ));
 
     // Detect available subvolumes
@@ -70,7 +70,8 @@ pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::Preferenc
                 }
 
                 let checkbox_row = create_subvolume_row(&subvol, &current_config);
-                let checkbox = checkbox_row.activatable_widget()
+                let checkbox = checkbox_row
+                    .activatable_widget()
                     .and_then(|w| w.downcast::<CheckButton>().ok())?;
 
                 group.add(&checkbox_row);
@@ -162,9 +163,7 @@ pub fn load_config() -> Vec<PathBuf> {
         Ok(content) => {
             match serde_json::from_str::<Vec<String>>(&content) {
                 Ok(paths) => {
-                    let mut result: Vec<PathBuf> = paths.into_iter()
-                        .map(PathBuf::from)
-                        .collect();
+                    let mut result: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
 
                     // Ensure root is always included
                     if !result.contains(&PathBuf::from("/")) {

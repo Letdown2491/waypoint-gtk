@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use futures_util::StreamExt;
-use gtk::glib;
 use gtk::Application;
+use gtk::glib;
 use waypoint_common::*;
 use zbus::{Connection, MatchRule};
 
@@ -70,7 +70,8 @@ async fn listen_for_signals(sender: std::sync::mpsc::Sender<SnapshotCreatedEvent
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
         "org.freedesktop.DBus",
-    ).await?;
+    )
+    .await?;
 
     let _: () = proxy.call("AddMatch", &(rule.to_string(),)).await?;
 
@@ -87,8 +88,13 @@ async fn listen_for_signals(sender: std::sync::mpsc::Sender<SnapshotCreatedEvent
                 if let Some(member_name) = msg.header().member() {
                     if member_name.as_str() == "SnapshotCreated" {
                         // Parse signal arguments - expecting (String, String)
-                        if let Ok((snapshot_name, created_by)) = msg.body().deserialize::<(String, String)>() {
-                            println!("Received SnapshotCreated signal: {} (by {})", snapshot_name, created_by);
+                        if let Ok((snapshot_name, created_by)) =
+                            msg.body().deserialize::<(String, String)>()
+                        {
+                            println!(
+                                "Received SnapshotCreated signal: {} (by {})",
+                                snapshot_name, created_by
+                            );
 
                             // Send event to main thread
                             let event = SnapshotCreatedEvent {

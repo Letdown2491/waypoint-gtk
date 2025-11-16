@@ -1,9 +1,9 @@
+use super::dialogs;
 use crate::dbus_client::WaypointHelperClient;
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Box, Button, Label, Orientation, SpinButton};
 use libadwaita as adw;
-use adw::prelude::*;
-use super::dialogs;
 
 /// Create scheduler content box (for embedding in preferences or standalone dialog)
 ///
@@ -27,7 +27,11 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
 
     let status_row = adw::ActionRow::new();
     status_row.set_title("Scheduler Service");
-    let status_label = Label::new(Some(if lazy_load { "Not loaded" } else { "Checking..." }));
+    let status_label = Label::new(Some(if lazy_load {
+        "Not loaded"
+    } else {
+        "Checking..."
+    }));
     status_label.add_css_class("dim-label");
     status_label.set_valign(gtk::Align::Center);
     status_row.add_suffix(&status_label);
@@ -36,7 +40,11 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
     // Last snapshot row
     let last_snapshot_row = adw::ActionRow::new();
     last_snapshot_row.set_title("Last Snapshot");
-    let last_snapshot_label = Label::new(Some(if lazy_load { "Not loaded" } else { "Checking..." }));
+    let last_snapshot_label = Label::new(Some(if lazy_load {
+        "Not loaded"
+    } else {
+        "Checking..."
+    }));
     last_snapshot_label.add_css_class("dim-label");
     last_snapshot_label.set_valign(gtk::Align::Center);
     last_snapshot_row.add_suffix(&last_snapshot_label);
@@ -84,8 +92,14 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
     time_row.set_subtitle("When to create the snapshot (HH:MM)");
 
     let time_parts: Vec<&str> = time.split(':').collect();
-    let hour = time_parts.get(0).and_then(|h| h.parse::<f64>().ok()).unwrap_or(2.0);
-    let minute = time_parts.get(1).and_then(|m| m.parse::<f64>().ok()).unwrap_or(0.0);
+    let hour = time_parts
+        .get(0)
+        .and_then(|h| h.parse::<f64>().ok())
+        .unwrap_or(2.0);
+    let minute = time_parts
+        .get(1)
+        .and_then(|m| m.parse::<f64>().ok())
+        .unwrap_or(0.0);
 
     let time_box = Box::new(Orientation::Horizontal, 6);
     let hour_spin = SpinButton::with_range(0.0, 23.0, 1.0);
@@ -107,7 +121,15 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
     day_row.set_title("Day of Week");
     day_row.set_subtitle("Which day for weekly snapshots");
 
-    let day_items = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    let day_items = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
     let day_dropdown = gtk::DropDown::from_strings(&day_items);
     day_dropdown.set_selected(day.parse::<u32>().unwrap_or(0));
     day_dropdown.set_valign(gtk::Align::Center);
@@ -157,7 +179,8 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
             let minute_val = minute_spin.value() as u32;
             let day_val = day_dropdown.selected();
 
-            let next_time = calculate_next_snapshot_time(freq_selected, hour_val, minute_val, day_val);
+            let next_time =
+                calculate_next_snapshot_time(freq_selected, hour_val, minute_val, day_val);
             next_label.set_text(&next_time);
         }
     };
@@ -279,7 +302,7 @@ pub fn show_scheduler_dialog(parent: &adw::ApplicationWindow) {
 
 /// Load scheduler configuration from file
 fn load_scheduler_config() -> (String, String, String, String) {
-    use waypoint_common::{SchedulesConfig, ScheduleType, WaypointConfig};
+    use waypoint_common::{ScheduleType, SchedulesConfig, WaypointConfig};
 
     let config = WaypointConfig::new();
 
@@ -301,7 +324,12 @@ fn load_scheduler_config() -> (String, String, String, String) {
         daily
     } else {
         // Fallback to defaults
-        return ("daily".to_string(), "02:00".to_string(), "0".to_string(), "auto".to_string());
+        return (
+            "daily".to_string(),
+            "02:00".to_string(),
+            "0".to_string(),
+            "auto".to_string(),
+        );
     };
 
     // Convert to the legacy format expected by the UI
@@ -310,7 +338,8 @@ fn load_scheduler_config() -> (String, String, String, String) {
         ScheduleType::Daily => "daily",
         ScheduleType::Weekly => "weekly",
         ScheduleType::Monthly => "monthly",
-    }.to_string();
+    }
+    .to_string();
 
     let time = schedule.time.clone().unwrap_or_else(|| "02:00".to_string());
 
@@ -354,7 +383,11 @@ fn save_scheduler_config(
     let day_val = day_dropdown.selected() as u8;
 
     let prefix_str = prefix_entry.text().to_string();
-    let prefix_str = if prefix_str.is_empty() { "auto".to_string() } else { prefix_str };
+    let prefix_str = if prefix_str.is_empty() {
+        "auto".to_string()
+    } else {
+        prefix_str
+    };
 
     // Load existing config or create default
     let config = WaypointConfig::new();
@@ -392,7 +425,10 @@ fn save_scheduler_config(
     let config_content = match toml::to_string_pretty(&schedules_config) {
         Ok(content) => {
             // Add header comment
-            format!("# Waypoint Snapshot Schedules Configuration\n# Multiple schedules can run concurrently with different retention policies\n\n{}", content)
+            format!(
+                "# Waypoint Snapshot Schedules Configuration\n# Multiple schedules can run concurrently with different retention policies\n\n{}",
+                content
+            )
         }
         Err(e) => {
             dialogs::show_error(
@@ -433,7 +469,10 @@ fn save_scheduler_config(
         if let Ok(result) = rx.try_recv() {
             match result {
                 Ok(_) => {
-                    dialogs::show_toast(&parent_clone, "Scheduler configuration saved and service restarted");
+                    dialogs::show_toast(
+                        &parent_clone,
+                        "Scheduler configuration saved and service restarted",
+                    );
                 }
                 Err(e) => {
                     dialogs::show_error(
@@ -451,8 +490,13 @@ fn save_scheduler_config(
 }
 
 /// Calculate when the next snapshot will be created based on the schedule
-fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_week: u32) -> String {
-    use chrono::{Local, Datelike, Timelike, Duration};
+fn calculate_next_snapshot_time(
+    frequency: u32,
+    hour: u32,
+    minute: u32,
+    day_of_week: u32,
+) -> String {
+    use chrono::{Datelike, Duration, Local, Timelike};
 
     let now = Local::now();
 
@@ -460,17 +504,16 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
         0 => {
             // Hourly
             let next = now + Duration::hours(1);
-            format!("{} at {:02}:{:02} (in about 1 hour)",
-                    next.format("%A, %B %d"),
-                    next.hour(),
-                    next.minute())
+            format!(
+                "{} at {:02}:{:02} (in about 1 hour)",
+                next.format("%A, %B %d"),
+                next.hour(),
+                next.minute()
+            )
         }
         1 => {
             // Daily
-            let mut next = now
-                .date_naive()
-                .and_hms_opt(hour, minute, 0)
-                .unwrap();
+            let mut next = now.date_naive().and_hms_opt(hour, minute, 0).unwrap();
 
             // If today's time has passed, schedule for tomorrow
             if now.time() > next.time() {
@@ -484,14 +527,17 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
             let minutes_until = time_until.num_minutes();
 
             if minutes_until < 60 {
-                format!("Today at {:02}:{:02} (in {} minutes)",
-                        hour, minute, minutes_until)
+                format!(
+                    "Today at {:02}:{:02} (in {} minutes)",
+                    hour, minute, minutes_until
+                )
             } else if hours_until < 24 {
-                format!("Today at {:02}:{:02} (in {} hours)",
-                        hour, minute, hours_until)
+                format!(
+                    "Today at {:02}:{:02} (in {} hours)",
+                    hour, minute, hours_until
+                )
             } else {
-                format!("Tomorrow at {:02}:{:02}",
-                        hour, minute)
+                format!("Tomorrow at {:02}:{:02}", hour, minute)
             }
         }
         2 => {
@@ -503,48 +549,55 @@ fn calculate_next_snapshot_time(frequency: u32, hour: u32, minute: u32, day_of_w
 
             // If it's the same day but time has passed, add 7 days
             if days_until == 0 {
-                let target_time = now.date_naive()
-                    .and_hms_opt(hour, minute, 0)
-                    .unwrap();
+                let target_time = now.date_naive().and_hms_opt(hour, minute, 0).unwrap();
                 if now.time() >= target_time.time() {
                     days_until = 7;
                 }
             }
 
-            let day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+            let day_names = [
+                "Sunday",
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+            ];
             let day_name = day_names.get(target_day as usize).unwrap_or(&"Unknown");
 
             if days_until == 0 {
                 // Calculate time until for today
-                let target_time = now.date_naive()
-                    .and_hms_opt(hour, minute, 0)
-                    .unwrap();
+                let target_time = now.date_naive().and_hms_opt(hour, minute, 0).unwrap();
                 let time_until = target_time.signed_duration_since(now.naive_local());
                 let hours_until = time_until.num_hours();
                 let minutes_until = time_until.num_minutes();
 
                 if minutes_until < 60 {
-                    format!("Today ({}) at {:02}:{:02} (in {} minutes)",
-                            day_name, hour, minute, minutes_until)
+                    format!(
+                        "Today ({}) at {:02}:{:02} (in {} minutes)",
+                        day_name, hour, minute, minutes_until
+                    )
                 } else {
-                    format!("Today ({}) at {:02}:{:02} (in {} hours)",
-                            day_name, hour, minute, hours_until)
+                    format!(
+                        "Today ({}) at {:02}:{:02} (in {} hours)",
+                        day_name, hour, minute, hours_until
+                    )
                 }
             } else if days_until == 1 {
-                format!("Tomorrow ({}) at {:02}:{:02}",
-                        day_name, hour, minute)
+                format!("Tomorrow ({}) at {:02}:{:02}", day_name, hour, minute)
             } else {
-                format!("{} at {:02}:{:02} (in {} days)",
-                        day_name, hour, minute, days_until)
+                format!(
+                    "{} at {:02}:{:02} (in {} days)",
+                    day_name, hour, minute, days_until
+                )
             }
         }
         3 => {
             // Custom
             "Custom schedule - refer to configuration file".to_string()
         }
-        _ => {
-            "Unknown schedule".to_string()
-        }
+        _ => "Unknown schedule".to_string(),
     }
 }
 
@@ -555,12 +608,10 @@ fn update_service_status(status_label: &Label) {
 
     std::thread::spawn(move || {
         let status_text = match WaypointHelperClient::new() {
-            Ok(client) => {
-                match client.get_scheduler_status() {
-                    Ok(message) => message,
-                    Err(e) => format!("Error: {}", e),
-                }
-            }
+            Ok(client) => match client.get_scheduler_status() {
+                Ok(message) => message,
+                Err(e) => format!("Error: {}", e),
+            },
             Err(_) => "Cannot connect to helper service".to_string(),
         };
 
@@ -582,29 +633,27 @@ fn update_last_snapshot(last_snapshot_label: &Label) {
 
     std::thread::spawn(move || {
         let text = match WaypointHelperClient::new() {
-            Ok(client) => {
-                match client.list_snapshots() {
-                    Ok(snapshots) => {
-                        if let Some(latest) = snapshots.iter().max_by_key(|s| s.timestamp) {
-                            let now = chrono::Utc::now();
-                            let duration = now.signed_duration_since(latest.timestamp);
+            Ok(client) => match client.list_snapshots() {
+                Ok(snapshots) => {
+                    if let Some(latest) = snapshots.iter().max_by_key(|s| s.timestamp) {
+                        let now = chrono::Utc::now();
+                        let duration = now.signed_duration_since(latest.timestamp);
 
-                            if duration.num_days() > 0 {
-                                format!("{} days ago", duration.num_days())
-                            } else if duration.num_hours() > 0 {
-                                format!("{} hours ago", duration.num_hours())
-                            } else if duration.num_minutes() > 0 {
-                                format!("{} minutes ago", duration.num_minutes())
-                            } else {
-                                "Just now".to_string()
-                            }
+                        if duration.num_days() > 0 {
+                            format!("{} days ago", duration.num_days())
+                        } else if duration.num_hours() > 0 {
+                            format!("{} hours ago", duration.num_hours())
+                        } else if duration.num_minutes() > 0 {
+                            format!("{} minutes ago", duration.num_minutes())
                         } else {
-                            "No snapshots yet".to_string()
+                            "Just now".to_string()
                         }
+                    } else {
+                        "No snapshots yet".to_string()
                     }
-                    Err(e) => format!("Error: {}", e),
                 }
-            }
+                Err(e) => format!("Error: {}", e),
+            },
             Err(_) => "Cannot connect to helper service".to_string(),
         };
 

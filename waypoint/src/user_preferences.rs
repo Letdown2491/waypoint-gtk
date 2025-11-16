@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
-use std::io::{Read, Write};
 use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
 /// User preferences for a specific snapshot
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -66,8 +66,8 @@ impl UserPreferencesManager {
             .context("Failed to read user preferences")?;
         fs2::FileExt::unlock(&file).ok();
 
-        let prefs: HashMap<String, SnapshotPreferences> = serde_json::from_str(&content)
-            .context("Failed to parse user preferences")?;
+        let prefs: HashMap<String, SnapshotPreferences> =
+            serde_json::from_str(&content).context("Failed to parse user preferences")?;
 
         Ok(prefs)
     }
@@ -86,11 +86,15 @@ impl UserPreferencesManager {
                 .create(true)
                 .truncate(true)
                 .open(&tmp_path)
-                .with_context(|| format!("Failed to open temporary preferences file {}", tmp_path.display()))?;
+                .with_context(|| {
+                    format!(
+                        "Failed to open temporary preferences file {}",
+                        tmp_path.display()
+                    )
+                })?;
             file.write_all(content.as_bytes())
                 .context("Failed to write user preferences")?;
-            file.sync_all()
-                .context("Failed to sync user preferences")?;
+            file.sync_all().context("Failed to sync user preferences")?;
         }
 
         fs::rename(&tmp_path, &self.preferences_file)
@@ -147,8 +151,7 @@ impl UserPreferencesManager {
             fs2::FileExt::lock_exclusive(&file)
                 .context("Failed to lock preferences for writing")?;
         } else {
-            fs2::FileExt::lock_shared(&file)
-                .context("Failed to lock preferences for reading")?;
+            fs2::FileExt::lock_shared(&file).context("Failed to lock preferences for reading")?;
         }
 
         Ok(file)

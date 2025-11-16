@@ -1,7 +1,7 @@
-use gtk::{Label, Orientation};
-use gtk::prelude::*;
-use libadwaita as adw;
 use adw::prelude::*;
+use gtk::prelude::*;
+use gtk::{Label, Orientation};
+use libadwaita as adw;
 
 /// Show about dialog with app information
 pub fn show_about_dialog(window: &adw::ApplicationWindow) {
@@ -28,7 +28,9 @@ pub fn show_about_dialog(window: &adw::ApplicationWindow) {
     content.set_valign(gtk::Align::Center);
 
     // Application icon
-    let icon = if let Ok(icon_path) = std::fs::canonicalize("assets/icons/hicolor/scalable/waypoint.svg") {
+    let icon = if let Ok(icon_path) =
+        std::fs::canonicalize("assets/icons/hicolor/scalable/waypoint.svg")
+    {
         gtk::Image::from_file(&icon_path)
     } else {
         gtk::Image::from_icon_name("waypoint")
@@ -48,7 +50,7 @@ pub fn show_about_dialog(window: &adw::ApplicationWindow) {
 
     // Description
     let description = Label::new(Some(
-        "A GTK-based snapshot and rollback tool for Btrfs filesystems on Void Linux."
+        "A GTK-based snapshot and rollback tool for Btrfs filesystems on Void Linux.",
     ));
     description.set_wrap(true);
     description.set_justify(gtk::Justification::Center);

@@ -1,12 +1,12 @@
 // Btrfs operations for waypoint-helper
 
-use anyhow::{anyhow, bail, Context, Result};
-use version_compare::{compare, Cmp};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use version_compare::{Cmp, compare};
 use waypoint_common::{Package, SnapshotInfo, WaypointConfig};
 
 /// Global configuration instance
@@ -19,14 +19,18 @@ pub fn init_config() {
 
 /// Get the snapshot directory path
 fn snapshot_dir() -> &'static Path {
-    CONFIG.get_or_init(|| WaypointConfig::new())
-        .snapshot_dir.as_path()
+    CONFIG
+        .get_or_init(|| WaypointConfig::new())
+        .snapshot_dir
+        .as_path()
 }
 
 /// Get the metadata file path
 fn metadata_file() -> &'static Path {
-    CONFIG.get_or_init(|| WaypointConfig::new())
-        .metadata_file.as_path()
+    CONFIG
+        .get_or_init(|| WaypointConfig::new())
+        .metadata_file
+        .as_path()
 }
 
 /// Internal snapshot representation
@@ -76,19 +80,16 @@ pub fn create_snapshot(
     };
 
     // Load exclude patterns
-    let exclude_config = waypoint_common::ExcludeConfig::load()
-        .unwrap_or_default();
+    let exclude_config = waypoint_common::ExcludeConfig::load().unwrap_or_default();
     let enabled_patterns = exclude_config.enabled_patterns();
 
     // Ensure snapshot directory exists
     let snap_dir = snapshot_dir();
-    fs::create_dir_all(snap_dir)
-        .context("Failed to create snapshot directory")?;
+    fs::create_dir_all(snap_dir).context("Failed to create snapshot directory")?;
 
     // Create a directory for this snapshot group
     let snapshot_base_path = snap_dir.join(name);
-    fs::create_dir_all(&snapshot_base_path)
-        .context("Failed to create snapshot base directory")?;
+    fs::create_dir_all(&snapshot_base_path).context("Failed to create snapshot base directory")?;
 
     // Create snapshots for each subvolume
     for subvol_mount in &subvolumes_to_snapshot {
@@ -107,7 +108,11 @@ pub fn create_snapshot(
         // Use the mount point directly as the source
         let source_path = subvol_mount;
 
-        log::info!("Creating snapshot: {} -> {}", source_path.display(), snapshot_path.display());
+        log::info!(
+            "Creating snapshot: {} -> {}",
+            source_path.display(),
+            snapshot_path.display()
+        );
 
         // Create the btrfs snapshot as WRITABLE (no -r flag) so we can apply exclusions
         let output = Command::new("btrfs")
@@ -136,9 +141,17 @@ pub fn create_snapshot(
 
         // Apply exclude patterns by deleting matching files
         if !enabled_patterns.is_empty() {
-            log::info!("Applying {} exclude patterns to {}", enabled_patterns.len(), snapshot_path.display());
+            log::info!(
+                "Applying {} exclude patterns to {}",
+                enabled_patterns.len(),
+                snapshot_path.display()
+            );
             if let Err(e) = apply_exclusions(&snapshot_path, &enabled_patterns) {
-                log::error!("Failed to apply exclusions to {}: {}", snapshot_path.display(), e);
+                log::error!(
+                    "Failed to apply exclusions to {}: {}",
+                    snapshot_path.display(),
+                    e
+                );
                 // Don't fail the whole snapshot, just log the error
             }
         }
@@ -234,7 +247,9 @@ fn apply_exclusions(
         let absolute_path = Path::new("/").join(relative_path);
 
         // Check if this path matches any pattern
-        let matches = patterns.iter().any(|pattern| pattern.matches(&absolute_path));
+        let matches = patterns
+            .iter()
+            .any(|pattern| pattern.matches(&absolute_path));
 
         if matches {
             // Delete this file or directory
@@ -245,7 +260,11 @@ fn apply_exclusions(
                         deleted_count += 1;
                     }
                     Err(e) => {
-                        log::warn!("Failed to delete excluded directory {}: {}", absolute_path.display(), e);
+                        log::warn!(
+                            "Failed to delete excluded directory {}: {}",
+                            absolute_path.display(),
+                            e
+                        );
                         failed_count += 1;
                     }
                 }
@@ -256,7 +275,11 @@ fn apply_exclusions(
                         deleted_count += 1;
                     }
                     Err(e) => {
-                        log::warn!("Failed to delete excluded file {}: {}", absolute_path.display(), e);
+                        log::warn!(
+                            "Failed to delete excluded file {}: {}",
+                            absolute_path.display(),
+                            e
+                        );
                         failed_count += 1;
                     }
                 }
@@ -264,7 +287,11 @@ fn apply_exclusions(
         }
     }
 
-    log::info!("Exclusion complete: {} items excluded, {} failures", deleted_count, failed_count);
+    log::info!(
+        "Exclusion complete: {} items excluded, {} failures",
+        deleted_count,
+        failed_count
+    );
 
     Ok(())
 }
@@ -305,8 +332,7 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
     if snapshot_path.is_dir() {
         // New format: directory containing subvolume snapshots
         // Delete all subvolume snapshots within this directory
-        let entries = fs::read_dir(&snapshot_path)
-            .context("Failed to read snapshot directory")?;
+        let entries = fs::read_dir(&snapshot_path).context("Failed to read snapshot directory")?;
 
         for entry in entries {
             let entry = entry.context("Failed to read directory entry")?;
@@ -328,8 +354,7 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
         }
 
         // Remove the parent directory
-        fs::remove_dir(&snapshot_path)
-            .context("Failed to remove snapshot directory")?;
+        fs::remove_dir(&snapshot_path).context("Failed to remove snapshot directory")?;
     } else {
         // Old format: single subvolume snapshot
         let output = Command::new("btrfs")
@@ -402,7 +427,9 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
             update_fstab_for_snapshot(&fstab_path, name, &snapshot_meta.subvolumes)
                 .context("Failed to update fstab")?;
         } else {
-            log::warn!("/etc/fstab not found in snapshot, multi-subvolume restore may not work correctly");
+            log::warn!(
+                "/etc/fstab not found in snapshot, multi-subvolume restore may not work correctly"
+            );
         }
 
         writable_root
@@ -460,7 +487,10 @@ pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
     // Check snapshot base directory exists first
     let snapshot_base_path = snapshot_dir().join(name);
     if !snapshot_base_path.exists() {
-        errors.push(format!("Snapshot directory does not exist: {}", snapshot_base_path.display()));
+        errors.push(format!(
+            "Snapshot directory does not exist: {}",
+            snapshot_base_path.display()
+        ));
         return Ok(VerificationResult {
             is_valid: false,
             errors,
@@ -472,7 +502,10 @@ pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
     let snapshot_meta_opt = match get_snapshot_metadata(name) {
         Ok(meta) => Some(meta),
         Err(e) => {
-            warnings.push(format!("Snapshot metadata not found (this is normal for older snapshots): {}", e));
+            warnings.push(format!(
+                "Snapshot metadata not found (this is normal for older snapshots): {}",
+                e
+            ));
             None
         }
     };
@@ -505,14 +538,14 @@ pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
                 }
 
                 // Verify it's a valid btrfs subvolume
-        let path = snapshot_base_path.join(&subvol_name);
-        ensure_within_snapshot_dir(&path)?;
-        match Command::new("btrfs")
-            .arg("subvolume")
-            .arg("show")
-            .arg(&path)
-            .output()
-        {
+                let path = snapshot_base_path.join(&subvol_name);
+                ensure_within_snapshot_dir(&path)?;
+                match Command::new("btrfs")
+                    .arg("subvolume")
+                    .arg("show")
+                    .arg(&path)
+                    .output()
+                {
                     Ok(output) if output.status.success() => {
                         // Subvolume is valid
                     }
@@ -552,7 +585,10 @@ pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
             }
 
             if !found_valid_subvol {
-                errors.push(format!("No valid btrfs subvolumes found in {}", snapshot_base_path.display()));
+                errors.push(format!(
+                    "No valid btrfs subvolumes found in {}",
+                    snapshot_base_path.display()
+                ));
             }
         }
     } else {
@@ -628,12 +664,11 @@ pub fn preview_restore(name: &str) -> Result<RestorePreview> {
     ensure_snapshot_name(name)?;
 
     // Get snapshot metadata
-    let snapshot_meta = get_snapshot_metadata(name)
-        .context("Failed to load snapshot metadata")?;
+    let snapshot_meta = get_snapshot_metadata(name).context("Failed to load snapshot metadata")?;
 
     // Get current packages
-    let current_packages = get_installed_packages()
-        .context("Failed to get current installed packages")?;
+    let current_packages =
+        get_installed_packages().context("Failed to get current installed packages")?;
 
     // Build maps for easy lookup
     let current_pkg_map: HashMap<String, String> = current_packages
@@ -731,7 +766,10 @@ pub fn preview_restore(name: &str) -> Result<RestorePreview> {
 
     Ok(RestorePreview {
         snapshot_name: snapshot_meta.name.clone(),
-        snapshot_timestamp: snapshot_meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        snapshot_timestamp: snapshot_meta
+            .timestamp
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string(),
         snapshot_description: snapshot_meta.description.clone(),
         current_kernel,
         snapshot_kernel: snapshot_meta.kernel_version.clone(),
@@ -820,11 +858,10 @@ fn load_snapshot_metadata() -> Result<Vec<Snapshot>> {
         return Ok(Vec::new());
     }
 
-    let content = fs::read_to_string(path)
-        .context("Failed to read snapshots metadata")?;
+    let content = fs::read_to_string(path).context("Failed to read snapshots metadata")?;
 
-    let parsed: Vec<Snapshot> = serde_json::from_str(&content)
-        .context("Failed to parse snapshots metadata")?;
+    let parsed: Vec<Snapshot> =
+        serde_json::from_str(&content).context("Failed to parse snapshots metadata")?;
 
     let base_dir = snapshot_dir();
     let mut sanitized = Vec::with_capacity(parsed.len());
@@ -862,15 +899,13 @@ fn save_snapshot_metadata(snapshots: &[Snapshot]) -> Result<()> {
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .context("Failed to create metadata directory")?;
+        fs::create_dir_all(parent).context("Failed to create metadata directory")?;
     }
 
-    let content = serde_json::to_string_pretty(snapshots)
-        .context("Failed to serialize snapshots")?;
+    let content =
+        serde_json::to_string_pretty(snapshots).context("Failed to serialize snapshots")?;
 
-    fs::write(path, content)
-        .context("Failed to write snapshots metadata")?;
+    fs::write(path, content).context("Failed to write snapshots metadata")?;
 
     Ok(())
 }
@@ -949,8 +984,10 @@ fn backup_fstab(fstab_path: &Path) -> Result<PathBuf> {
     }
 
     // Copy fstab to backup
-    fs::copy(fstab_path, &backup_path)
-        .context(format!("Failed to create fstab backup at {}", backup_path.display()))?;
+    fs::copy(fstab_path, &backup_path).context(format!(
+        "Failed to create fstab backup at {}",
+        backup_path.display()
+    ))?;
 
     log::info!("Created fstab backup: {}", backup_path.display());
 
@@ -967,8 +1004,7 @@ fn update_fstab_for_snapshot(
     backup_fstab(fstab_path)?;
 
     // Read current fstab
-    let fstab_content = fs::read_to_string(fstab_path)
-        .context("Failed to read fstab")?;
+    let fstab_content = fs::read_to_string(fstab_path).context("Failed to read fstab")?;
 
     let mut updated_lines = Vec::new();
     let mut updated = false;
@@ -1015,9 +1051,10 @@ fn update_fstab_for_snapshot(
 
         // Preserve original spacing/formatting as much as possible
         let new_line = if parts.len() == 6 {
-            format!("{}\t{}\t{}\t{}\t{}\t{}",
-                new_parts[0], new_parts[1], new_parts[2],
-                new_parts[3], new_parts[4], new_parts[5])
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                new_parts[0], new_parts[1], new_parts[2], new_parts[3], new_parts[4], new_parts[5]
+            )
         } else {
             new_parts.join("\t")
         };
@@ -1029,19 +1066,14 @@ fn update_fstab_for_snapshot(
     if updated {
         // Write updated fstab
         let new_content = updated_lines.join("\n") + "\n";
-        fs::write(fstab_path, new_content)
-            .context("Failed to write updated fstab")?;
+        fs::write(fstab_path, new_content).context("Failed to write updated fstab")?;
     }
 
     Ok(())
 }
 
 /// Update the subvol option in mount options string
-fn update_subvol_option(
-    options: &str,
-    snapshot_name: &str,
-    mount_point: &Path,
-) -> Result<String> {
+fn update_subvol_option(options: &str, snapshot_name: &str, mount_point: &Path) -> Result<String> {
     let opts: Vec<&str> = options.split(',').collect();
     let mut new_opts = Vec::new();
     let mut found_subvol = false;

@@ -136,40 +136,73 @@ impl ExcludeConfig {
             ExcludePattern::system("/proc", PatternType::Prefix, "Process information"),
             ExcludePattern::system("/sys", PatternType::Prefix, "System information"),
             ExcludePattern::system("/run", PatternType::Prefix, "Runtime data"),
-
             // Temporary directories
             ExcludePattern::system("/tmp", PatternType::Prefix, "Temporary files"),
             ExcludePattern::system("/var/tmp", PatternType::Prefix, "Variable temporary files"),
             ExcludePattern::system("/var/run", PatternType::Prefix, "Runtime variable data"),
             ExcludePattern::system("/var/lock", PatternType::Prefix, "Lock files"),
-
             // Mount points
-            ExcludePattern::system("/media", PatternType::Prefix, "Removable media mount points"),
+            ExcludePattern::system(
+                "/media",
+                PatternType::Prefix,
+                "Removable media mount points",
+            ),
             ExcludePattern::system("/mnt", PatternType::Prefix, "Temporary mount points"),
-
             // Caches
             ExcludePattern::system("/var/cache/xbps", PatternType::Prefix, "XBPS package cache"),
             ExcludePattern::system("/root/.cache", PatternType::Prefix, "Root user cache"),
-            ExcludePattern::system("/home/*/.cache", PatternType::Glob, "User cache directories"),
-
+            ExcludePattern::system(
+                "/home/*/.cache",
+                PatternType::Glob,
+                "User cache directories",
+            ),
             // Browser caches
-            ExcludePattern::system("/root/.mozilla/firefox/*.default/Cache", PatternType::Glob, "Firefox cache (root)"),
-            ExcludePattern::system("/home/*/.mozilla/firefox/*.default/Cache", PatternType::Glob, "Firefox cache (users)"),
-            ExcludePattern::system("/root/.config/chromium/*/Cache", PatternType::Glob, "Chromium cache (root)"),
-            ExcludePattern::system("/home/*/.config/chromium/*/Cache", PatternType::Glob, "Chromium cache (users)"),
-
+            ExcludePattern::system(
+                "/root/.mozilla/firefox/*.default/Cache",
+                PatternType::Glob,
+                "Firefox cache (root)",
+            ),
+            ExcludePattern::system(
+                "/home/*/.mozilla/firefox/*.default/Cache",
+                PatternType::Glob,
+                "Firefox cache (users)",
+            ),
+            ExcludePattern::system(
+                "/root/.config/chromium/*/Cache",
+                PatternType::Glob,
+                "Chromium cache (root)",
+            ),
+            ExcludePattern::system(
+                "/home/*/.config/chromium/*/Cache",
+                PatternType::Glob,
+                "Chromium cache (users)",
+            ),
             // Thumbnails and trash
             ExcludePattern::system("/root/.thumbnails", PatternType::Prefix, "Root thumbnails"),
             ExcludePattern::system("/home/*/.thumbnails", PatternType::Glob, "User thumbnails"),
-            ExcludePattern::system("/root/.local/share/Trash", PatternType::Prefix, "Root trash"),
-            ExcludePattern::system("/home/*/.local/share/Trash", PatternType::Glob, "User trash"),
-
+            ExcludePattern::system(
+                "/root/.local/share/Trash",
+                PatternType::Prefix,
+                "Root trash",
+            ),
+            ExcludePattern::system(
+                "/home/*/.local/share/Trash",
+                PatternType::Glob,
+                "User trash",
+            ),
             // Containers and VMs
             ExcludePattern::system("/var/lib/docker", PatternType::Prefix, "Docker data"),
-            ExcludePattern::system("/var/lib/containers", PatternType::Prefix, "Podman/containers data"),
-
+            ExcludePattern::system(
+                "/var/lib/containers",
+                PatternType::Prefix,
+                "Podman/containers data",
+            ),
             // Other
-            ExcludePattern::system("/lost+found", PatternType::Exact, "Lost and found directory"),
+            ExcludePattern::system(
+                "/lost+found",
+                PatternType::Exact,
+                "Lost and found directory",
+            ),
             ExcludePattern::system("/swapfile", PatternType::Exact, "Swap file"),
         ]
     }
@@ -220,9 +253,10 @@ impl ExcludeConfig {
 
         for default in defaults {
             // Check if this default pattern already exists
-            let exists = self.patterns.iter().any(|p| {
-                p.pattern == default.pattern && p.system_default
-            });
+            let exists = self
+                .patterns
+                .iter()
+                .any(|p| p.pattern == default.pattern && p.system_default);
 
             if !exists {
                 self.patterns.push(default);
@@ -264,11 +298,8 @@ mod tests {
 
     #[test]
     fn test_exact_match() {
-        let pattern = ExcludePattern::new(
-            "/tmp".to_string(),
-            PatternType::Exact,
-            "test".to_string(),
-        );
+        let pattern =
+            ExcludePattern::new("/tmp".to_string(), PatternType::Exact, "test".to_string());
 
         assert!(pattern.matches(Path::new("/tmp")));
         assert!(!pattern.matches(Path::new("/tmp/foo")));
@@ -276,11 +307,8 @@ mod tests {
 
     #[test]
     fn test_prefix_match() {
-        let pattern = ExcludePattern::new(
-            "/tmp".to_string(),
-            PatternType::Prefix,
-            "test".to_string(),
-        );
+        let pattern =
+            ExcludePattern::new("/tmp".to_string(), PatternType::Prefix, "test".to_string());
 
         assert!(pattern.matches(Path::new("/tmp")));
         assert!(pattern.matches(Path::new("/tmp/foo")));
@@ -304,11 +332,8 @@ mod tests {
 
     #[test]
     fn test_disabled_pattern() {
-        let mut pattern = ExcludePattern::new(
-            "/tmp".to_string(),
-            PatternType::Prefix,
-            "test".to_string(),
-        );
+        let mut pattern =
+            ExcludePattern::new("/tmp".to_string(), PatternType::Prefix, "test".to_string());
         pattern.enabled = false;
 
         assert!(!pattern.matches(Path::new("/tmp")));

@@ -142,8 +142,14 @@ pub fn validate_snapshot_prefix(prefix: &str) -> Result<(), String> {
     }
 
     // Only allow alphanumeric, dash, underscore
-    if !prefix.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        return Err("Snapshot prefix can only contain letters, numbers, dashes, and underscores".to_string());
+    if !prefix
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(
+            "Snapshot prefix can only contain letters, numbers, dashes, and underscores"
+                .to_string(),
+        );
     }
 
     // Cannot start with dash or dot
@@ -237,8 +243,7 @@ pub fn validate_config_path(path: &Path) -> Result<(), String> {
         }
 
         // Try to check permissions (simplified check)
-        let metadata = std::fs::metadata(path)
-            .map_err(|e| format!("Cannot access path: {}", e))?;
+        let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot access path: {}", e))?;
 
         if metadata.permissions().readonly() {
             return Err("Configuration file is read-only".to_string());

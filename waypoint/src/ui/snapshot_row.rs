@@ -1,9 +1,9 @@
 use crate::snapshot::{Snapshot, format_bytes};
 use crate::user_preferences::SnapshotPreferences;
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Box, Button, Orientation};
 use libadwaita as adw;
-use adw::prelude::*;
 
 pub struct SnapshotRow {
     row: adw::ActionRow,
@@ -82,7 +82,10 @@ impl SnapshotRow {
             BackupStatus::PartiallyBackedUp(count, total) => {
                 let backup_icon = gtk::Image::from_icon_name("emblem-important-symbolic");
                 backup_icon.set_pixel_size(12);
-                backup_icon.set_tooltip_text(Some(&format!("Backed up to {} of {} destinations", count, total)));
+                backup_icon.set_tooltip_text(Some(&format!(
+                    "Backed up to {} of {} destinations",
+                    count, total
+                )));
                 backup_icon.add_css_class("warning");
                 prefix_box.append(&backup_icon);
             }
@@ -252,7 +255,8 @@ impl SnapshotRow {
         let action_group = gtk::gio::SimpleActionGroup::new();
 
         // Browse action
-        let browse_action = gtk::gio::SimpleAction::new(&format!("browse-{}", snapshot.id.replace('/', "-")), None);
+        let browse_action =
+            gtk::gio::SimpleAction::new(&format!("browse-{}", snapshot.id.replace('/', "-")), None);
         let browse_id = snapshot.id.clone();
         let browse_cb = callback.clone();
         browse_action.connect_activate(move |_, _| {
@@ -261,7 +265,8 @@ impl SnapshotRow {
         action_group.add_action(&browse_action);
 
         // Verify action
-        let verify_action = gtk::gio::SimpleAction::new(&format!("verify-{}", snapshot.id.replace('/', "-")), None);
+        let verify_action =
+            gtk::gio::SimpleAction::new(&format!("verify-{}", snapshot.id.replace('/', "-")), None);
         let verify_id = snapshot.id.clone();
         let verify_cb = callback.clone();
         verify_action.connect_activate(move |_, _| {
@@ -270,7 +275,8 @@ impl SnapshotRow {
         action_group.add_action(&verify_action);
 
         // Backup action
-        let backup_action = gtk::gio::SimpleAction::new(&format!("backup-{}", snapshot.id.replace('/', "-")), None);
+        let backup_action =
+            gtk::gio::SimpleAction::new(&format!("backup-{}", snapshot.id.replace('/', "-")), None);
         let backup_id = snapshot.id.clone();
         let backup_cb = callback.clone();
         backup_action.connect_activate(move |_, _| {
@@ -279,7 +285,10 @@ impl SnapshotRow {
         action_group.add_action(&backup_action);
 
         // Edit Note action
-        let edit_note_action = gtk::gio::SimpleAction::new(&format!("edit-note-{}", snapshot.id.replace('/', "-")), None);
+        let edit_note_action = gtk::gio::SimpleAction::new(
+            &format!("edit-note-{}", snapshot.id.replace('/', "-")),
+            None,
+        );
         let edit_note_id = snapshot.id.clone();
         let edit_note_cb = callback.clone();
         edit_note_action.connect_activate(move |_, _| {
@@ -288,7 +297,8 @@ impl SnapshotRow {
         action_group.add_action(&edit_note_action);
 
         // Delete action
-        let delete_action = gtk::gio::SimpleAction::new(&format!("delete-{}", snapshot.id.replace('/', "-")), None);
+        let delete_action =
+            gtk::gio::SimpleAction::new(&format!("delete-{}", snapshot.id.replace('/', "-")), None);
         let delete_id = snapshot.id.clone();
         let delete_cb = callback.clone();
         delete_action.connect_activate(move |_, _| {

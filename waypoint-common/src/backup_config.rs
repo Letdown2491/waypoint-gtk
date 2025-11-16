@@ -185,16 +185,22 @@ impl BackupConfig {
     }
 
     /// Get enabled destinations
-    pub fn enabled_destinations(&self) -> impl Iterator<Item = (&String, &BackupDestinationConfig)> {
-        self.destinations.iter().filter(|(_, config)| config.enabled)
+    pub fn enabled_destinations(
+        &self,
+    ) -> impl Iterator<Item = (&String, &BackupDestinationConfig)> {
+        self.destinations
+            .iter()
+            .filter(|(_, config)| config.enabled)
     }
 
     /// Add a pending backup
     pub fn add_pending_backup(&mut self, snapshot_id: String, destination_uuid: String) {
         // Check if already exists
-        if self.pending_backups.iter().any(|pb|
-            pb.snapshot_id == snapshot_id && pb.destination_uuid == destination_uuid
-        ) {
+        if self
+            .pending_backups
+            .iter()
+            .any(|pb| pb.snapshot_id == snapshot_id && pb.destination_uuid == destination_uuid)
+        {
             return;
         }
 
@@ -233,9 +239,9 @@ impl BackupConfig {
         parent_snapshot_id: Option<String>,
     ) {
         // Remove from pending
-        self.pending_backups.retain(|pb|
+        self.pending_backups.retain(|pb| {
             !(pb.snapshot_id == snapshot_id && pb.destination_uuid == destination_uuid)
-        );
+        });
 
         // Add to history
         let record = BackupRecord {
@@ -256,9 +262,11 @@ impl BackupConfig {
 
     /// Mark a backup as failed
     pub fn mark_failed(&mut self, snapshot_id: &str, destination_uuid: &str, error: String) {
-        if let Some(pending) = self.pending_backups.iter_mut().find(|pb|
-            pb.snapshot_id == snapshot_id && pb.destination_uuid == destination_uuid
-        ) {
+        if let Some(pending) = self
+            .pending_backups
+            .iter_mut()
+            .find(|pb| pb.snapshot_id == snapshot_id && pb.destination_uuid == destination_uuid)
+        {
             pending.status = BackupStatus::Failed;
             pending.last_error = Some(error);
             pending.retry_count += 1;
@@ -266,25 +274,27 @@ impl BackupConfig {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_secs() as i64
+                    .as_secs() as i64,
             );
         }
     }
 
     /// Reset a failed backup to pending (for retry)
     pub fn retry_backup(&mut self, snapshot_id: &str, destination_uuid: &str) {
-        if let Some(pending) = self.pending_backups.iter_mut().find(|pb|
-            pb.snapshot_id == snapshot_id && pb.destination_uuid == destination_uuid
-        ) {
+        if let Some(pending) = self
+            .pending_backups
+            .iter_mut()
+            .find(|pb| pb.snapshot_id == snapshot_id && pb.destination_uuid == destination_uuid)
+        {
             pending.status = BackupStatus::Pending;
         }
     }
 
     /// Check if a snapshot is already backed up to a destination
     pub fn is_backed_up(&self, snapshot_id: &str, destination_uuid: &str) -> bool {
-        self.backup_history.iter().any(|record|
+        self.backup_history.iter().any(|record| {
             record.snapshot_id == snapshot_id && record.destination_uuid == destination_uuid
-        )
+        })
     }
 
     /// Get the latest backup for a snapshot on a destination (for incremental backup parent)
@@ -327,7 +337,14 @@ mod tests {
         let mut config = BackupConfig::default();
         config.add_pending_backup("snap1".to_string(), "uuid1".to_string());
 
-        config.mark_completed("snap1", "uuid1", "/backup/snap1".to_string(), Some(1024), false, None);
+        config.mark_completed(
+            "snap1",
+            "uuid1",
+            "/backup/snap1".to_string(),
+            Some(1024),
+            false,
+            None,
+        );
 
         assert_eq!(config.pending_backups.len(), 0);
         assert_eq!(config.backup_history.len(), 1);
@@ -337,7 +354,14 @@ mod tests {
     #[test]
     fn test_is_backed_up() {
         let mut config = BackupConfig::default();
-        config.mark_completed("snap1", "uuid1", "/backup/snap1".to_string(), Some(1024), false, None);
+        config.mark_completed(
+            "snap1",
+            "uuid1",
+            "/backup/snap1".to_string(),
+            Some(1024),
+            false,
+            None,
+        );
 
         assert!(config.is_backed_up("snap1", "uuid1"));
         assert!(!config.is_backed_up("snap1", "uuid2"));

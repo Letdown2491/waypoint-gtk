@@ -122,8 +122,7 @@ impl WaypointHelperClient {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn new() -> Result<Self> {
-        let connection = BlockingConnection::system()
-            .context("Failed to connect to system bus")?;
+        let connection = BlockingConnection::system().context("Failed to connect to system bus")?;
 
         Ok(Self { connection })
     }
@@ -169,7 +168,12 @@ impl WaypointHelperClient {
     /// }
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn create_snapshot(&self, name: String, description: String, subvolumes: Vec<String>) -> Result<(bool, String)> {
+    pub fn create_snapshot(
+        &self,
+        name: String,
+        description: String,
+        subvolumes: Vec<String>,
+    ) -> Result<(bool, String)> {
         let proxy = zbus::blocking::Proxy::new(
             &self.connection,
             DBUS_SERVICE_NAME,
@@ -294,8 +298,8 @@ impl WaypointHelperClient {
             .call("ListSnapshots", &())
             .context("Failed to call ListSnapshots")?;
 
-        let snapshots: Vec<SnapshotInfo> = serde_json::from_str(&json)
-            .context("Failed to parse snapshot list")?;
+        let snapshots: Vec<SnapshotInfo> =
+            serde_json::from_str(&json).context("Failed to parse snapshot list")?;
 
         Ok(snapshots)
     }
@@ -333,8 +337,8 @@ impl WaypointHelperClient {
             .call("VerifySnapshot", &(name,))
             .context("Failed to call VerifySnapshot")?;
 
-        let result: VerificationResult = serde_json::from_str(&json)
-            .context("Failed to parse verification result")?;
+        let result: VerificationResult =
+            serde_json::from_str(&json).context("Failed to parse verification result")?;
 
         Ok(result)
     }
@@ -357,9 +361,8 @@ impl WaypointHelperClient {
     /// - Package list comparison failure
     /// - JSON parsing error
     ///
-    /// # Note
-    /// This is a read-only operation and does not modify the system.
-    /// Use this before calling `restore_snapshot()` to review changes.
+    /// # Security
+    /// Requires restore authorization via Polkit before data is returned.
     pub fn preview_restore(&self, name: String) -> Result<RestorePreview> {
         let proxy = zbus::blocking::Proxy::new(
             &self.connection,
@@ -368,14 +371,18 @@ impl WaypointHelperClient {
             DBUS_INTERFACE_NAME,
         )?;
 
-        let json: String = proxy
+        let result: (bool, String) = proxy
             .call("PreviewRestore", &(name,))
             .context("Failed to call PreviewRestore")?;
 
-        let result: RestorePreview = serde_json::from_str(&json)
-            .context("Failed to parse restore preview result")?;
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
 
-        Ok(result)
+        let preview: RestorePreview =
+            serde_json::from_str(&result.1).context("Failed to parse restore preview result")?;
+
+        Ok(preview)
     }
 
     /// Save schedules TOML configuration file
@@ -741,7 +748,10 @@ impl WaypointHelperClient {
         )?;
 
         let result: (bool, String, u64) = proxy
-            .call("BackupSnapshot", &(snapshot_path, destination_mount, parent_snapshot))
+            .call(
+                "BackupSnapshot",
+                &(snapshot_path, destination_mount, parent_snapshot),
+            )
             .context("Failed to call BackupSnapshot")?;
 
         Ok(result)

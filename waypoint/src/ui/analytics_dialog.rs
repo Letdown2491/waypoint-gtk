@@ -1,19 +1,21 @@
 //! Analytics dialog showing snapshot statistics and insights
 
+use adw::prelude::*;
+use chrono::Utc;
 use gtk::prelude::*;
 use gtk::{Label, Orientation};
 use libadwaita as adw;
-use adw::prelude::*;
-use chrono::Utc;
 
-use crate::snapshot::{Snapshot, format_bytes};
 use crate::btrfs;
+use crate::snapshot::{Snapshot, format_bytes};
 
 /// Create empty state when no snapshots exist
 fn create_empty_state() -> adw::StatusPage {
     let status_page = adw::StatusPage::new();
     status_page.set_title("No Snapshots Yet");
-    status_page.set_description(Some("Create your first snapshot to see analytics and insights about your system backups."));
+    status_page.set_description(Some(
+        "Create your first snapshot to see analytics and insights about your system backups.",
+    ));
     status_page.set_icon_name(Some("folder-symbolic"));
     status_page.set_vexpand(true);
     status_page
@@ -70,7 +72,10 @@ pub fn show_analytics_dialog(parent: &adw::ApplicationWindow, snapshots: &[Snaps
     main_box.append(&create_insights_section(&stats, snapshots));
 
     // Largest snapshots section
-    main_box.append(&create_largest_snapshots_section(snapshots, stats.total_size));
+    main_box.append(&create_largest_snapshots_section(
+        snapshots,
+        stats.total_size,
+    ));
 
     clamp.set_child(Some(&main_box));
     scrolled.set_child(Some(&clamp));
@@ -119,11 +124,13 @@ fn calculate_statistics(snapshots: &[Snapshot]) -> SnapshotStats {
 
     // Find oldest and newest snapshots
     let now = Utc::now();
-    let oldest_age_days = snapshots.iter()
+    let oldest_age_days = snapshots
+        .iter()
         .map(|s| (now - s.timestamp).num_days())
         .max();
 
-    let newest_age_hours = snapshots.iter()
+    let newest_age_hours = snapshots
+        .iter()
         .map(|s| (now - s.timestamp).num_hours())
         .min();
 
@@ -133,10 +140,12 @@ fn calculate_statistics(snapshots: &[Snapshot]) -> SnapshotStats {
         sorted.sort_by_key(|s| s.timestamp);
 
         if let (Some(oldest), Some(newest)) = (sorted.first(), sorted.last()) {
-            let oldest_size = oldest.size_bytes
+            let oldest_size = oldest
+                .size_bytes
                 .or_else(|| btrfs::get_snapshot_size(&oldest.path).ok())
                 .unwrap_or(0);
-            let newest_size = newest.size_bytes
+            let newest_size = newest
+                .size_bytes
                 .or_else(|| btrfs::get_snapshot_size(&newest.path).ok())
                 .unwrap_or(0);
             let time_diff_days = (newest.timestamp - oldest.timestamp).num_days();
@@ -205,7 +214,11 @@ fn create_overview_section(stats: &SnapshotStats) -> adw::PreferencesGroup {
         } else if hours < 24 {
             format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" })
         } else {
-            format!("{} day{} ago", hours / 24, if hours / 24 == 1 { "" } else { "s" })
+            format!(
+                "{} day{} ago",
+                hours / 24,
+                if hours / 24 == 1 { "" } else { "s" }
+            )
         };
         newest_row.add_suffix(&create_stat_label(&age_text));
         group.add(&newest_row);
@@ -251,17 +264,21 @@ fn create_space_section(stats: &SnapshotStats) -> adw::PreferencesGroup {
     group
 }
 
-
 /// Create largest snapshots section with visual size indicators
-fn create_largest_snapshots_section(snapshots: &[Snapshot], total_size: u64) -> adw::PreferencesGroup {
+fn create_largest_snapshots_section(
+    snapshots: &[Snapshot],
+    total_size: u64,
+) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
     group.set_title("Largest Snapshots");
     group.set_description(Some("Top 5 snapshots consuming the most disk space"));
 
     // Build list with sizes (calculate if needed)
-    let mut snapshots_with_sizes: Vec<(&Snapshot, u64)> = snapshots.iter()
+    let mut snapshots_with_sizes: Vec<(&Snapshot, u64)> = snapshots
+        .iter()
         .filter_map(|s| {
-            let size = s.size_bytes
+            let size = s
+                .size_bytes
                 .or_else(|| btrfs::get_snapshot_size(&s.path).ok())?;
             Some((s, size))
         })
@@ -287,7 +304,8 @@ fn create_largest_snapshots_section(snapshots: &[Snapshot], total_size: u64) -> 
         row.set_title(&title_text);
 
         // Build subtitle
-        let subtitle = format!("{} • {} packages",
+        let subtitle = format!(
+            "{} • {} packages",
             snapshot.format_timestamp(),
             snapshot.package_count.unwrap_or(0)
         );
@@ -365,18 +383,21 @@ fn create_insights_section(stats: &SnapshotStats, snapshots: &[Snapshot]) -> adw
             // Moderate growth - informational
             insights.push((
                 "Steady growth",
-                format!("Snapshots growing at {}/week (≈{}/month). Current growth rate is sustainable.",
+                format!(
+                    "Snapshots growing at {}/week (≈{}/month). Current growth rate is sustainable.",
                     format_bytes(growth as u64),
-                    format_bytes(monthly_growth as u64)),
-                "info"
+                    format_bytes(monthly_growth as u64)
+                ),
+                "info",
             ));
         }
     } else if stats.total_count > 1 {
         // No growth or negative growth
         insights.push((
             "Stable storage usage",
-            "Snapshot sizes are consistent or decreasing. Your system footprint is well-managed.".to_string(),
-            "success"
+            "Snapshot sizes are consistent or decreasing. Your system footprint is well-managed."
+                .to_string(),
+            "success",
         ));
     }
 
@@ -390,22 +411,31 @@ fn create_insights_section(stats: &SnapshotStats, snapshots: &[Snapshot]) -> adw
     } else if stats.total_count > 20 && stats.total_count <= 50 {
         insights.push((
             "Moderate snapshot count",
-            format!("{} snapshots stored. Your retention policy appears to be working well.", stats.total_count),
-            "info"
+            format!(
+                "{} snapshots stored. Your retention policy appears to be working well.",
+                stats.total_count
+            ),
+            "info",
         ));
     } else if stats.total_count <= 5 {
         insights.push((
             "Few snapshots",
-            format!("Only {} snapshot{}. Consider enabling automated scheduling for regular backups.",
+            format!(
+                "Only {} snapshot{}. Consider enabling automated scheduling for regular backups.",
                 stats.total_count,
-                if stats.total_count == 1 { "" } else { "s" }),
-            "info"
+                if stats.total_count == 1 { "" } else { "s" }
+            ),
+            "info",
         ));
     }
 
     // Insight 3: Size distribution
-    let largest_size = snapshots.iter()
-        .filter_map(|s| s.size_bytes.or_else(|| btrfs::get_snapshot_size(&s.path).ok()))
+    let largest_size = snapshots
+        .iter()
+        .filter_map(|s| {
+            s.size_bytes
+                .or_else(|| btrfs::get_snapshot_size(&s.path).ok())
+        })
         .max()
         .unwrap_or(0);
 
@@ -445,7 +475,7 @@ fn create_insights_section(stats: &SnapshotStats, snapshots: &[Snapshot]) -> adw
         insights.push((
             "Everything looks good",
             "Your snapshot management is healthy. No issues detected.".to_string(),
-            "success"
+            "success",
         ));
     }
 

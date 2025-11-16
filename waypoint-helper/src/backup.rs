@@ -10,9 +10,9 @@ use std::process::Command;
 /// Drive type classification
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DriveType {
-    Removable,  // USB, SD cards, etc.
-    Network,    // NFS, CIFS, SSHFS
-    Internal,   // Internal drives, eSATA
+    Removable, // USB, SD cards, etc.
+    Network,   // NFS, CIFS, SSHFS
+    Internal,  // Internal drives, eSATA
 }
 
 /// Represents a backup destination
@@ -52,7 +52,8 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
             || mount_point == "/home"
             || mount_point.starts_with("/var")
             || mount_point.starts_with("/tmp")
-            || mount_point == "/.snapshots" {
+            || mount_point == "/.snapshots"
+        {
             continue;
         }
 
@@ -99,7 +100,8 @@ fn detect_drive_type(_mount_point: &str, source: &str, fstype: &str) -> DriveTyp
         || fstype.contains("sshfs")
         || fstype.contains("fuse")
         || source.contains("://")
-        || source.contains(":") && !source.starts_with("/dev/") {
+        || source.contains(":") && !source.starts_with("/dev/")
+    {
         return DriveType::Network;
     }
 
@@ -128,7 +130,8 @@ fn extract_device_name(source: &str) -> Option<String> {
         device.split('p').next().map(|s| s.to_string())
     } else {
         // Regular drives (sda1 -> sda)
-        device.chars()
+        device
+            .chars()
             .take_while(|c| !c.is_numeric())
             .collect::<String>()
             .into()
@@ -163,7 +166,8 @@ fn calculate_directory_size(path: &Path) -> Result<u64> {
         .next()
         .ok_or_else(|| anyhow::anyhow!("Invalid du output"))?;
 
-    size_str.parse::<u64>()
+    size_str
+        .parse::<u64>()
         .context("Failed to parse size from du output")
 }
 
@@ -180,18 +184,23 @@ pub fn backup_snapshot(
 
     // Validate inputs
     if !snapshot.exists() {
-        return Err(anyhow::anyhow!("Snapshot does not exist: {}", snapshot_path));
+        return Err(anyhow::anyhow!(
+            "Snapshot does not exist: {}",
+            snapshot_path
+        ));
     }
 
     if !dest_mount.exists() {
-        return Err(anyhow::anyhow!("Destination does not exist: {}", destination_mount));
+        return Err(anyhow::anyhow!(
+            "Destination does not exist: {}",
+            destination_mount
+        ));
     }
 
     // Create waypoint-backups directory at destination
     let backup_dir = dest_mount.join("waypoint-backups");
     if !backup_dir.exists() {
-        std::fs::create_dir_all(&backup_dir)
-            .context("Failed to create backup directory")?;
+        std::fs::create_dir_all(&backup_dir).context("Failed to create backup directory")?;
     }
 
     // Build btrfs send command
@@ -202,7 +211,10 @@ pub fn backup_snapshot(
     if let Some(parent) = parent_snapshot {
         let parent_path = Path::new(parent);
         if !parent_path.exists() {
-            return Err(anyhow::anyhow!("Parent snapshot does not exist: {}", parent));
+            return Err(anyhow::anyhow!(
+                "Parent snapshot does not exist: {}",
+                parent
+            ));
         }
         send_cmd.arg("-p").arg(parent);
     }
@@ -213,15 +225,14 @@ pub fn backup_snapshot(
 
     // Build btrfs receive command
     let mut receive_cmd = Command::new("btrfs");
-    receive_cmd
-        .arg("receive")
-        .arg(&backup_dir);
+    receive_cmd.arg("receive").arg(&backup_dir);
 
     // Execute send | receive pipeline
-    let mut send_child = send_cmd.spawn()
-        .context("Failed to start btrfs send")?;
+    let mut send_child = send_cmd.spawn().context("Failed to start btrfs send")?;
 
-    let send_stdout = send_child.stdout.take()
+    let send_stdout = send_child
+        .stdout
+        .take()
         .ok_or_else(|| anyhow::anyhow!("Failed to capture send output"))?;
 
     let send_stderr_handle = send_child.stderr.take().map(|mut stderr| {
@@ -234,11 +245,11 @@ pub fn backup_snapshot(
 
     receive_cmd.stdin(send_stdout);
 
-    let receive_output = receive_cmd.output()
+    let receive_output = receive_cmd
+        .output()
         .context("Failed to run btrfs receive")?;
 
-    let send_status = send_child.wait()
-        .context("Failed to wait for btrfs send")?;
+    let send_status = send_child.wait().context("Failed to wait for btrfs send")?;
 
     let send_stderr = match send_stderr_handle {
         Some(handle) => handle.join().unwrap_or_default(),
@@ -310,10 +321,7 @@ pub fn list_backups(destination_mount: &str) -> Result<Vec<String>> {
 }
 
 /// Restore a backup from destination to snapshots directory
-pub fn restore_from_backup(
-    backup_path: &str,
-    snapshots_dir: &str,
-) -> Result<String> {
+pub fn restore_from_backup(backup_path: &str, snapshots_dir: &str) -> Result<String> {
     let backup = Path::new(backup_path);
     let dest = Path::new(snapshots_dir);
 
@@ -321,17 +329,25 @@ pub fn restore_from_backup(
         return Err(anyhow::anyhow!("Paths must be absolute"));
     }
 
-    let backup = backup.canonicalize()
+    let backup = backup
+        .canonicalize()
         .context("Failed to resolve backup path")?;
-    let dest = dest.canonicalize()
+    let dest = dest
+        .canonicalize()
         .context("Failed to resolve snapshots directory")?;
 
     if !backup.exists() {
-        return Err(anyhow::anyhow!("Backup does not exist: {}", backup.display()));
+        return Err(anyhow::anyhow!(
+            "Backup does not exist: {}",
+            backup.display()
+        ));
     }
 
     if !dest.exists() {
-        return Err(anyhow::anyhow!("Snapshots directory does not exist: {}", dest.display()));
+        return Err(anyhow::anyhow!(
+            "Snapshots directory does not exist: {}",
+            dest.display()
+        ));
     }
 
     // Build send command
@@ -344,15 +360,14 @@ pub fn restore_from_backup(
 
     // Build receive command
     let mut receive_cmd = Command::new("btrfs");
-    receive_cmd
-        .arg("receive")
-        .arg(&dest);
+    receive_cmd.arg("receive").arg(&dest);
 
     // Execute pipeline
-    let mut send_child = send_cmd.spawn()
-        .context("Failed to start btrfs send")?;
+    let mut send_child = send_cmd.spawn().context("Failed to start btrfs send")?;
 
-    let send_stdout = send_child.stdout.take()
+    let send_stdout = send_child
+        .stdout
+        .take()
         .ok_or_else(|| anyhow::anyhow!("Failed to capture send output"))?;
 
     let send_stderr_handle = send_child.stderr.take().map(|mut stderr| {
@@ -365,11 +380,11 @@ pub fn restore_from_backup(
 
     receive_cmd.stdin(send_stdout);
 
-    let receive_output = receive_cmd.output()
+    let receive_output = receive_cmd
+        .output()
         .context("Failed to run btrfs receive")?;
 
-    let send_status = send_child.wait()
-        .context("Failed to wait for btrfs send")?;
+    let send_status = send_child.wait().context("Failed to wait for btrfs send")?;
 
     let send_stderr = match send_stderr_handle {
         Some(handle) => handle.join().unwrap_or_default(),

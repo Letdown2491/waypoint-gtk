@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -130,13 +130,10 @@ pub fn get_snapshot_size(path: &Path) -> Result<u64> {
     }
 
     // Parse the size from the first column
-    let size: u64 = parts[0]
-        .parse()
-        .context("Failed to parse snapshot size")?;
+    let size: u64 = parts[0].parse().context("Failed to parse snapshot size")?;
 
     // Store in cache
     size_cache().insert(path_buf, size);
 
     Ok(size)
 }
-

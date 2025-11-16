@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use waypoint_common::WaypointConfig;
-use std::io::{Read, Write};
-use std::fs::OpenOptions;
 
 use crate::packages::Package;
 
@@ -138,8 +138,7 @@ impl SnapshotManager {
 
         // Ensure parent directory exists
         if let Some(parent) = metadata_file.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create metadata directory")?;
+            fs::create_dir_all(parent).context("Failed to create metadata directory")?;
         }
 
         Ok(Self { metadata_file })
@@ -174,11 +173,12 @@ impl SnapshotManager {
             return Ok(Vec::new());
         }
 
-        let content = self.read_locked_file(path)
+        let content = self
+            .read_locked_file(path)
             .context("Failed to read snapshots metadata")?;
 
-        let mut snapshots: Vec<Snapshot> = serde_json::from_str(&content)
-            .context("Failed to parse snapshots metadata")?;
+        let mut snapshots: Vec<Snapshot> =
+            serde_json::from_str(&content).context("Failed to parse snapshots metadata")?;
 
         // Filter out snapshots that don't exist on disk (phantom snapshots)
         let initial_count = snapshots.len();
@@ -201,10 +201,16 @@ impl SnapshotManager {
 
         // If we cleaned anything, save the cleaned list
         if after_phantom_cleanup < initial_count {
-            log::info!("Cleaned up {} phantom snapshot(s) from metadata", initial_count - after_phantom_cleanup);
+            log::info!(
+                "Cleaned up {} phantom snapshot(s) from metadata",
+                initial_count - after_phantom_cleanup
+            );
         }
         if after_dedup < after_phantom_cleanup {
-            log::info!("Cleaned up {} duplicate snapshot(s) from metadata", after_phantom_cleanup - after_dedup);
+            log::info!(
+                "Cleaned up {} duplicate snapshot(s) from metadata",
+                after_phantom_cleanup - after_dedup
+            );
         }
 
         if after_dedup < initial_count {
@@ -219,8 +225,8 @@ impl SnapshotManager {
     pub fn save_snapshots(&self, snapshots: &[Snapshot]) -> Result<()> {
         let path = self.metadata_path();
         let _lock = self.locked_file(path, true)?;
-        let content = serde_json::to_string_pretty(snapshots)
-            .context("Failed to serialize snapshots")?;
+        let content =
+            serde_json::to_string_pretty(snapshots).context("Failed to serialize snapshots")?;
 
         let tmp_path = path.with_extension("json.tmp");
 
@@ -230,10 +236,17 @@ impl SnapshotManager {
                 .create(true)
                 .truncate(true)
                 .open(&tmp_path)
-                .with_context(|| format!("Failed to open temporary metadata file {}", tmp_path.display()))?;
-            tmp_file.write_all(content.as_bytes())
+                .with_context(|| {
+                    format!(
+                        "Failed to open temporary metadata file {}",
+                        tmp_path.display()
+                    )
+                })?;
+            tmp_file
+                .write_all(content.as_bytes())
                 .context("Failed to write snapshots metadata")?;
-            tmp_file.sync_all()
+            tmp_file
+                .sync_all()
                 .context("Failed to sync snapshots metadata")?;
         }
 
@@ -255,8 +268,7 @@ impl SnapshotManager {
             fs2::FileExt::lock_exclusive(&file)
                 .context("Failed to lock metadata file for writing")?;
         } else {
-            fs2::FileExt::lock_shared(&file)
-                .context("Failed to lock metadata file for reading")?;
+            fs2::FileExt::lock_shared(&file).context("Failed to lock metadata file for reading")?;
         }
 
         Ok(file)

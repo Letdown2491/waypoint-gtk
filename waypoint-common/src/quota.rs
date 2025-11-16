@@ -110,21 +110,21 @@ impl QuotaConfig {
         let size_str = size_str.trim().to_uppercase();
 
         let (num_str, unit) = if size_str.ends_with("TB") || size_str.ends_with("TIB") {
-            (&size_str[..size_str.len()-2], 1024u64.pow(4))
+            (&size_str[..size_str.len() - 2], 1024u64.pow(4))
         } else if size_str.ends_with('T') {
-            (&size_str[..size_str.len()-1], 1024u64.pow(4))
+            (&size_str[..size_str.len() - 1], 1024u64.pow(4))
         } else if size_str.ends_with("GB") || size_str.ends_with("GIB") {
-            (&size_str[..size_str.len()-2], 1024u64.pow(3))
+            (&size_str[..size_str.len() - 2], 1024u64.pow(3))
         } else if size_str.ends_with('G') {
-            (&size_str[..size_str.len()-1], 1024u64.pow(3))
+            (&size_str[..size_str.len() - 1], 1024u64.pow(3))
         } else if size_str.ends_with("MB") || size_str.ends_with("MIB") {
-            (&size_str[..size_str.len()-2], 1024u64.pow(2))
+            (&size_str[..size_str.len() - 2], 1024u64.pow(2))
         } else if size_str.ends_with('M') {
-            (&size_str[..size_str.len()-1], 1024u64.pow(2))
+            (&size_str[..size_str.len() - 1], 1024u64.pow(2))
         } else if size_str.ends_with("KB") || size_str.ends_with("KIB") {
-            (&size_str[..size_str.len()-2], 1024)
+            (&size_str[..size_str.len() - 2], 1024)
         } else if size_str.ends_with('K') {
-            (&size_str[..size_str.len()-1], 1024)
+            (&size_str[..size_str.len() - 1], 1024)
         } else {
             // Assume bytes
             (size_str.as_str(), 1)
@@ -199,7 +199,10 @@ mod tests {
         assert_eq!(QuotaConfig::parse_size("1KB").unwrap(), 1024);
         assert_eq!(QuotaConfig::parse_size("1M").unwrap(), 1024 * 1024);
         assert_eq!(QuotaConfig::parse_size("1G").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(QuotaConfig::parse_size("50G").unwrap(), 50 * 1024 * 1024 * 1024);
+        assert_eq!(
+            QuotaConfig::parse_size("50G").unwrap(),
+            50 * 1024 * 1024 * 1024
+        );
         assert_eq!(QuotaConfig::parse_size("1T").unwrap(), 1024u64.pow(4));
         assert_eq!(QuotaConfig::parse_size("1.5").is_err(), true); // No decimals in number
     }
@@ -209,14 +212,17 @@ mod tests {
         assert_eq!(QuotaConfig::format_size(1024), "1.00 KiB");
         assert_eq!(QuotaConfig::format_size(1024 * 1024), "1.00 MiB");
         assert_eq!(QuotaConfig::format_size(1024 * 1024 * 1024), "1.00 GiB");
-        assert_eq!(QuotaConfig::format_size(50 * 1024 * 1024 * 1024), "50.00 GiB");
+        assert_eq!(
+            QuotaConfig::format_size(50 * 1024 * 1024 * 1024),
+            "50.00 GiB"
+        );
     }
 
     #[test]
     fn test_quota_usage_percent() {
         let usage = QuotaUsage {
-            referenced: 50 * 1024 * 1024 * 1024, // 50 GB
-            exclusive: 10 * 1024 * 1024 * 1024,  // 10 GB
+            referenced: 50 * 1024 * 1024 * 1024,   // 50 GB
+            exclusive: 10 * 1024 * 1024 * 1024,    // 10 GB
             limit: Some(100 * 1024 * 1024 * 1024), // 100 GB
         };
 

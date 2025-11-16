@@ -7,10 +7,10 @@
 #![allow(deprecated)]
 
 use crate::dbus_client::WaypointHelperClient;
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{FileChooserAction, FileChooserDialog, ResponseType};
 use libadwaita as adw;
-use adw::prelude::*;
 use std::path::PathBuf;
 use waypoint_common::WaypointConfig;
 
@@ -20,10 +20,7 @@ use super::error_helpers;
 /// Show file browser dialog for restoring files from a snapshot
 pub fn show_file_restore_dialog(parent: &adw::ApplicationWindow, snapshot_name: &str) {
     let config = WaypointConfig::new();
-    let snapshot_path = config
-        .snapshot_dir
-        .join(snapshot_name)
-        .join("root");
+    let snapshot_path = config.snapshot_dir.join(snapshot_name).join("root");
 
     // Verify snapshot exists
     if !snapshot_path.exists() {
@@ -107,7 +104,11 @@ fn show_restore_confirmation_dialog(
         })
         .collect();
 
-    let heading = format!("Restore {} file(s) from snapshot '{}'?", file_list.len(), snapshot_name);
+    let heading = format!(
+        "Restore {} file(s) from snapshot '{}'?",
+        file_list.len(),
+        snapshot_name
+    );
     let body = file_list.join("\n");
 
     let dialog = adw::MessageDialog::new(
@@ -140,7 +141,11 @@ fn show_restore_confirmation_dialog(
             }
             "restore_custom" => {
                 // Show directory chooser for custom location
-                show_custom_location_chooser(&parent_clone, &snapshot_name_owned, file_list.clone());
+                show_custom_location_chooser(
+                    &parent_clone,
+                    &snapshot_name_owned,
+                    file_list.clone(),
+                );
             }
             _ => {} // Cancel - do nothing
         }
@@ -150,7 +155,11 @@ fn show_restore_confirmation_dialog(
 }
 
 /// Show directory chooser for custom restore location
-fn show_custom_location_chooser(parent: &adw::ApplicationWindow, snapshot_name: &str, file_paths: Vec<String>) {
+fn show_custom_location_chooser(
+    parent: &adw::ApplicationWindow,
+    snapshot_name: &str,
+    file_paths: Vec<String>,
+) {
     let dialog = FileChooserDialog::new(
         Some("Choose Restore Location"),
         Some(parent),

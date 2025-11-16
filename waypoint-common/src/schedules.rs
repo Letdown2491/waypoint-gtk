@@ -128,14 +128,20 @@ impl Schedule {
         // Validate time format if present
         if let Some(ref time) = self.time {
             if !is_valid_time_format(time) {
-                return Err(format!("Invalid time format '{}'. Expected HH:MM (24-hour)", time));
+                return Err(format!(
+                    "Invalid time format '{}'. Expected HH:MM (24-hour)",
+                    time
+                ));
             }
         }
 
         // Validate day_of_week if present
         if let Some(day) = self.day_of_week {
             if day > 6 {
-                return Err(format!("Invalid day_of_week {}. Must be 0-6 (0=Sunday)", day));
+                return Err(format!(
+                    "Invalid day_of_week {}. Must be 0-6 (0=Sunday)",
+                    day
+                ));
             }
         }
 
@@ -237,12 +243,16 @@ impl SchedulesConfig {
 
     /// Get schedule by type
     pub fn get_schedule(&self, schedule_type: ScheduleType) -> Option<&Schedule> {
-        self.schedules.iter().find(|s| s.schedule_type == schedule_type)
+        self.schedules
+            .iter()
+            .find(|s| s.schedule_type == schedule_type)
     }
 
     /// Get mutable schedule by type
     pub fn get_schedule_mut(&mut self, schedule_type: ScheduleType) -> Option<&mut Schedule> {
-        self.schedules.iter_mut().find(|s| s.schedule_type == schedule_type)
+        self.schedules
+            .iter_mut()
+            .find(|s| s.schedule_type == schedule_type)
     }
 }
 

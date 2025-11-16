@@ -2,11 +2,13 @@
 // This binary runs with elevated privileges via D-Bus activation
 
 use anyhow::{Context, Result};
-use tokio::signal::unix::{signal, SignalKind};
-use waypoint_common::*;
-use zbus::{interface, Connection, ConnectionBuilder};
-use std::process::Command;
 use serde::Deserialize;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+use std::process::Command;
+use tokio::signal::unix::{SignalKind, signal};
+use waypoint_common::*;
+use zbus::{Connection, ConnectionBuilder, interface};
 
 mod backup;
 mod btrfs;
@@ -21,7 +23,10 @@ fn scheduler_config_path() -> String {
 /// Get the configured scheduler service path
 fn scheduler_service_path() -> String {
     let config = WaypointConfig::new();
-    config.scheduler_service_path().to_string_lossy().to_string()
+    config
+        .scheduler_service_path()
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Main D-Bus service interface for Waypoint operations
@@ -57,7 +62,12 @@ impl WaypointHelper {
             Ok(msg) => {
                 // Emit signal for successful snapshot creation
                 // Try to determine who created the snapshot
-                let created_by = if hdr.sender().map(|s| s.as_str()).unwrap_or("").contains("waypoint-scheduler") {
+                let created_by = if hdr
+                    .sender()
+                    .map(|s| s.as_str())
+                    .unwrap_or("")
+                    .contains("waypoint-scheduler")
+                {
                     "scheduler"
                 } else {
                     "gui"
@@ -68,7 +78,7 @@ impl WaypointHelper {
                 }
 
                 (true, msg)
-            },
+            }
             Err(e) => (false, format!("Failed to create snapshot: {}", e)),
         }
     }
@@ -116,10 +126,8 @@ impl WaypointHelper {
         // Listing doesn't require authorization (read-only)
         match btrfs::list_snapshots() {
             Ok(snapshots) => {
-                let snapshot_infos: Vec<SnapshotInfo> = snapshots
-                    .into_iter()
-                    .map(|s| s.into())
-                    .collect();
+                let snapshot_infos: Vec<SnapshotInfo> =
+                    snapshots.into_iter().map(|s| s.into()).collect();
 
                 serde_json::to_string(&snapshot_infos).unwrap_or_else(|_| "[]".to_string())
             }
@@ -134,18 +142,18 @@ impl WaypointHelper {
     async fn verify_snapshot(&self, name: String) -> String {
         // Verification is read-only, no authorization needed
         match btrfs::verify_snapshot(&name) {
-            Ok(result) => {
-                serde_json::to_string(&result).unwrap_or_else(|_| {
-                    r#"{"is_valid":false,"errors":["Failed to serialize result"],"warnings":[]}"#.to_string()
-                })
-            }
+            Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| {
+                r#"{"is_valid":false,"errors":["Failed to serialize result"],"warnings":[]}"#
+                    .to_string()
+            }),
             Err(e) => {
                 log::error!("Failed to verify snapshot: {}", e);
                 serde_json::to_string(&btrfs::VerificationResult {
                     is_valid: false,
                     errors: vec![format!("Verification failed: {}", e)],
                     warnings: vec![],
-                }).unwrap_or_else(|_| {
+                })
+                .unwrap_or_else(|_| {
                     r#"{"is_valid":false,"errors":["Failed to verify"],"warnings":[]}"#.to_string()
                 })
             }
@@ -153,17 +161,24 @@ impl WaypointHelper {
     }
 
     /// Preview what will happen if a snapshot is restored
-    async fn preview_restore(&self, name: String) -> String {
-        // Preview is read-only, no authorization needed
+    async fn preview_restore(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        name: String,
+    ) -> (bool, String) {
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
+            return (false, format!("Authorization failed: {}", e));
+        }
+
         match btrfs::preview_restore(&name) {
-            Ok(result) => {
-                serde_json::to_string(&result).unwrap_or_else(|_| {
-                    r#"{"snapshot_name":"","snapshot_timestamp":"","snapshot_description":null,"current_kernel":null,"snapshot_kernel":null,"affected_subvolumes":[],"packages_to_add":[],"packages_to_remove":[],"packages_to_upgrade":[],"packages_to_downgrade":[],"total_package_changes":0}"#.to_string()
-                })
-            }
+            Ok(result) => match serde_json::to_string(&result) {
+                Ok(json) => (true, json),
+                Err(e) => (false, format!("Failed to serialize preview: {}", e)),
+            },
             Err(e) => {
                 log::error!("Failed to preview restore: {}", e);
-                format!(r#"{{"error":"Failed to preview restore: {}"}}"#, e.to_string().replace('"', "\\\""))
+                (false, format!("Failed to preview restore: {}", e))
             }
         }
     }
@@ -307,21 +322,17 @@ impl WaypointHelper {
     /// Compare two snapshots and return list of changed files
     ///
     /// Uses btrfs send with --no-data to efficiently detect file changes between snapshots.
-    ///
-    /// # Arguments
-    /// * `old_snapshot_name` - Name of the older snapshot
-    /// * `new_snapshot_name` - Name of the newer snapshot
-    ///
-    /// # Returns
-    /// JSON string containing array of changes, each with: type (Added/Modified/Deleted) and path
-    ///
-    /// This is a read-only operation and does not require authorization
     async fn compare_snapshots(
         &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
         old_snapshot_name: String,
         new_snapshot_name: String,
     ) -> (bool, String) {
-        // Perform comparison
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
+            return (false, format!("Authorization failed: {}", e));
+        }
+
         match Self::compare_snapshots_impl(&old_snapshot_name, &new_snapshot_name) {
             Ok(json) => (true, json),
             Err(e) => (false, format!("Comparison failed: {}", e)),
@@ -432,12 +443,10 @@ impl WaypointHelper {
     /// This is a read-only operation and does not require authorization
     async fn scan_backup_destinations(&self) -> (bool, String) {
         match backup::scan_backup_destinations() {
-            Ok(destinations) => {
-                match serde_json::to_string(&destinations) {
-                    Ok(json) => (true, json),
-                    Err(e) => (false, format!("Failed to serialize destinations: {}", e)),
-                }
-            }
+            Ok(destinations) => match serde_json::to_string(&destinations) {
+                Ok(json) => (true, json),
+                Err(e) => (false, format!("Failed to serialize destinations: {}", e)),
+            },
             Err(e) => (false, format!("Failed to scan destinations: {}", e)),
         }
     }
@@ -489,12 +498,10 @@ impl WaypointHelper {
         }
 
         match backup::list_backups(&destination_mount) {
-            Ok(backups) => {
-                match serde_json::to_string(&backups) {
-                    Ok(json) => (true, json),
-                    Err(e) => (false, format!("Failed to serialize backups: {}", e)),
-                }
-            }
+            Ok(backups) => match serde_json::to_string(&backups) {
+                Ok(json) => (true, json),
+                Err(e) => (false, format!("Failed to serialize backups: {}", e)),
+            },
             Err(e) => (false, format!("Failed to list backups: {}", e)),
         }
     }
@@ -520,7 +527,11 @@ impl WaypointHelper {
 }
 
 impl WaypointHelper {
-    fn create_snapshot_impl(name: &str, description: &str, subvolumes: Vec<String>) -> Result<String> {
+    fn create_snapshot_impl(
+        name: &str,
+        description: &str,
+        subvolumes: Vec<String>,
+    ) -> Result<String> {
         // Check quota and cleanup if needed
         if let Err(e) = Self::check_quota_and_cleanup() {
             log::warn!("Failed to check quota before snapshot: {}", e);
@@ -528,8 +539,8 @@ impl WaypointHelper {
         }
 
         // Get installed packages
-        let packages = packages::get_installed_packages()
-            .context("Failed to get installed packages")?;
+        let packages =
+            packages::get_installed_packages().context("Failed to get installed packages")?;
 
         // Convert String paths to PathBuf
         let subvol_paths: Vec<std::path::PathBuf> = subvolumes
@@ -546,20 +557,26 @@ impl WaypointHelper {
 
     fn restore_snapshot_impl(name: &str) -> Result<String> {
         // Create pre-rollback backup (only root filesystem for safety)
-        let backup_name = format!("waypoint-pre-rollback-{}",
-            chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+        let backup_name = format!(
+            "waypoint-pre-rollback-{}",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+        );
 
         let packages = packages::get_installed_packages()
             .context("Failed to get installed packages for backup")?;
 
         // Backup only root filesystem
         let root_only = vec![std::path::PathBuf::from("/")];
-        btrfs::create_snapshot(&backup_name, Some("Pre-rollback backup"), packages, root_only)
-            .context("Failed to create pre-rollback backup")?;
+        btrfs::create_snapshot(
+            &backup_name,
+            Some("Pre-rollback backup"),
+            packages,
+            root_only,
+        )
+        .context("Failed to create pre-rollback backup")?;
 
         // Perform the rollback
-        btrfs::restore_snapshot(name)
-            .context("Failed to restore snapshot")?;
+        btrfs::restore_snapshot(name).context("Failed to restore snapshot")?;
 
         Ok(format!(
             "Snapshot '{}' will be active after reboot. Backup created: '{}'",
@@ -568,13 +585,12 @@ impl WaypointHelper {
     }
 
     fn cleanup_snapshots_impl(schedule_based: bool) -> Result<String> {
-        use waypoint_common::schedules::SchedulesConfig;
-        use waypoint_common::WaypointConfig;
         use std::collections::HashSet;
+        use waypoint_common::WaypointConfig;
+        use waypoint_common::schedules::SchedulesConfig;
 
         let config = WaypointConfig::new();
-        let snapshots = btrfs::list_snapshots()
-            .context("Failed to list snapshots")?;
+        let snapshots = btrfs::list_snapshots().context("Failed to list snapshots")?;
 
         // Load snapshot metadata to check for pinned/favorited snapshots
         #[derive(Deserialize)]
@@ -587,7 +603,8 @@ impl WaypointHelper {
         let favorited_ids: HashSet<String> = {
             if let Ok(content) = std::fs::read_to_string(&config.metadata_file) {
                 if let Ok(metadata) = serde_json::from_str::<Vec<SnapshotMetadataEntry>>(&content) {
-                    metadata.iter()
+                    metadata
+                        .iter()
                         .filter(|m| m.is_favorite)
                         .map(|m| m.id.clone())
                         .collect()
@@ -612,7 +629,8 @@ impl WaypointHelper {
                     continue;
                 }
 
-                let mut matching: Vec<_> = snapshots.iter()
+                let mut matching: Vec<_> = snapshots
+                    .iter()
                     .filter(|s| s.name.starts_with(&schedule.prefix))
                     .collect();
 
@@ -650,7 +668,9 @@ impl WaypointHelper {
             all_to_delete
         } else {
             // Use legacy global retention policy (for backward compatibility)
-            log::warn!("Global retention policy is deprecated. Consider using --schedule-based flag.");
+            log::warn!(
+                "Global retention policy is deprecated. Consider using --schedule-based flag."
+            );
             vec![] // Legacy mode not implemented in this version
         };
 
@@ -664,7 +684,11 @@ impl WaypointHelper {
 
         for snapshot_name in &to_delete {
             if let Err(e) = btrfs::ensure_snapshot_name(snapshot_name) {
-                log::error!("Skipping snapshot '{}' due to invalid name/path: {}", snapshot_name, e);
+                log::error!(
+                    "Skipping snapshot '{}' due to invalid name/path: {}",
+                    snapshot_name,
+                    e
+                );
                 failed.push(snapshot_name.clone());
                 continue;
             }
@@ -683,7 +707,10 @@ impl WaypointHelper {
         if failed.is_empty() {
             Ok(format!("Cleaned up {} snapshot(s)", deleted))
         } else {
-            Ok(format!("Cleaned up {} snapshot(s), failed to delete: {:?}", deleted, failed))
+            Ok(format!(
+                "Cleaned up {} snapshot(s), failed to delete: {:?}",
+                deleted, failed
+            ))
         }
     }
 
@@ -706,6 +733,13 @@ impl WaypointHelper {
         if !snapshot_dir.exists() {
             anyhow::bail!("Snapshot '{}' not found", snapshot_name);
         }
+
+        let snapshot_root = snapshot_dir.canonicalize().with_context(|| {
+            format!(
+                "Failed to resolve snapshot root at {}",
+                snapshot_dir.display()
+            )
+        })?;
 
         if file_paths.is_empty() {
             anyhow::bail!("No files specified for restoration");
@@ -754,8 +788,13 @@ impl WaypointHelper {
                 format!("/{}", file_path)
             };
 
+            // Validate path structure to prevent traversal outside the snapshot
+            let _ = sanitize_absolute_path(&normalized_path).map_err(|e| {
+                anyhow::anyhow!("Invalid restore path '{}': {}", normalized_path, e)
+            })?;
+
             // Build source path in snapshot
-            let source = snapshot_dir.join(normalized_path.trim_start_matches('/'));
+            let source = snapshot_root.join(normalized_path.trim_start_matches('/'));
 
             if !source.exists() {
                 log::warn!("File not found in snapshot: {}", normalized_path);
@@ -766,7 +805,8 @@ impl WaypointHelper {
             // Determine target path
             let target = if let Some(base_dir) = &custom_target_base {
                 // Restore to custom directory, preserving filename
-                let filename = source.file_name()
+                let filename = source
+                    .file_name()
                     .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?;
                 base_dir.join(filename)
             } else {
@@ -775,45 +815,104 @@ impl WaypointHelper {
             };
 
             // Check if target exists
-            if target.exists() && !overwrite {
-                log::warn!("File exists and overwrite disabled: {}", target.display());
-                failed_files.push(normalized_path.clone());
-                continue;
+            if target.exists() {
+                if !overwrite {
+                    log::warn!("File exists and overwrite disabled: {}", target.display());
+                    failed_files.push(normalized_path.clone());
+                    continue;
+                }
+
+                if let Ok(target_metadata) = fs::symlink_metadata(&target) {
+                    if target_metadata.file_type().is_symlink() || target_metadata.is_file() {
+                        if let Err(e) = fs::remove_file(&target) {
+                            log::error!("Failed to replace {}: {}", target.display(), e);
+                            failed_files.push(normalized_path.clone());
+                            continue;
+                        }
+                    }
+                }
             }
 
             // Create parent directory if needed
             if let Some(parent) = target.parent() {
                 if let Err(e) = fs::create_dir_all(parent) {
-                    log::error!("Failed to create parent directory for {}: {}", target.display(), e);
+                    log::error!(
+                        "Failed to create parent directory for {}: {}",
+                        target.display(),
+                        e
+                    );
                     failed_files.push(normalized_path.clone());
                     continue;
                 }
             }
 
-            // Copy file or directory recursively
-            if source.is_dir() {
-                if let Err(e) = copy_dir_recursive(&source, &target) {
-                    log::error!("Failed to restore directory {}: {}", normalized_path, e);
-                    failed_files.push(normalized_path);
-                } else {
-                    restored_count += 1;
-                }
-            } else {
-                if let Err(e) = fs::copy(&source, &target) {
-                    log::error!("Failed to restore file {}: {}", normalized_path, e);
-                    failed_files.push(normalized_path);
-                } else {
-                    // Preserve permissions and ownership
-                    if let Err(e) = preserve_metadata(&source, &target) {
-                        log::warn!("File restored but failed to preserve metadata for {}: {}", target.display(), e);
+            match fs::symlink_metadata(&source) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        #[cfg(unix)]
+                        {
+                            match fs::read_link(&source)
+                                .and_then(|link_target| symlink(&link_target, &target).map(|_| ()))
+                            {
+                                Ok(_) => {
+                                    restored_count += 1;
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to restore symlink {}: {}",
+                                        normalized_path,
+                                        e
+                                    );
+                                    failed_files.push(normalized_path.clone());
+                                }
+                            }
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            log::warn!(
+                                "Symlink restore not supported on this platform: {}",
+                                normalized_path
+                            );
+                            failed_files.push(normalized_path.clone());
+                        }
+                    } else if metadata.is_dir() {
+                        if let Err(e) = copy_dir_recursive(&snapshot_root, &source, &target) {
+                            log::error!("Failed to restore directory {}: {}", normalized_path, e);
+                            failed_files.push(normalized_path.clone());
+                        } else {
+                            restored_count += 1;
+                        }
+                    } else if metadata.is_file() {
+                        if let Err(e) = fs::copy(&source, &target) {
+                            log::error!("Failed to restore file {}: {}", normalized_path, e);
+                            failed_files.push(normalized_path.clone());
+                        } else {
+                            if let Err(e) = preserve_metadata(&source, &target) {
+                                log::warn!(
+                                    "File restored but failed to preserve metadata for {}: {}",
+                                    target.display(),
+                                    e
+                                );
+                            }
+                            restored_count += 1;
+                        }
+                    } else {
+                        log::warn!("Unsupported file type in snapshot: {}", normalized_path);
+                        failed_files.push(normalized_path.clone());
                     }
-                    restored_count += 1;
+                }
+                Err(e) => {
+                    log::error!("Failed to inspect {}: {}", normalized_path, e);
+                    failed_files.push(normalized_path.clone());
                 }
             }
         }
 
         if failed_files.is_empty() {
-            Ok(format!("Successfully restored {} file(s) from snapshot '{}'", restored_count, snapshot_name))
+            Ok(format!(
+                "Successfully restored {} file(s) from snapshot '{}'",
+                restored_count, snapshot_name
+            ))
         } else {
             Ok(format!(
                 "Restored {} file(s), failed to restore {}: {:?}",
@@ -859,7 +958,9 @@ impl WaypointHelper {
             .spawn()
             .context("Failed to spawn btrfs send")?;
 
-        let send_stdout = send_cmd.stdout.take()
+        let send_stdout = send_cmd
+            .stdout
+            .take()
             .context("Failed to capture btrfs send stdout")?;
         let send_stderr_handle = send_cmd.stderr.take().map(|stderr| {
             std::thread::spawn(move || -> Result<String> {
@@ -878,7 +979,9 @@ impl WaypointHelper {
             .stderr(Stdio::piped())
             .spawn()
             .context("Failed to spawn btrfs receive")?;
-        let receive_stdout = receive_cmd.stdout.take()
+        let receive_stdout = receive_cmd
+            .stdout
+            .take()
             .context("Failed to capture btrfs receive stdout")?;
         let receive_stderr_handle = receive_cmd.stderr.take().map(|stderr| {
             std::thread::spawn(move || -> Result<String> {
@@ -943,8 +1046,7 @@ impl WaypointHelper {
         let changes = parse_btrfs_dump(&output)?;
 
         // Serialize to JSON
-        serde_json::to_string(&changes)
-            .context("Failed to serialize changes to JSON")
+        serde_json::to_string(&changes).context("Failed to serialize changes to JSON")
     }
 
     /// Enable quotas on the btrfs filesystem
@@ -953,7 +1055,12 @@ impl WaypointHelper {
         let snapshot_dir = &config.snapshot_dir;
 
         // Check if quotas are already enabled
-        if run_command("btrfs", &["qgroup", "show", snapshot_dir.to_str().unwrap_or_default()]).is_ok() {
+        if run_command(
+            "btrfs",
+            &["qgroup", "show", snapshot_dir.to_str().unwrap_or_default()],
+        )
+        .is_ok()
+        {
             return Ok("Quotas are already enabled".to_string());
         }
 
@@ -974,20 +1081,35 @@ impl WaypointHelper {
         let config = WaypointConfig::new();
         let snapshot_dir = &config.snapshot_dir;
 
-        run_command("btrfs", &["quota", "disable", snapshot_dir.to_str().unwrap_or_default()])?;
+        run_command(
+            "btrfs",
+            &[
+                "quota",
+                "disable",
+                snapshot_dir.to_str().unwrap_or_default(),
+            ],
+        )?;
 
         Ok("Successfully disabled quotas".to_string())
     }
 
     /// Get quota usage information
     fn get_quota_usage_impl() -> Result<String> {
-        use waypoint_common::{QuotaUsage, QuotaConfig};
+        use waypoint_common::{QuotaConfig, QuotaUsage};
 
         let config = WaypointConfig::new();
         let snapshot_dir = &config.snapshot_dir;
 
         // Get qgroup information
-        let (stdout, _) = run_command_with_output("btrfs", &["qgroup", "show", "--raw", snapshot_dir.to_str().unwrap_or_default()])?;
+        let (stdout, _) = run_command_with_output(
+            "btrfs",
+            &[
+                "qgroup",
+                "show",
+                "--raw",
+                snapshot_dir.to_str().unwrap_or_default(),
+            ],
+        )?;
 
         // Parse qgroup output
         // Format: qgroupid rfer excl max_rfer max_excl
@@ -995,12 +1117,14 @@ impl WaypointHelper {
         let mut total_referenced = 0u64;
         let mut total_exclusive = 0u64;
 
-        for line in stdout.lines().skip(2) { // Skip header lines
+        for line in stdout.lines().skip(2) {
+            // Skip header lines
             let parts: Vec<&str> = line.split_whitespace().collect();
             if !parts.is_empty() && parts[0].starts_with("0/") {
                 // Only count level-0 qgroups (actual snapshots)
                 if parts.len() >= 3 {
-                    if let (Ok(rfer), Ok(excl)) = (parts[1].parse::<u64>(), parts[2].parse::<u64>()) {
+                    if let (Ok(rfer), Ok(excl)) = (parts[1].parse::<u64>(), parts[2].parse::<u64>())
+                    {
                         total_referenced += rfer;
                         total_exclusive += excl;
                     }
@@ -1019,8 +1143,7 @@ impl WaypointHelper {
             limit,
         };
 
-        serde_json::to_string(&usage)
-            .context("Failed to serialize quota usage to JSON")
+        serde_json::to_string(&usage).context("Failed to serialize quota usage to JSON")
     }
 
     /// Set quota limit for the filesystem
@@ -1053,8 +1176,10 @@ impl WaypointHelper {
 
         // Check if we exceed the threshold
         if usage.exceeds_threshold(quota_config.cleanup_threshold) {
-            log::info!("Quota usage exceeds threshold ({}%), triggering cleanup",
-                       quota_config.cleanup_threshold * 100.0);
+            log::info!(
+                "Quota usage exceeds threshold ({}%), triggering cleanup",
+                quota_config.cleanup_threshold * 100.0
+            );
 
             // Load snapshots and find oldest ones
             let metadata_path = WaypointConfig::new().metadata_file;
@@ -1096,7 +1221,10 @@ impl WaypointHelper {
             }
 
             if deleted_count > 0 {
-                log::info!("Auto-cleanup: Deleted {} snapshot(s) to free quota space", deleted_count);
+                log::info!(
+                    "Auto-cleanup: Deleted {} snapshot(s) to free quota space",
+                    deleted_count
+                );
             }
         }
 
@@ -1108,15 +1236,14 @@ impl WaypointHelper {
         use waypoint_common::QuotaConfig;
 
         // Validate TOML by parsing it
-        let _config: QuotaConfig = toml::from_str(config_toml)
-            .context("Invalid quota configuration")?;
+        let _config: QuotaConfig =
+            toml::from_str(config_toml).context("Invalid quota configuration")?;
 
         let config_path = QuotaConfig::default_path();
 
         // Create parent directory if it doesn't exist
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create config directory")?;
+            std::fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
 
         // Write configuration
@@ -1127,9 +1254,17 @@ impl WaypointHelper {
     }
 }
 
-/// Recursively copy a directory and its contents
-fn copy_dir_recursive(source: &std::path::Path, target: &std::path::Path) -> Result<()> {
+/// Recursively copy a directory and its contents without escaping the snapshot root
+fn copy_dir_recursive(
+    snapshot_root: &std::path::Path,
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<()> {
     use std::fs;
+
+    if !source.starts_with(snapshot_root) {
+        anyhow::bail!("Source {} is outside of snapshot root", source.display());
+    }
 
     // Create target directory
     fs::create_dir_all(target)
@@ -1139,21 +1274,45 @@ fn copy_dir_recursive(source: &std::path::Path, target: &std::path::Path) -> Res
     preserve_metadata(source, target)?;
 
     // Iterate through directory entries
-    for entry in fs::read_dir(source)
-        .context(format!("Failed to read directory: {}", source.display()))?
+    for entry in
+        fs::read_dir(source).context(format!("Failed to read directory: {}", source.display()))?
     {
         let entry = entry?;
         let source_path = entry.path();
         let target_path = target.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)
+            .context(format!("Failed to stat {}", source_path.display()))?;
 
-        if source_path.is_dir() {
+        if metadata.file_type().is_symlink() {
+            #[cfg(unix)]
+            {
+                let link_target = fs::read_link(&source_path)
+                    .context(format!("Failed to read symlink: {}", source_path.display()))?;
+                symlink(&link_target, &target_path).context(format!(
+                    "Failed to create symlink: {}",
+                    target_path.display()
+                ))?;
+            }
+            #[cfg(not(unix))]
+            {
+                log::warn!(
+                    "Symlink restore not supported on this platform: {}",
+                    source_path.display()
+                );
+            }
+        } else if metadata.is_dir() {
             // Recursively copy subdirectory
-            copy_dir_recursive(&source_path, &target_path)?;
-        } else {
+            copy_dir_recursive(snapshot_root, &source_path, &target_path)?;
+        } else if metadata.is_file() {
             // Copy file
             fs::copy(&source_path, &target_path)
                 .context(format!("Failed to copy file: {}", source_path.display()))?;
             preserve_metadata(&source_path, &target_path)?;
+        } else {
+            log::warn!(
+                "Unsupported file type encountered during restore: {}",
+                source_path.display()
+            );
         }
     }
 
@@ -1165,8 +1324,8 @@ fn preserve_metadata(source: &std::path::Path, target: &std::path::Path) -> Resu
     use std::fs;
 
     // Get source metadata
-    let metadata = fs::metadata(source)
-        .context(format!("Failed to read metadata: {}", source.display()))?;
+    let metadata =
+        fs::metadata(source).context(format!("Failed to read metadata: {}", source.display()))?;
 
     // Set permissions
     let permissions = metadata.permissions();
@@ -1198,7 +1357,7 @@ fn preserve_metadata(source: &std::path::Path, target: &std::path::Path) -> Resu
 /// Parse btrfs receive --dump output into structured changes
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct FileChange {
-    change_type: String,  // "Added", "Modified", "Deleted"
+    change_type: String, // "Added", "Modified", "Deleted"
     path: String,
 }
 
@@ -1244,10 +1403,11 @@ fn parse_btrfs_dump(dump_output: &str) -> Result<Vec<FileChange>> {
         // Determine change type based on command
         let change_type = match command {
             "mkfile" | "mkdir" | "mksock" | "mkfifo" | "mknod" | "symlink" | "link" => "Added",
-            "write" | "clone" | "set_xattr" | "remove_xattr" | "truncate" | "chmod" | "chown" | "utimes" => "Modified",
+            "write" | "clone" | "set_xattr" | "remove_xattr" | "truncate" | "chmod" | "chown"
+            | "utimes" => "Modified",
             "unlink" | "rmdir" => "Deleted",
-            "rename" => "Modified",  // Rename could be considered as modified
-            _ => continue,  // Unknown command, skip
+            "rename" => "Modified", // Rename could be considered as modified
+            _ => continue,          // Unknown command, skip
         };
 
         // Add absolute path prefix
@@ -1331,7 +1491,6 @@ fn decode_path(encoded: &str) -> String {
     result
 }
 
-
 /// Check Polkit authorization for an action
 ///
 /// Calls org.freedesktop.PolicyKit1.Authority.CheckAuthorization to verify
@@ -1341,29 +1500,34 @@ async fn check_authorization(
     connection: &Connection,
     action_id: &str,
 ) -> Result<()> {
-    use zbus::zvariant::{ObjectPath, Value};
     use std::collections::HashMap;
+    use zbus::zvariant::{ObjectPath, Value};
 
     log::debug!("Authorization requested for action: {}", action_id);
 
     // Get the caller's bus name from the message header
-    let caller = hdr.sender()
+    let caller = hdr
+        .sender()
         .context("No sender in message header")?
         .to_owned();
 
     log::debug!("Caller bus name: {}", caller);
 
     // Get the caller's PID from D-Bus
-    let response = connection.call_method(
-        Some("org.freedesktop.DBus"),
-        "/org/freedesktop/DBus",
-        Some("org.freedesktop.DBus"),
-        "GetConnectionUnixProcessID",
-        &caller.as_str(),
-    ).await
+    let response = connection
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "GetConnectionUnixProcessID",
+            &caller.as_str(),
+        )
+        .await
         .context("Failed to get caller PID from D-Bus")?;
 
-    let caller_pid: u32 = response.body().deserialize()
+    let caller_pid: u32 = response
+        .body()
+        .deserialize()
         .context("Failed to deserialize caller PID")?;
 
     log::debug!("Caller PID: {}", caller_pid);
@@ -1392,24 +1556,30 @@ async fn check_authorization(
     let polkit_path = ObjectPath::try_from("/org/freedesktop/PolicyKit1/Authority")
         .context("Invalid Polkit object path")?;
 
-    let result = connection.call_method(
-        Some("org.freedesktop.PolicyKit1"),
-        polkit_path,
-        Some("org.freedesktop.PolicyKit1.Authority"),
-        "CheckAuthorization",
-        &(subject, action_id, details, flags, cancellation_id),
-    ).await;
+    let result = connection
+        .call_method(
+            Some("org.freedesktop.PolicyKit1"),
+            polkit_path,
+            Some("org.freedesktop.PolicyKit1.Authority"),
+            "CheckAuthorization",
+            &(subject, action_id, details, flags, cancellation_id),
+        )
+        .await;
 
-    let msg = result
-        .context("Failed to call Polkit CheckAuthorization")?;
+    let msg = result.context("Failed to call Polkit CheckAuthorization")?;
 
     // Result is (is_authorized, is_challenge, details)
-    let (is_authorized, is_challenge, auth_details): (bool, bool, HashMap<String, String>) =
-        msg.body().deserialize()
-            .context("Failed to deserialize Polkit response")?;
+    let (is_authorized, is_challenge, auth_details): (bool, bool, HashMap<String, String>) = msg
+        .body()
+        .deserialize()
+        .context("Failed to deserialize Polkit response")?;
 
-    log::debug!("Authorization result: authorized={}, challenge={}, details={:?}",
-             is_authorized, is_challenge, auth_details);
+    log::debug!(
+        "Authorization result: authorized={}, challenge={}, details={:?}",
+        is_authorized,
+        is_challenge,
+        auth_details
+    );
 
     if is_authorized {
         Ok(())
@@ -1423,15 +1593,16 @@ fn get_process_start_time(pid: u32) -> Result<u64> {
     use std::fs;
 
     let stat_path = format!("/proc/{}/stat", pid);
-    let stat_content = fs::read_to_string(&stat_path)
-        .context(format!("Failed to read {}", stat_path))?;
+    let stat_content =
+        fs::read_to_string(&stat_path).context(format!("Failed to read {}", stat_path))?;
 
     // The start time is the 22nd field in /proc/[pid]/stat
     // Fields are: pid (comm) state ppid ... starttime ...
     // We need to handle the (comm) field which may contain spaces and special characters
 
     // Find the last ')' to skip the comm field
-    let start_pos = stat_content.rfind(')')
+    let start_pos = stat_content
+        .rfind(')')
         .context("Invalid /proc/[pid]/stat format: missing closing parenthesis")?;
 
     // Ensure there's content after the ')' character
@@ -1439,9 +1610,7 @@ fn get_process_start_time(pid: u32) -> Result<u64> {
         anyhow::bail!("Invalid /proc/[pid]/stat format: no fields after command name");
     }
 
-    let fields: Vec<&str> = stat_content[start_pos + 1..]
-        .split_whitespace()
-        .collect();
+    let fields: Vec<&str> = stat_content[start_pos + 1..].split_whitespace().collect();
 
     // After skipping (comm), starttime is field 20 (0-indexed 19)
     // According to proc(5) man page, there should be at least 44 fields in modern kernels
@@ -1456,11 +1625,10 @@ fn get_process_start_time(pid: u32) -> Result<u64> {
     }
 
     let start_time_str = fields[19];
-    let start_time: u64 = start_time_str.parse()
-        .context(format!(
-            "Failed to parse process start time from field '{}' (field 20)",
-            start_time_str
-        ))?;
+    let start_time: u64 = start_time_str.parse().context(format!(
+        "Failed to parse process start time from field '{}' (field 20)",
+        start_time_str
+    ))?;
 
     log::debug!("Process {} start time: {}", pid, start_time);
 
@@ -1481,7 +1649,10 @@ async fn main() -> Result<()> {
     // Initialize configuration
     btrfs::init_config();
 
-    log::info!("Starting Waypoint Helper service v{}", env!("CARGO_PKG_VERSION"));
+    log::info!(
+        "Starting Waypoint Helper service v{}",
+        env!("CARGO_PKG_VERSION")
+    );
 
     // Build the D-Bus connection
     let _connection = ConnectionBuilder::system()?
@@ -1504,7 +1675,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
-    let output = Command::new(cmd).args(args).output().context(format!("Failed to run {}", cmd))?;
+    let output = Command::new(cmd)
+        .args(args)
+        .output()
+        .context(format!("Failed to run {}", cmd))?;
     if output.status.success() {
         Ok(())
     } else {
@@ -1514,7 +1688,10 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
 }
 
 fn run_command_with_output(cmd: &str, args: &[&str]) -> Result<(String, String)> {
-    let output = Command::new(cmd).args(args).output().context(format!("Failed to run {}", cmd))?;
+    let output = Command::new(cmd)
+        .args(args)
+        .output()
+        .context(format!("Failed to run {}", cmd))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if output.status.success() {

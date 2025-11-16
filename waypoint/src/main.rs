@@ -12,7 +12,7 @@ mod ui;
 mod user_preferences;
 
 use gtk::prelude::*;
-use gtk::{glib, Application};
+use gtk::{Application, glib};
 
 const APP_ID: &str = "tech.geektoshi.waypoint";
 
@@ -25,9 +25,7 @@ fn main() -> glib::ExitCode {
     log::info!("Starting Waypoint v{}", env!("CARGO_PKG_VERSION"));
 
     // Initialize GTK
-    let app = Application::builder()
-        .application_id(APP_ID)
-        .build();
+    let app = Application::builder().application_id(APP_ID).build();
 
     app.connect_startup(|_| {
         load_css();

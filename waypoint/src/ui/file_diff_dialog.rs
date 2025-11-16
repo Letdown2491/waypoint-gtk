@@ -1,22 +1,25 @@
 //! File diff dialog for showing changed files between two snapshots
 
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Label, Orientation};
 use libadwaita as adw;
-use adw::prelude::*;
 
 use super::dialogs;
 
 /// File change representation (matches waypoint-helper output)
 #[derive(Debug, Clone, serde::Deserialize)]
 struct FileChange {
-    change_type: String,  // "Added", "Modified", "Deleted"
+    change_type: String, // "Added", "Modified", "Deleted"
     path: String,
 }
 
 /// Show dialog displaying file changes between two snapshots
-pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str, new_snapshot: &str) {
-
+pub fn show_file_diff_dialog(
+    parent: &adw::ApplicationWindow,
+    old_snapshot: &str,
+    new_snapshot: &str,
+) {
     // Create full window dialog
     let dialog = adw::Window::new();
     dialog.set_title(Some("File Changes"));
@@ -119,7 +122,12 @@ pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str
 
                     match result {
                         Ok(changes) => {
-                            display_changes(&dialog_clone, &old_snapshot_owned, &new_snapshot_owned, changes);
+                            display_changes(
+                                &dialog_clone,
+                                &old_snapshot_owned,
+                                &new_snapshot_owned,
+                                changes,
+                            );
                         }
                         Err(e) => {
                             let error_msg = e.to_string();
@@ -160,7 +168,12 @@ pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str
 }
 
 /// Display the file changes in the dialog
-fn display_changes(dialog: &adw::Window, old_snapshot: &str, new_snapshot: &str, changes: Vec<FileChange>) {
+fn display_changes(
+    dialog: &adw::Window,
+    old_snapshot: &str,
+    new_snapshot: &str,
+    changes: Vec<FileChange>,
+) {
     let content = gtk::Box::new(Orientation::Vertical, 0);
 
     // Header
@@ -220,12 +233,18 @@ fn display_changes(dialog: &adw::Window, old_snapshot: &str, new_snapshot: &str,
         }
 
         if !modified.is_empty() {
-            let group = create_change_group("Modified Files", &modified, "document-edit-symbolic", "warning");
+            let group = create_change_group(
+                "Modified Files",
+                &modified,
+                "document-edit-symbolic",
+                "warning",
+            );
             main_box.append(&group);
         }
 
         if !deleted.is_empty() {
-            let group = create_change_group("Deleted Files", &deleted, "list-remove-symbolic", "error");
+            let group =
+                create_change_group("Deleted Files", &deleted, "list-remove-symbolic", "error");
             main_box.append(&group);
         }
     }
@@ -237,7 +256,12 @@ fn display_changes(dialog: &adw::Window, old_snapshot: &str, new_snapshot: &str,
 }
 
 /// Create a group widget for a category of changes
-fn create_change_group(title: &str, changes: &[&FileChange], icon_name: &str, css_class: &str) -> gtk::Box {
+fn create_change_group(
+    title: &str,
+    changes: &[&FileChange],
+    icon_name: &str,
+    css_class: &str,
+) -> gtk::Box {
     let group_box = gtk::Box::new(Orientation::Vertical, 12);
 
     // Group header

@@ -1,40 +1,42 @@
-mod snapshot_row;
+mod about_preferences;
+mod analytics_dialog;
+mod backup_dialog;
+mod comparison_dialog;
+mod create_snapshot_dialog;
 mod dialogs;
+mod error_helpers;
+mod exclude_preferences;
+mod file_diff_dialog;
+mod file_restore_dialog;
+pub mod notifications;
 mod package_diff_dialog;
 pub mod preferences;
 mod preferences_window;
 mod quota_preferences;
-mod exclude_preferences;
-mod create_snapshot_dialog;
 mod scheduler_dialog;
-mod backup_dialog;
-mod toolbar;
 mod snapshot_list;
-pub mod notifications;
+mod snapshot_row;
+mod toolbar;
 mod validation;
-mod comparison_dialog;
-mod about_preferences;
-mod error_helpers;
-mod file_restore_dialog;
-mod file_diff_dialog;
-mod analytics_dialog;
 
 use crate::backup_manager::BackupManager;
 use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
 use crate::snapshot::{Snapshot, SnapshotManager};
 use crate::user_preferences::UserPreferencesManager;
-use anyhow::Context;
-use gtk::prelude::*;
-use gtk::{Application, Button, Label, ListBox, Orientation, ScrolledWindow, SearchEntry, ToggleButton};
-use gtk::glib;
-use libadwaita as adw;
-use std::sync::mpsc;
 use adw::prelude::*;
+use anyhow::Context;
+use gtk::glib;
+use gtk::prelude::*;
+use gtk::{
+    Application, Button, Label, ListBox, Orientation, ScrolledWindow, SearchEntry, ToggleButton,
+};
+use libadwaita as adw;
 use snapshot_row::SnapshotAction;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::mpsc;
 
 use snapshot_list::DateFilter;
 
@@ -79,9 +81,7 @@ impl MainWindow {
                 log::error!("Failed to initialize snapshot manager: {}", e);
 
                 // Create a temporary window to show the error dialog
-                let temp_window = adw::ApplicationWindow::builder()
-                    .application(app)
-                    .build();
+                let temp_window = adw::ApplicationWindow::builder().application(app).build();
 
                 // Show error dialog to user
                 let dialog = adw::MessageDialog::new(
@@ -94,7 +94,7 @@ impl MainWindow {
                         • /.snapshots directory exists and is mounted\n\
                         • D-Bus service is running",
                         e
-                    ))
+                    )),
                 );
 
                 dialog.add_response("ok", "OK");
@@ -119,9 +119,9 @@ impl MainWindow {
                 log::error!("Failed to initialize user preferences manager: {}", e);
                 log::warn!("User preferences (favorites, notes) will not be saved");
                 // Continue anyway with a fallback - create temp manager
-                Rc::new(RefCell::new(UserPreferencesManager::new().unwrap_or_else(|_| {
-                    panic!("Could not create user preferences manager")
-                })))
+                Rc::new(RefCell::new(UserPreferencesManager::new().unwrap_or_else(
+                    |_| panic!("Could not create user preferences manager"),
+                )))
             }
         };
 
@@ -132,9 +132,10 @@ impl MainWindow {
                 log::error!("Failed to initialize backup manager: {}", e);
                 log::warn!("Automatic backups will not be available");
                 // Continue anyway - backups are optional
-                Rc::new(RefCell::new(BackupManager::new().unwrap_or_else(|_| {
-                    panic!("Could not create backup manager")
-                })))
+                Rc::new(RefCell::new(
+                    BackupManager::new()
+                        .unwrap_or_else(|_| panic!("Could not create backup manager")),
+                ))
             }
         };
 
@@ -143,7 +144,9 @@ impl MainWindow {
         header.set_title_widget(Some(&adw::WindowTitle::new("Waypoint", "")));
 
         // Add application icon to header bar
-        let app_icon = if let Ok(icon_path) = std::fs::canonicalize("assets/icons/hicolor/scalable/waypoint.svg") {
+        let app_icon = if let Ok(icon_path) =
+            std::fs::canonicalize("assets/icons/hicolor/scalable/waypoint.svg")
+        {
             gtk::Image::from_file(&icon_path)
         } else {
             // Fallback to system icon if assets folder not found (installed version)
@@ -174,9 +177,7 @@ impl MainWindow {
         theme_list.set_selection_mode(gtk::SelectionMode::None);
         theme_list.add_css_class("boxed-list");
 
-        let theme_row = adw::ActionRow::builder()
-            .title("Switch theme")
-            .build();
+        let theme_row = adw::ActionRow::builder().title("Switch theme").build();
 
         // Theme buttons
         let theme_buttons_box = gtk::Box::new(Orientation::Horizontal, 12);
@@ -351,8 +352,8 @@ impl MainWindow {
         disk_space_bar.set_halign(gtk::Align::Center);
 
         // Add offset markers for color coding
-        disk_space_bar.add_offset_value("full", 0.9);   // > 90% used = critical
-        disk_space_bar.add_offset_value("high", 0.8);   // > 80% used = warning
+        disk_space_bar.add_offset_value("full", 0.9); // > 90% used = critical
+        disk_space_bar.add_offset_value("high", 0.8); // > 80% used = warning
 
         let disk_space_label = Label::new(Some("Checking space..."));
         disk_space_label.add_css_class("caption");
@@ -396,8 +397,8 @@ impl MainWindow {
 
         window_key_controller.connect_key_pressed(move |_, key, _code, modifier| {
             // Check for Ctrl+F (Cmd+F on macOS)
-            let is_ctrl_f = key == gtk::gdk::Key::f &&
-                           modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let is_ctrl_f =
+                key == gtk::gdk::Key::f && modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
 
             if is_ctrl_f && !revealer_for_shortcut.reveals_child() {
                 // Open search
@@ -624,7 +625,16 @@ impl MainWindow {
         let disk_space_bar_clone = disk_space_bar.clone();
 
         create_btn.connect_clicked(move |_| {
-            Self::on_create_snapshot(&win_clone, sm_clone.clone(), up_clone.clone(), bm_clone.clone(), list_clone.clone(), compare_btn_clone.clone(), disk_space_clone.clone(), disk_space_bar_clone.clone());
+            Self::on_create_snapshot(
+                &win_clone,
+                sm_clone.clone(),
+                up_clone.clone(),
+                bm_clone.clone(),
+                list_clone.clone(),
+                compare_btn_clone.clone(),
+                disk_space_clone.clone(),
+                disk_space_bar_clone.clone(),
+            );
         });
 
         // Connect compare button
@@ -784,7 +794,8 @@ impl MainWindow {
             let app_monitor = app.clone();
 
             // Get configured mount check interval
-            let check_interval = backup_manager.borrow()
+            let check_interval = backup_manager
+                .borrow()
                 .get_config()
                 .map(|c| c.mount_check_interval_seconds)
                 .unwrap_or(60);
@@ -793,25 +804,40 @@ impl MainWindow {
                 log::info!("New backup drive detected: {} at {}", uuid, mount_point);
 
                 // Get snapshot directory from config
-                let snapshot_dir = waypoint_common::WaypointConfig::new().snapshot_dir
+                let snapshot_dir = waypoint_common::WaypointConfig::new()
+                    .snapshot_dir
                     .to_string_lossy()
                     .to_string();
 
                 // Get destination label for notifications
-                let dest_label = backup_manager_monitor.borrow()
+                let dest_label = backup_manager_monitor
+                    .borrow()
                     .get_config()
                     .ok()
                     .and_then(|c| c.destinations.get(&uuid).map(|d| d.label.clone()))
                     .unwrap_or_else(|| mount_point.clone());
 
                 // Process pending backups for this destination
-                match backup_manager_monitor.borrow().process_pending_backups(&uuid, &mount_point, &snapshot_dir) {
+                match backup_manager_monitor.borrow().process_pending_backups(
+                    &uuid,
+                    &mount_point,
+                    &snapshot_dir,
+                ) {
                     Ok((success_count, fail_count, errors)) => {
                         if success_count > 0 || fail_count > 0 {
-                            log::info!("Backup processing complete: {} successful, {} failed", success_count, fail_count);
+                            log::info!(
+                                "Backup processing complete: {} successful, {} failed",
+                                success_count,
+                                fail_count
+                            );
 
                             // Send desktop notification
-                            notifications::notify_backup_completed(&app_monitor, &dest_label, success_count, fail_count);
+                            notifications::notify_backup_completed(
+                                &app_monitor,
+                                &dest_label,
+                                success_count,
+                                fail_count,
+                            );
 
                             // Show notification to user
                             let message = if fail_count == 0 {
@@ -819,7 +845,10 @@ impl MainWindow {
                             } else if success_count == 0 {
                                 format!("Failed to backup {} snapshot(s)", fail_count)
                             } else {
-                                format!("Backed up {} snapshot(s), {} failed", success_count, fail_count)
+                                format!(
+                                    "Backed up {} snapshot(s), {} failed",
+                                    success_count, fail_count
+                                )
                             };
 
                             let dialog = adw::MessageDialog::new(
@@ -836,7 +865,11 @@ impl MainWindow {
                                 let window_clone = window_monitor.clone();
                                 dialog.connect_response(None, move |_, response| {
                                     if response == "details" {
-                                        dialogs::show_error_list(&window_clone, "Backup Errors", &errors_clone);
+                                        dialogs::show_error_list(
+                                            &window_clone,
+                                            "Backup Errors",
+                                            &errors_clone,
+                                        );
                                     }
                                 });
                             }
@@ -903,8 +936,10 @@ impl MainWindow {
 
                 // Format the label text
                 let text = if total_gb > 0.0 {
-                    format!("{:.1} GB free of {:.1} GB ({:.0}% free)",
-                            available_gb, total_gb, percent_free)
+                    format!(
+                        "{:.1} GB free of {:.1} GB ({:.0}% free)",
+                        available_gb, total_gb, percent_free
+                    )
                 } else {
                     format!("{:.1} GB free", available_gb)
                 };
@@ -928,11 +963,15 @@ impl MainWindow {
                     if percent_free < 10.0 {
                         // Critical: < 10% free - red
                         label.add_css_class("error");
-                        label.set_tooltip_text(Some("Low disk space! Consider deleting old snapshots."));
+                        label.set_tooltip_text(Some(
+                            "Low disk space! Consider deleting old snapshots.",
+                        ));
                     } else if percent_free < 20.0 {
                         // Warning: < 20% free - yellow
                         label.add_css_class("warning");
-                        label.set_tooltip_text(Some("Disk space running low. Monitor snapshot usage."));
+                        label.set_tooltip_text(Some(
+                            "Disk space running low. Monitor snapshot usage.",
+                        ));
                     } else {
                         // OK: >= 20% free - normal
                         label.set_tooltip_text(Some("Available disk space for snapshots"));
@@ -1000,11 +1039,22 @@ impl MainWindow {
             &self.backup_manager,
             &self.snapshot_list,
             &self.compare_btn,
-            None,  // No search filter
-            None,  // No date filter
-            None,  // No match label
+            None, // No search filter
+            None, // No date filter
+            None, // No match label
             move |id, action| {
-                Self::handle_snapshot_action(&window, &manager, &user_prefs, &backup_manager, &list, &compare_btn, &disk_space_label, &disk_space_bar, id, action);
+                Self::handle_snapshot_action(
+                    &window,
+                    &manager,
+                    &user_prefs,
+                    &backup_manager,
+                    &list,
+                    &compare_btn,
+                    &disk_space_label,
+                    &disk_space_bar,
+                    id,
+                    action,
+                );
             },
             Some(&self.create_btn),
         );
@@ -1043,9 +1093,20 @@ impl MainWindow {
             Some(date_filter),
             Some(match_label),
             move |id, action| {
-                Self::handle_snapshot_action(&window_clone, &manager_clone, &user_prefs_clone, &backup_manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone, id, action);
+                Self::handle_snapshot_action(
+                    &window_clone,
+                    &manager_clone,
+                    &user_prefs_clone,
+                    &backup_manager_clone,
+                    &list_clone,
+                    &compare_btn_clone,
+                    &disk_space_clone,
+                    &disk_space_bar_clone,
+                    id,
+                    action,
+                );
             },
-            None,  // No create button for filtered view
+            None, // No create button for filtered view
         );
     }
 
@@ -1065,7 +1126,7 @@ impl MainWindow {
                 error_helpers::show_error_with_context(
                     window,
                     error_helpers::ErrorContext::FilesystemCheck,
-                    "not a btrfs filesystem"
+                    "not a btrfs filesystem",
                 );
                 return;
             }
@@ -1073,7 +1134,7 @@ impl MainWindow {
                 error_helpers::show_error_with_context(
                     window,
                     error_helpers::ErrorContext::FilesystemCheck,
-                    &e.to_string()
+                    &e.to_string(),
                 );
                 return;
             }
@@ -1121,7 +1182,10 @@ impl MainWindow {
                         error_helpers::show_error_with_context(
                             &window_clone,
                             error_helpers::ErrorContext::DiskSpace,
-                            &format!("Only {:.2} GB available, need at least {} GB", available_gb, MIN_SPACE_GB)
+                            &format!(
+                                "Only {:.2} GB available, need at least {} GB",
+                                available_gb, MIN_SPACE_GB
+                            ),
                         );
                         return;
                     }
@@ -1142,24 +1206,27 @@ impl MainWindow {
             let disk_space_clone2 = disk_space_label.clone();
             let disk_space_bar_clone2 = disk_space_bar.clone();
 
-            create_snapshot_dialog::show_create_snapshot_dialog_async(&window_clone, move |result| {
-                if let Some((snapshot_name, description)) = result {
-                    // User confirmed, create the snapshot
-                    Self::create_snapshot_with_description(
-                        &window_clone2,
-                        manager_clone2.clone(),
-                        user_prefs_clone2.clone(),
-                        backup_manager_clone2.clone(),
-                        list_clone2.clone(),
-                        compare_btn_clone2.clone(),
-                        disk_space_clone2.clone(),
-                        disk_space_bar_clone2.clone(),
-                        snapshot_name,
-                        description,
-                    );
-                }
-                // If None, user cancelled - do nothing
-            });
+            create_snapshot_dialog::show_create_snapshot_dialog_async(
+                &window_clone,
+                move |result| {
+                    if let Some((snapshot_name, description)) = result {
+                        // User confirmed, create the snapshot
+                        Self::create_snapshot_with_description(
+                            &window_clone2,
+                            manager_clone2.clone(),
+                            user_prefs_clone2.clone(),
+                            backup_manager_clone2.clone(),
+                            list_clone2.clone(),
+                            compare_btn_clone2.clone(),
+                            disk_space_clone2.clone(),
+                            disk_space_bar_clone2.clone(),
+                            snapshot_name,
+                            description,
+                        );
+                    }
+                    // If None, user cancelled - do nothing
+                },
+            );
         });
     }
 
@@ -1205,8 +1272,12 @@ impl MainWindow {
             let client = match WaypointHelperClient::new() {
                 Ok(c) => c,
                 Err(e) => {
-                    let error = format!("Failed to connect to snapshot service: {}\n\nTry: sudo sv reload dbus", e);
-                    let _ = sender.send((None, Some(("Connection Error".to_string(), error)), vec![]));
+                    let error = format!(
+                        "Failed to connect to snapshot service: {}\n\nTry: sudo sv reload dbus",
+                        e
+                    );
+                    let _ =
+                        sender.send((None, Some(("Connection Error".to_string(), error)), vec![]));
                     return;
                 }
             };
@@ -1237,14 +1308,20 @@ impl MainWindow {
                             let snapshot_path = if PathBuf::from("/.snapshots").exists() {
                                 PathBuf::from(format!("/.snapshots/{}", snapshot_name))
                             } else {
-                                PathBuf::from(format!("/mnt/btrfs-root/@snapshots/{}", snapshot_name))
+                                PathBuf::from(format!(
+                                    "/mnt/btrfs-root/@snapshots/{}",
+                                    snapshot_name
+                                ))
                             };
 
                             if !snapshot_path.exists() {
                                 Self::show_error_dialog(
                                     &window_clone,
                                     "Snapshot Creation Failed",
-                                    &format!("The snapshot was reported as created, but the snapshot directory does not exist:\n{}\n\nThis may indicate a permission issue or filesystem error.", snapshot_path.display())
+                                    &format!(
+                                        "The snapshot was reported as created, but the snapshot directory does not exist:\n{}\n\nThis may indicate a permission issue or filesystem error.",
+                                        snapshot_path.display()
+                                    ),
                                 );
                                 return;
                             }
@@ -1267,17 +1344,37 @@ impl MainWindow {
                             // Queue snapshot for automatic backup
                             if let Ok(prefs) = user_prefs_clone.borrow().get(&snapshot_name) {
                                 let is_favorite = prefs.is_favorite;
-                                if let Err(e) = backup_manager_clone.borrow().queue_snapshot_backup(snapshot_name.clone(), is_favorite) {
-                                    log::warn!("Failed to queue automatic backup for {}: {}", snapshot_name, e);
+                                if let Err(e) = backup_manager_clone
+                                    .borrow()
+                                    .queue_snapshot_backup(snapshot_name.clone(), is_favorite)
+                                {
+                                    log::warn!(
+                                        "Failed to queue automatic backup for {}: {}",
+                                        snapshot_name,
+                                        e
+                                    );
                                 } else {
-                                    log::info!("Queued snapshot {} for automatic backup", snapshot_name);
+                                    log::info!(
+                                        "Queued snapshot {} for automatic backup",
+                                        snapshot_name
+                                    );
                                 }
                             } else {
                                 // No prefs yet, assume not favorite
-                                if let Err(e) = backup_manager_clone.borrow().queue_snapshot_backup(snapshot_name.clone(), false) {
-                                    log::warn!("Failed to queue automatic backup for {}: {}", snapshot_name, e);
+                                if let Err(e) = backup_manager_clone
+                                    .borrow()
+                                    .queue_snapshot_backup(snapshot_name.clone(), false)
+                                {
+                                    log::warn!(
+                                        "Failed to queue automatic backup for {}: {}",
+                                        snapshot_name,
+                                        e
+                                    );
                                 } else {
-                                    log::info!("Queued snapshot {} for automatic backup", snapshot_name);
+                                    log::info!(
+                                        "Queued snapshot {} for automatic backup",
+                                        snapshot_name
+                                    );
                                 }
                             }
 
@@ -1285,7 +1382,16 @@ impl MainWindow {
                             // Users can manually trigger cleanup via the menu if needed
 
                             // Refresh snapshot list
-                            Self::refresh_list_static(&window_clone, &manager_clone, &user_prefs_clone, &backup_manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone);
+                            Self::refresh_list_static(
+                                &window_clone,
+                                &manager_clone,
+                                &user_prefs_clone,
+                                &backup_manager_clone,
+                                &list_clone,
+                                &compare_btn_clone,
+                                &disk_space_clone,
+                                &disk_space_bar_clone,
+                            );
 
                             // Update disk space after creating snapshot
                             Self::update_disk_space_label(&disk_space_clone, &disk_space_bar_clone);
@@ -1294,14 +1400,14 @@ impl MainWindow {
                             error_helpers::show_error_with_context(
                                 &window_clone,
                                 error_helpers::ErrorContext::SnapshotCreate,
-                                &message
+                                &message,
                             );
                         }
                         Err(e) => {
                             error_helpers::show_error_with_context(
                                 &window_clone,
                                 error_helpers::ErrorContext::SnapshotCreate,
-                                &e.to_string()
+                                &e.to_string(),
                             );
                         }
                     }
@@ -1362,7 +1468,9 @@ impl MainWindow {
                             Ok(size) => {
                                 log::debug!("Calculated snapshot size: {} bytes", size);
                                 // Update snapshot with size
-                                if let Ok(Some(mut snapshot)) = manager_clone.borrow().get_snapshot(&name) {
+                                if let Ok(Some(mut snapshot)) =
+                                    manager_clone.borrow().get_snapshot(&name)
+                                {
                                     snapshot.size_bytes = Some(size);
                                     if let Err(e) = manager_clone.borrow().add_snapshot(snapshot) {
                                         log::warn!("Failed to update snapshot size: {}", e);
@@ -1491,13 +1599,24 @@ impl MainWindow {
             backup_manager,
             list,
             compare_btn,
-            None,  // No search filter
-            None,  // No date filter
-            None,  // No match label
+            None, // No search filter
+            None, // No date filter
+            None, // No match label
             move |id, action| {
-                Self::handle_snapshot_action(&window_clone, &manager_clone, &user_prefs_clone, &backup_manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone, id, action);
+                Self::handle_snapshot_action(
+                    &window_clone,
+                    &manager_clone,
+                    &user_prefs_clone,
+                    &backup_manager_clone,
+                    &list_clone,
+                    &compare_btn_clone,
+                    &disk_space_clone,
+                    &disk_space_bar_clone,
+                    id,
+                    action,
+                );
             },
-            None,  // No create button needed here
+            None, // No create button needed here
         );
     }
 
@@ -1528,13 +1647,39 @@ impl MainWindow {
                 Self::restore_snapshot(window, manager, list, snapshot_id);
             }
             SnapshotAction::Delete => {
-                Self::delete_snapshot(window, manager, user_prefs_manager, backup_manager, list, compare_btn, disk_space_label, disk_space_bar, snapshot_id);
+                Self::delete_snapshot(
+                    window,
+                    manager,
+                    user_prefs_manager,
+                    backup_manager,
+                    list,
+                    compare_btn,
+                    disk_space_label,
+                    disk_space_bar,
+                    snapshot_id,
+                );
             }
             SnapshotAction::ToggleFavorite => {
-                Self::toggle_favorite(window, user_prefs_manager, manager, backup_manager, list, compare_btn, snapshot_id);
+                Self::toggle_favorite(
+                    window,
+                    user_prefs_manager,
+                    manager,
+                    backup_manager,
+                    list,
+                    compare_btn,
+                    snapshot_id,
+                );
             }
             SnapshotAction::EditNote => {
-                Self::edit_note(window, user_prefs_manager, manager, backup_manager, list, compare_btn, snapshot_id);
+                Self::edit_note(
+                    window,
+                    user_prefs_manager,
+                    manager,
+                    backup_manager,
+                    list,
+                    compare_btn,
+                    snapshot_id,
+                );
             }
             SnapshotAction::Backup => {
                 Self::backup_snapshot(window, manager, snapshot_id);
@@ -1621,7 +1766,11 @@ impl MainWindow {
                 return;
             }
             Err(e) => {
-                Self::show_error_dialog(window, "Error", &format!("Failed to load snapshot: {}", e));
+                Self::show_error_dialog(
+                    window,
+                    "Error",
+                    &format!("Failed to load snapshot: {}", e),
+                );
                 return;
             }
         };
@@ -1639,7 +1788,10 @@ impl MainWindow {
 
         // Header
         let header = adw::HeaderBar::new();
-        header.set_title_widget(Some(&adw::WindowTitle::new("Backup Snapshot", &snapshot_name)));
+        header.set_title_widget(Some(&adw::WindowTitle::new(
+            "Backup Snapshot",
+            &snapshot_name,
+        )));
         content.append(&header);
 
         // Main content area with clamp
@@ -1921,7 +2073,11 @@ impl MainWindow {
                 return;
             }
             Err(e) => {
-                Self::show_error_dialog(window, "Error", &format!("Failed to load snapshot: {}", e));
+                Self::show_error_dialog(
+                    window,
+                    "Error",
+                    &format!("Failed to load snapshot: {}", e),
+                );
                 return;
             }
         };
@@ -1979,7 +2135,8 @@ impl MainWindow {
                         dialog.set_default_response(Some("ok"));
                         dialog.present();
                     } else {
-                        let mut message = "✗ Snapshot verification failed\n\nErrors found:\n".to_string();
+                        let mut message =
+                            "✗ Snapshot verification failed\n\nErrors found:\n".to_string();
                         for error in &verification.errors {
                             message.push_str(&format!("• {}\n", error));
                         }
@@ -1991,11 +2148,7 @@ impl MainWindow {
                             }
                         }
 
-                        Self::show_error_dialog(
-                            &window_clone,
-                            "Verification Failed",
-                            &message,
-                        );
+                        Self::show_error_dialog(&window_clone, "Verification Failed", &message);
                     }
                 }
                 Err(e) => {
@@ -2037,7 +2190,10 @@ impl MainWindow {
             dialogs::show_error(
                 window,
                 "Snapshot Not Found",
-                &format!("The snapshot directory does not exist:\n\n{}\n\nThe snapshot may have been deleted outside of Waypoint.", snapshot_path.display()),
+                &format!(
+                    "The snapshot directory does not exist:\n\n{}\n\nThe snapshot may have been deleted outside of Waypoint.",
+                    snapshot_path.display()
+                ),
             );
             return;
         }
@@ -2107,7 +2263,18 @@ impl MainWindow {
                     let disk_space_label = Label::new(None);
                     let disk_space_bar = gtk::LevelBar::new();
 
-                    Self::handle_snapshot_action(&window, &manager, &user_prefs, &backup_manager, &list, &compare_btn, &disk_space_label, &disk_space_bar, id, action);
+                    Self::handle_snapshot_action(
+                        &window,
+                        &manager,
+                        &user_prefs,
+                        &backup_manager,
+                        &list,
+                        &compare_btn,
+                        &disk_space_label,
+                        &disk_space_bar,
+                        id,
+                        action,
+                    );
                 },
                 None,
             );
@@ -2137,7 +2304,8 @@ impl MainWindow {
         };
 
         // Load current user preferences for this snapshot
-        let current_prefs = user_prefs_manager.borrow()
+        let current_prefs = user_prefs_manager
+            .borrow()
             .get(snapshot_id)
             .unwrap_or_default();
 
@@ -2212,7 +2380,9 @@ impl MainWindow {
         }
 
         // Placeholder hint when empty
-        let placeholder_label = gtk::Label::new(Some("Add a personal note about this restore point...\n\nFor example: \"Before upgrading system packages\" or \"Clean install after testing\""));
+        let placeholder_label = gtk::Label::new(Some(
+            "Add a personal note about this restore point...\n\nFor example: \"Before upgrading system packages\" or \"Clean install after testing\"",
+        ));
         placeholder_label.set_halign(gtk::Align::Start);
         placeholder_label.set_valign(gtk::Align::Start);
         placeholder_label.add_css_class("dim-label");
@@ -2230,7 +2400,11 @@ impl MainWindow {
         // Show/hide placeholder based on text
         let placeholder_clone = placeholder_label.clone();
         buffer.connect_changed(move |buf| {
-            let has_text = buf.text(&buf.start_iter(), &buf.end_iter(), false).trim().len() > 0;
+            let has_text = buf
+                .text(&buf.start_iter(), &buf.end_iter(), false)
+                .trim()
+                .len()
+                > 0;
             placeholder_clone.set_visible(!has_text);
         });
         placeholder_label.set_visible(current_prefs.note.is_none());
@@ -2260,13 +2434,21 @@ impl MainWindow {
         buffer.connect_changed(move |buf| {
             let text = buf.text(&buf.start_iter(), &buf.end_iter(), false);
             let count = text.chars().count();
-            char_count_clone.set_text(&format!("{} character{}", count, if count == 1 { "" } else { "s" }));
+            char_count_clone.set_text(&format!(
+                "{} character{}",
+                count,
+                if count == 1 { "" } else { "s" }
+            ));
         });
 
         // Set initial count
         if let Some(note) = &current_prefs.note {
             let count = note.chars().count();
-            char_count_label.set_text(&format!("{} character{}", count, if count == 1 { "" } else { "s" }));
+            char_count_label.set_text(&format!(
+                "{} character{}",
+                count,
+                if count == 1 { "" } else { "s" }
+            ));
         }
 
         content_box.append(&footer_box);
@@ -2301,11 +2483,9 @@ impl MainWindow {
             move || {
                 // Get note text from buffer
                 let buffer = text_view_clone.buffer();
-                let note_text = buffer.text(
-                    &buffer.start_iter(),
-                    &buffer.end_iter(),
-                    false,
-                ).to_string();
+                let note_text = buffer
+                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                    .to_string();
 
                 // Update note (trim whitespace, use None if empty)
                 let note = if note_text.trim().is_empty() {
@@ -2343,7 +2523,18 @@ impl MainWindow {
                         move |id, action| {
                             let disk_space_label = Label::new(None);
                             let disk_space_bar = gtk::LevelBar::new();
-                            Self::handle_snapshot_action(&window_inner, &manager_inner, &user_prefs_inner, &backup_manager_inner, &list_inner, &compare_btn_inner, &disk_space_label, &disk_space_bar, id, action);
+                            Self::handle_snapshot_action(
+                                &window_inner,
+                                &manager_inner,
+                                &user_prefs_inner,
+                                &backup_manager_inner,
+                                &list_inner,
+                                &compare_btn_inner,
+                                &disk_space_label,
+                                &disk_space_bar,
+                                id,
+                                action,
+                            );
                         },
                         None,
                     );
@@ -2372,7 +2563,8 @@ impl MainWindow {
         key_controller.connect_key_pressed(move |_, key, _, modifiers| {
             // Ctrl+Enter to save
             if modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
-                && (key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter) {
+                && (key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter)
+            {
                 save_note_clone2();
                 return gtk::glib::Propagation::Stop;
             }
@@ -2417,7 +2609,8 @@ impl MainWindow {
 
         let snapshot_name = snapshot.name.clone();
         // Extract just the snapshot name without the @snapshots/ prefix
-        let snapshot_basename = snapshot.path
+        let snapshot_basename = snapshot
+            .path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(&snapshot_name)
@@ -2477,7 +2670,8 @@ impl MainWindow {
                         Ok(c) => c,
                         Err(e) => {
                             let error = format!("Failed to connect to snapshot service: {}", e);
-                            let _ = sender.send((None, Some(("Connection Error".to_string(), error))));
+                            let _ =
+                                sender.send((None, Some(("Connection Error".to_string(), error))));
                             return;
                         }
                     };
@@ -2508,11 +2702,23 @@ impl MainWindow {
 
                                     // Send desktop notification
                                     if let Some(app) = window.application() {
-                                        notifications::notify_snapshot_deleted(&app, &name_for_notification);
+                                        notifications::notify_snapshot_deleted(
+                                            &app,
+                                            &name_for_notification,
+                                        );
                                     }
 
                                     // Refresh the list
-                                    Self::refresh_list_static(&window, &manager, &user_prefs, &backup_manager, &list, &compare_btn, &disk_space, &disk_space_bar);
+                                    Self::refresh_list_static(
+                                        &window,
+                                        &manager,
+                                        &user_prefs,
+                                        &backup_manager,
+                                        &list,
+                                        &compare_btn,
+                                        &disk_space,
+                                        &disk_space_bar,
+                                    );
                                     // Update disk space after deletion
                                     Self::update_disk_space_label(&disk_space, &disk_space_bar);
                                 }
@@ -2520,14 +2726,14 @@ impl MainWindow {
                                     error_helpers::show_error_with_context(
                                         &window,
                                         error_helpers::ErrorContext::SnapshotDelete,
-                                        &message
+                                        &message,
                                     );
                                 }
                                 Err(e) => {
                                     error_helpers::show_error_with_context(
                                         &window,
                                         error_helpers::ErrorContext::SnapshotDelete,
-                                        &e.to_string()
+                                        &e.to_string(),
                                     );
                                 }
                             }
@@ -2582,12 +2788,15 @@ impl MainWindow {
 
         let group = adw::PreferencesGroup::new();
         group.set_title("How would you like to restore?");
-        group.set_description(Some("Choose whether to restore the entire system or individual files"));
+        group.set_description(Some(
+            "Choose whether to restore the entire system or individual files",
+        ));
 
         // Full system restore option
         let full_restore_row = adw::ActionRow::new();
         full_restore_row.set_title("Restore Entire System");
-        full_restore_row.set_subtitle("Roll back your entire system to this restore point (requires reboot)");
+        full_restore_row
+            .set_subtitle("Roll back your entire system to this restore point (requires reboot)");
         full_restore_row.set_activatable(true);
 
         let full_icon = gtk::Image::from_icon_name("view-refresh-symbolic");
@@ -2602,7 +2811,8 @@ impl MainWindow {
         // Individual files restore option
         let files_restore_row = adw::ActionRow::new();
         files_restore_row.set_title("Restore Individual Files");
-        files_restore_row.set_subtitle("Select specific files or folders to restore from this restore point");
+        files_restore_row
+            .set_subtitle("Select specific files or folders to restore from this restore point");
         files_restore_row.set_activatable(true);
 
         let files_icon = gtk::Image::from_icon_name("document-save-symbolic");
@@ -2655,7 +2865,10 @@ impl MainWindow {
             let client = match WaypointHelperClient::new() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(Err(anyhow::anyhow!("Failed to connect to snapshot service: {}", e)));
+                    let _ = tx.send(Err(anyhow::anyhow!(
+                        "Failed to connect to snapshot service: {}",
+                        e
+                    )));
                     return;
                 }
             };
@@ -2669,12 +2882,19 @@ impl MainWindow {
             match rx.try_recv() {
                 Ok(Ok(preview)) => {
                     // Show preview dialog with package changes
-                    Self::show_restore_preview_dialog(&window_clone, &snapshot_id_for_idle, preview);
+                    Self::show_restore_preview_dialog(
+                        &window_clone,
+                        &snapshot_id_for_idle,
+                        preview,
+                    );
                     glib::ControlFlow::Break
                 }
                 Ok(Err(e)) => {
-                    dialogs::show_error(&window_clone, "Preview Failed",
-                        &format!("Failed to generate restore preview: {}", e));
+                    dialogs::show_error(
+                        &window_clone,
+                        "Preview Failed",
+                        &format!("Failed to generate restore preview: {}", e),
+                    );
                     glib::ControlFlow::Break
                 }
                 Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -2697,8 +2917,7 @@ impl MainWindow {
         // Header info
         preview_parts.push(format!(
             "📸 Snapshot: {}\n📅 Created: {}",
-            preview.snapshot_name,
-            preview.snapshot_timestamp
+            preview.snapshot_name, preview.snapshot_timestamp
         ));
 
         if let Some(desc) = &preview.snapshot_description {
@@ -2718,7 +2937,10 @@ impl MainWindow {
         }
 
         // Package changes summary
-        preview_parts.push(format!("\n📦 Package Changes: {}", preview.total_package_changes));
+        preview_parts.push(format!(
+            "\n📦 Package Changes: {}",
+            preview.total_package_changes
+        ));
 
         if !preview.packages_to_add.is_empty() {
             preview_parts.push(format!("  ➕ {} to install", preview.packages_to_add.len()));
@@ -2728,45 +2950,69 @@ impl MainWindow {
                 preview_parts.push(format!("     • {} ({})", pkg.name, version));
             }
             if preview.packages_to_add.len() > 3 {
-                preview_parts.push(format!("     • ... and {} more", preview.packages_to_add.len() - 3));
+                preview_parts.push(format!(
+                    "     • ... and {} more",
+                    preview.packages_to_add.len() - 3
+                ));
             }
         }
         if !preview.packages_to_remove.is_empty() {
-            preview_parts.push(format!("  ➖ {} to remove", preview.packages_to_remove.len()));
+            preview_parts.push(format!(
+                "  ➖ {} to remove",
+                preview.packages_to_remove.len()
+            ));
             for pkg in preview.packages_to_remove.iter().take(3) {
                 let version = pkg.current_version.as_deref().unwrap_or("unknown");
                 preview_parts.push(format!("     • {} ({})", pkg.name, version));
             }
             if preview.packages_to_remove.len() > 3 {
-                preview_parts.push(format!("     • ... and {} more", preview.packages_to_remove.len() - 3));
+                preview_parts.push(format!(
+                    "     • ... and {} more",
+                    preview.packages_to_remove.len() - 3
+                ));
             }
         }
         if !preview.packages_to_upgrade.is_empty() {
-            preview_parts.push(format!("  ⬆️  {} to upgrade", preview.packages_to_upgrade.len()));
+            preview_parts.push(format!(
+                "  ⬆️  {} to upgrade",
+                preview.packages_to_upgrade.len()
+            ));
             for pkg in preview.packages_to_upgrade.iter().take(3) {
                 let curr = pkg.current_version.as_deref().unwrap_or("?");
                 let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
                 preview_parts.push(format!("     • {} ({} → {})", pkg.name, curr, snap));
             }
             if preview.packages_to_upgrade.len() > 3 {
-                preview_parts.push(format!("     • ... and {} more", preview.packages_to_upgrade.len() - 3));
+                preview_parts.push(format!(
+                    "     • ... and {} more",
+                    preview.packages_to_upgrade.len() - 3
+                ));
             }
         }
         if !preview.packages_to_downgrade.is_empty() {
-            preview_parts.push(format!("  ⬇️  {} to downgrade", preview.packages_to_downgrade.len()));
+            preview_parts.push(format!(
+                "  ⬇️  {} to downgrade",
+                preview.packages_to_downgrade.len()
+            ));
             for pkg in preview.packages_to_downgrade.iter().take(3) {
                 let curr = pkg.current_version.as_deref().unwrap_or("?");
                 let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
                 preview_parts.push(format!("     • {} ({} → {})", pkg.name, curr, snap));
             }
             if preview.packages_to_downgrade.len() > 3 {
-                preview_parts.push(format!("     • ... and {} more", preview.packages_to_downgrade.len() - 3));
+                preview_parts.push(format!(
+                    "     • ... and {} more",
+                    preview.packages_to_downgrade.len() - 3
+                ));
             }
         }
 
         // Affected subvolumes
         if !preview.affected_subvolumes.is_empty() {
-            preview_parts.push(format!("\n💾 Affected: {}", preview.affected_subvolumes.join(", ")));
+            preview_parts.push(format!(
+                "\n💾 Affected: {}",
+                preview.affected_subvolumes.join(", ")
+            ));
         }
 
         // Warning footer
@@ -2774,7 +3020,8 @@ impl MainWindow {
             "\n⚠️  WARNING:\n\
             • All changes after this snapshot will be LOST\n\
             • System will require a REBOOT\n\
-            • A backup snapshot will be created first".to_string()
+            • A backup snapshot will be created first"
+                .to_string(),
         );
 
         let preview_message = preview_parts.join("\n");
@@ -2899,10 +3146,12 @@ impl MainWindow {
     }
 
     /// Show dialog to compare two snapshots
-    fn show_compare_dialog(window: &adw::ApplicationWindow, manager: &Rc<RefCell<SnapshotManager>>) {
+    fn show_compare_dialog(
+        window: &adw::ApplicationWindow,
+        manager: &Rc<RefCell<SnapshotManager>>,
+    ) {
         comparison_dialog::show_compare_dialog(window, manager);
     }
-
 
     /// Show preferences dialog
     fn show_preferences_dialog(
@@ -2913,7 +3162,10 @@ impl MainWindow {
     }
 
     /// Show analytics dialog
-    fn show_analytics_dialog(window: &adw::ApplicationWindow, snapshot_manager: &std::rc::Rc<std::cell::RefCell<SnapshotManager>>) {
+    fn show_analytics_dialog(
+        window: &adw::ApplicationWindow,
+        snapshot_manager: &std::rc::Rc<std::cell::RefCell<SnapshotManager>>,
+    ) {
         // Load snapshots
         let snapshots = match snapshot_manager.borrow().load_snapshots() {
             Ok(s) => s,

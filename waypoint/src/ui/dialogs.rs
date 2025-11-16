@@ -1,6 +1,6 @@
+use adw::prelude::*;
 use gtk::prelude::*;
 use libadwaita as adw;
-use adw::prelude::*;
 
 /// Show a confirmation dialog
 pub fn show_confirmation<F>(
@@ -61,7 +61,11 @@ pub fn show_toast(window: &adw::ApplicationWindow, message: &str) {
 }
 
 /// Show a toast notification with custom timeout
-pub fn show_toast_with_timeout(window: &adw::ApplicationWindow, message: &str, timeout_seconds: u32) {
+pub fn show_toast_with_timeout(
+    window: &adw::ApplicationWindow,
+    message: &str,
+    timeout_seconds: u32,
+) {
     // Get the ToastOverlay from the window content
     if let Some(content) = window.content() {
         if let Ok(toast_overlay) = content.downcast::<adw::ToastOverlay>() {

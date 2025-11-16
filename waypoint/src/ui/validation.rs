@@ -74,7 +74,11 @@ mod tests {
 
         let result = validate_path_for_open(path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("outside allowed snapshot directories"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("outside allowed snapshot directories")
+        );
     }
 
     #[test]
@@ -83,7 +87,11 @@ mod tests {
         if let Some(home) = dirs::home_dir() {
             let result = validate_path_for_open(&home);
             assert!(result.is_err());
-            assert!(result.unwrap_err().contains("outside allowed snapshot directories"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("outside allowed snapshot directories")
+            );
         }
     }
 
@@ -93,7 +101,11 @@ mod tests {
         let path = std::path::Path::new("/");
         let result = validate_path_for_open(path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("outside allowed snapshot directories"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("outside allowed snapshot directories")
+        );
     }
 
     #[test]
@@ -102,7 +114,11 @@ mod tests {
         let path = std::path::Path::new("/tmp");
         let result = validate_path_for_open(path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("outside allowed snapshot directories"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("outside allowed snapshot directories")
+        );
     }
 
     #[test]
@@ -117,7 +133,10 @@ mod tests {
         } else {
             // If it doesn't exist, it should fail to canonicalize
             let result = validate_path_for_open(snapshots_dir);
-            assert!(result.is_err(), "/.snapshots should fail if it doesn't exist");
+            assert!(
+                result.is_err(),
+                "/.snapshots should fail if it doesn't exist"
+            );
         }
     }
 
@@ -134,7 +153,11 @@ mod tests {
         if malicious_path.exists() {
             let result = validate_path_for_open(&malicious_path);
             assert!(result.is_err());
-            assert!(result.unwrap_err().contains("outside allowed snapshot directories"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("outside allowed snapshot directories")
+            );
         }
 
         let _ = fs::remove_dir_all(&test_dir);
@@ -155,7 +178,11 @@ mod tests {
             let result = validate_path_for_open(&symlink_path);
             assert!(result.is_err());
             // After canonicalization, it will point to /etc/passwd
-            assert!(result.unwrap_err().contains("outside allowed snapshot directories"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("outside allowed snapshot directories")
+            );
         }
 
         let _ = fs::remove_dir_all(&test_dir);

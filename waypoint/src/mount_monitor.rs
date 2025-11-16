@@ -63,10 +63,8 @@ impl MountMonitor {
         let mut mounted = self.mounted_uuids.lock().unwrap();
 
         // Get currently mounted UUIDs
-        let current_uuids: HashSet<String> = destinations
-            .into_iter()
-            .filter_map(|d| d.uuid)
-            .collect();
+        let current_uuids: HashSet<String> =
+            destinations.into_iter().filter_map(|d| d.uuid).collect();
 
         // Find UUIDs that are no longer mounted
         let unmounted: Vec<String> = mounted

@@ -25,8 +25,8 @@ impl BackupManager {
         let waypoint_config = WaypointConfig::new();
         let config_path = waypoint_config.backup_config.clone();
 
-        let backup_config = BackupConfig::load(&config_path)
-            .unwrap_or_else(|_| BackupConfig::default());
+        let backup_config =
+            BackupConfig::load(&config_path).unwrap_or_else(|_| BackupConfig::default());
 
         Ok(Self {
             config: Arc::new(Mutex::new(backup_config)),
@@ -43,13 +43,18 @@ impl BackupManager {
     /// Save the current configuration to disk
     pub fn save_config(&self) -> Result<()> {
         let config = self.config.lock().unwrap();
-        config.save(&self.config_path)
+        config
+            .save(&self.config_path)
             .context("Failed to save backup configuration")?;
         Ok(())
     }
 
     /// Add or update a destination configuration
-    pub fn add_destination(&self, uuid: String, dest_config: BackupDestinationConfig) -> Result<()> {
+    pub fn add_destination(
+        &self,
+        uuid: String,
+        dest_config: BackupDestinationConfig,
+    ) -> Result<()> {
         let mut config = self.config.lock().unwrap();
         config.add_destination(uuid, dest_config);
         drop(config);
@@ -121,8 +126,7 @@ impl BackupManager {
         destination_mount: &str,
         snapshot_dir: &str,
     ) -> Result<(usize, usize, Vec<String>)> {
-        let client = WaypointHelperClient::new()
-            .context("Failed to connect to waypoint-helper")?;
+        let client = WaypointHelperClient::new().context("Failed to connect to waypoint-helper")?;
 
         // Collect pending snapshot IDs (need to clone to avoid borrowing issues)
         let pending_snapshot_ids: Vec<String> = {
@@ -177,7 +181,9 @@ impl BackupManager {
                         Some(size_bytes),
                         parent_snapshot.is_some(),
                         parent_snapshot.as_ref().and_then(|p| {
-                            p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string())
+                            p.file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|s| s.to_string())
                         }),
                     );
                     success_count += 1;
@@ -239,9 +245,9 @@ impl BackupManager {
     /// Check if a snapshot is backed up to any destination
     pub fn is_snapshot_backed_up(&self, snapshot_id: &str) -> bool {
         let config = self.config.lock().unwrap();
-        config.enabled_destinations().any(|(uuid, _)| {
-            config.is_backed_up(snapshot_id, uuid)
-        })
+        config
+            .enabled_destinations()
+            .any(|(uuid, _)| config.is_backed_up(snapshot_id, uuid))
     }
 
     /// Get list of destinations where a snapshot is backed up

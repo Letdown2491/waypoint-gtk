@@ -11,7 +11,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub use backup_config::{BackupConfig, BackupDestinationConfig, BackupFilter, BackupRecord, BackupStatus, PendingBackup};
+pub use backup_config::{
+    BackupConfig, BackupDestinationConfig, BackupFilter, BackupRecord, BackupStatus, PendingBackup,
+};
 pub use config::WaypointConfig;
 pub use exclude::{ExcludeConfig, ExcludePattern, PatternType};
 pub use quota::{QuotaConfig, QuotaType, QuotaUsage};

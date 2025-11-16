@@ -9,11 +9,11 @@ use libadwaita::prelude::PreferencesRowExt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::snapshot::SnapshotManager;
-use crate::user_preferences::UserPreferencesManager;
+use super::snapshot_row::{BackupStatus, SnapshotAction, SnapshotRow};
 use crate::backup_manager::BackupManager;
 use crate::performance;
-use super::snapshot_row::{SnapshotRow, SnapshotAction, BackupStatus};
+use crate::snapshot::SnapshotManager;
+use crate::user_preferences::UserPreferencesManager;
 
 /// Date filter options for snapshot list
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -29,7 +29,10 @@ pub enum DateFilter {
 }
 
 /// Compute the backup status for a snapshot
-fn compute_backup_status(snapshot_id: &str, backup_manager: &Rc<RefCell<BackupManager>>) -> BackupStatus {
+fn compute_backup_status(
+    snapshot_id: &str,
+    backup_manager: &Rc<RefCell<BackupManager>>,
+) -> BackupStatus {
     use waypoint_common::BackupStatus as ConfigStatus;
 
     let bm = backup_manager.borrow();
@@ -134,43 +137,52 @@ pub fn refresh_snapshot_list_internal(
 
     // Apply filters if provided
     let _filter_timer = performance::tracker().start("filter_snapshots");
-    let filtered_snapshots: Vec<_> = if let (Some(search), Some(filter)) = (search_text, date_filter) {
-        let search_lower = search.to_lowercase();
-        let now = chrono::Utc::now();
+    let filtered_snapshots: Vec<_> =
+        if let (Some(search), Some(filter)) = (search_text, date_filter) {
+            let search_lower = search.to_lowercase();
+            let now = chrono::Utc::now();
 
-        all_snapshots.iter().filter(|snapshot| {
-            // Text filter
-            let text_match = search.is_empty() ||
-                snapshot.name.to_lowercase().contains(&search_lower) ||
-                snapshot.description.as_ref()
-                    .map(|d| d.to_lowercase().contains(&search_lower))
-                    .unwrap_or(false);
+            all_snapshots
+                .iter()
+                .filter(|snapshot| {
+                    // Text filter
+                    let text_match = search.is_empty()
+                        || snapshot.name.to_lowercase().contains(&search_lower)
+                        || snapshot
+                            .description
+                            .as_ref()
+                            .map(|d| d.to_lowercase().contains(&search_lower))
+                            .unwrap_or(false);
 
-            // Date filter
-            let age_days = now.signed_duration_since(snapshot.timestamp).num_days();
-            let date_match = match filter {
-                DateFilter::All => true,
-                DateFilter::Last7Days => age_days <= 7,
-                DateFilter::Last30Days => age_days <= 30,
-                DateFilter::Last90Days => age_days <= 90,
-            };
+                    // Date filter
+                    let age_days = now.signed_duration_since(snapshot.timestamp).num_days();
+                    let date_match = match filter {
+                        DateFilter::All => true,
+                        DateFilter::Last7Days => age_days <= 7,
+                        DateFilter::Last30Days => age_days <= 30,
+                        DateFilter::Last90Days => age_days <= 90,
+                    };
 
-            text_match && date_match
-        }).collect()
-    } else {
-        // No filtering, use all snapshots
-        all_snapshots.iter().collect()
-    };
+                    text_match && date_match
+                })
+                .collect()
+        } else {
+            // No filtering, use all snapshots
+            all_snapshots.iter().collect()
+        };
     drop(_filter_timer);
 
     // Update match count label if provided
     if let Some(label) = match_label {
-        let is_filtered = search_text.map(|s| !s.is_empty()).unwrap_or(false) ||
-            date_filter.map(|f| f != DateFilter::All).unwrap_or(false);
+        let is_filtered = search_text.map(|s| !s.is_empty()).unwrap_or(false)
+            || date_filter.map(|f| f != DateFilter::All).unwrap_or(false);
 
         if is_filtered {
-            label.set_text(&format!("Showing {} of {} snapshots",
-                filtered_snapshots.len(), all_snapshots.len()));
+            label.set_text(&format!(
+                "Showing {} of {} snapshots",
+                filtered_snapshots.len(),
+                all_snapshots.len()
+            ));
         } else {
             label.set_text(&format!("{} snapshots", all_snapshots.len()));
         }
@@ -192,7 +204,9 @@ pub fn refresh_snapshot_list_internal(
 
         if all_snapshots.is_empty() {
             placeholder.set_title("No Restore Points Yet");
-            placeholder.set_description(Some("Restore points let you roll back your system to a previous state"));
+            placeholder.set_description(Some(
+                "Restore points let you roll back your system to a previous state",
+            ));
             placeholder.set_icon_name(Some("waypoint"));
 
             // Add prominent "Create Restore Point" button if create_btn is provided
@@ -223,22 +237,18 @@ pub fn refresh_snapshot_list_internal(
         list.append(&placeholder);
     } else {
         // Calculate max size for relative sizing of level bars
-        let max_size = filtered_snapshots
-            .iter()
-            .filter_map(|s| s.size_bytes)
-            .max();
+        let max_size = filtered_snapshots.iter().filter_map(|s| s.size_bytes).max();
 
         // Load user preferences
         let user_prefs = user_prefs_manager.borrow().load().unwrap_or_default();
 
         // Separate pinned and non-pinned snapshots based on user preferences
-        let (pinned, regular): (Vec<_>, Vec<_>) = filtered_snapshots
-            .into_iter()
-            .partition(|s| {
-                user_prefs.get(&s.id)
-                    .map(|p| p.is_favorite)
-                    .unwrap_or(false)
-            });
+        let (pinned, regular): (Vec<_>, Vec<_>) = filtered_snapshots.into_iter().partition(|s| {
+            user_prefs
+                .get(&s.id)
+                .map(|p| p.is_favorite)
+                .unwrap_or(false)
+        });
 
         // Add pinned snapshots section if any exist
         if !pinned.is_empty() {
@@ -254,9 +264,15 @@ pub fn refresh_snapshot_list_internal(
                 let prefs = user_prefs.get(&snapshot.id).cloned().unwrap_or_default();
                 let backup_status = compute_backup_status(&snapshot.id, backup_manager);
                 let handler_clone = action_handler.clone();
-                let row = SnapshotRow::new_with_context(snapshot, &prefs, move |id, action| {
-                    handler_clone(&id, action);
-                }, max_size, &backup_status);
+                let row = SnapshotRow::new_with_context(
+                    snapshot,
+                    &prefs,
+                    move |id, action| {
+                        handler_clone(&id, action);
+                    },
+                    max_size,
+                    &backup_status,
+                );
                 list.append(&row);
             }
 
@@ -279,9 +295,15 @@ pub fn refresh_snapshot_list_internal(
             let prefs = user_prefs.get(&snapshot.id).cloned().unwrap_or_default();
             let backup_status = compute_backup_status(&snapshot.id, backup_manager);
             let handler_clone = action_handler.clone();
-            let row = SnapshotRow::new_with_context(snapshot, &prefs, move |id, action| {
-                handler_clone(&id, action);
-            }, max_size, &backup_status);
+            let row = SnapshotRow::new_with_context(
+                snapshot,
+                &prefs,
+                move |id, action| {
+                    handler_clone(&id, action);
+                },
+                max_size,
+                &backup_status,
+            );
             list.append(&row);
         }
     }

@@ -1,12 +1,12 @@
 //! Modern sidebar-based preferences window
 
+use crate::backup_manager::BackupManager;
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{ListBox, Orientation, SelectionMode, Stack};
 use libadwaita as adw;
-use adw::prelude::*;
-use crate::backup_manager::BackupManager;
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Show the main preferences window with sidebar navigation
 pub fn show_preferences_window(
@@ -83,7 +83,9 @@ pub fn show_preferences_window(
             // Lazy load scheduling data when first viewed
             if page_name == "scheduling" && !*scheduling_loaded_clone.borrow() {
                 unsafe {
-                    if let Some(scheduler_content) = scheduling_page_clone.data::<gtk::Box>("scheduler_content") {
+                    if let Some(scheduler_content) =
+                        scheduling_page_clone.data::<gtk::Box>("scheduler_content")
+                    {
                         super::scheduler_dialog::load_scheduler_status(scheduler_content.as_ref());
                         *scheduling_loaded_clone.borrow_mut() = true;
                     }
@@ -286,4 +288,3 @@ fn create_scheduling_content(parent: &adw::ApplicationWindow) -> gtk::Box {
 
     container
 }
-

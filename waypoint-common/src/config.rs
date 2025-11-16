@@ -128,7 +128,10 @@ mod tests {
     fn test_default_config() {
         let config = WaypointConfig::default();
         assert_eq!(config.snapshot_dir, PathBuf::from("/.snapshots"));
-        assert_eq!(config.metadata_file, PathBuf::from("/var/lib/waypoint/snapshots.json"));
+        assert_eq!(
+            config.metadata_file,
+            PathBuf::from("/var/lib/waypoint/snapshots.json")
+        );
         assert_eq!(config.min_free_space_bytes, 1024 * 1024 * 1024);
         assert_eq!(config.ui_window_width, 800);
         assert_eq!(config.ui_window_height, 600);

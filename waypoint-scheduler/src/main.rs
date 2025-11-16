@@ -46,17 +46,17 @@ fn run_scheduler_loop(config: &WaypointConfig) -> Result<()> {
 
     log::info!("Enabled schedules:");
     for schedule in &enabled {
-        log::info!("  - {} ({})", schedule.prefix, schedule.schedule_type.as_str());
+        log::info!(
+            "  - {} ({})",
+            schedule.prefix,
+            schedule.schedule_type.as_str()
+        );
     }
 
     // Calculate next run time for each schedule
     let mut next_runs: Vec<(Duration, &Schedule)> = enabled
         .iter()
-        .filter_map(|s| {
-            calculate_next_run(s)
-                .map(|duration| (duration, *s))
-                .ok()
-        })
+        .filter_map(|s| calculate_next_run(s).map(|duration| (duration, *s)).ok())
         .collect();
 
     if next_runs.is_empty() {
@@ -156,10 +156,7 @@ fn calculate_next_run(schedule: &Schedule) -> Result<Duration> {
 }
 
 /// Calculate next daily run time
-fn calculate_next_daily(
-    now: chrono::DateTime<Local>,
-    time: &str,
-) -> Result<Duration> {
+fn calculate_next_daily(now: chrono::DateTime<Local>, time: &str) -> Result<Duration> {
     let parts: Vec<&str> = time.split(':').collect();
     let target_hour: u32 = parts[0].parse()?;
     let target_min: u32 = parts[1].parse()?;
@@ -261,11 +258,7 @@ fn calculate_next_monthly(
 fn create_snapshot(schedule: &Schedule) -> Result<()> {
     waypoint_common::validate_snapshot_name(&schedule.prefix)
         .map_err(|e| anyhow::anyhow!("Invalid schedule prefix '{}': {}", schedule.prefix, e))?;
-    let snapshot_name = format!(
-        "{}-{}",
-        schedule.prefix,
-        Local::now().format("%Y%m%d-%H%M")
-    );
+    let snapshot_name = format!("{}-{}", schedule.prefix, Local::now().format("%Y%m%d-%H%M"));
 
     log::info!("Creating scheduled snapshot: {}", snapshot_name);
 

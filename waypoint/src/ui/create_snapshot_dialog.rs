@@ -1,7 +1,7 @@
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Entry, Label, Orientation};
 use libadwaita as adw;
-use adw::prelude::*;
 
 /// Sanitize description text to prevent issues
 fn sanitize_description(desc: &str) -> String {
@@ -53,7 +53,9 @@ where
     content.append(&desc_entry);
 
     // Info label
-    let info = Label::new(Some("The snapshot will be automatically named based on the current date and time."));
+    let info = Label::new(Some(
+        "The snapshot will be automatically named based on the current date and time.",
+    ));
     info.set_wrap(true);
     info.add_css_class("dim-label");
     info.set_halign(gtk::Align::Start);

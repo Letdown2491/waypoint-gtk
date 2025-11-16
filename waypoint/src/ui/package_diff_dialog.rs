@@ -1,8 +1,8 @@
-use crate::packages::{diff_packages, Package, PackageDiff};
+use crate::packages::{Package, PackageDiff, diff_packages};
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Label, Orientation, ScrolledWindow};
 use libadwaita as adw;
-use adw::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -101,11 +101,13 @@ pub fn show_package_diff_dialog(
     btn_added.add_css_class("pill");
     filter_box.append(&btn_added);
 
-    let btn_removed = gtk::ToggleButton::with_label(&format!("Removed ({})", diff_rc.removed.len()));
+    let btn_removed =
+        gtk::ToggleButton::with_label(&format!("Removed ({})", diff_rc.removed.len()));
     btn_removed.add_css_class("pill");
     filter_box.append(&btn_removed);
 
-    let btn_updated = gtk::ToggleButton::with_label(&format!("Updated ({})", diff_rc.updated.len()));
+    let btn_updated =
+        gtk::ToggleButton::with_label(&format!("Updated ({})", diff_rc.updated.len()));
     btn_updated.add_css_class("pill");
     filter_box.append(&btn_updated);
 
@@ -168,9 +170,8 @@ pub fn show_package_diff_dialog(
             let search = search_text.borrow().to_lowercase();
 
             // Filter packages based on search
-            let filter_pkg = |pkg: &Package| {
-                search.is_empty() || pkg.name.to_lowercase().contains(&search)
-            };
+            let filter_pkg =
+                |pkg: &Package| search.is_empty() || pkg.name.to_lowercase().contains(&search);
 
             let filter_update = |upd: &crate::packages::PackageUpdate| {
                 search.is_empty() || upd.name.to_lowercase().contains(&search)
@@ -185,7 +186,8 @@ pub fn show_package_diff_dialog(
 
             // Added packages
             if show_added && !diff_rc.added.is_empty() {
-                let filtered_added: Vec<_> = diff_rc.added.iter().filter(|p| filter_pkg(p)).collect();
+                let filtered_added: Vec<_> =
+                    diff_rc.added.iter().filter(|p| filter_pkg(p)).collect();
                 if !filtered_added.is_empty() {
                     let added_section = create_enhanced_section(
                         "Packages Added",
@@ -205,7 +207,8 @@ pub fn show_package_diff_dialog(
 
             // Removed packages
             if show_removed && !diff_rc.removed.is_empty() {
-                let filtered_removed: Vec<_> = diff_rc.removed.iter().filter(|p| filter_pkg(p)).collect();
+                let filtered_removed: Vec<_> =
+                    diff_rc.removed.iter().filter(|p| filter_pkg(p)).collect();
                 if !filtered_removed.is_empty() {
                     let removed_section = create_enhanced_section(
                         "Packages Removed",
@@ -225,7 +228,11 @@ pub fn show_package_diff_dialog(
 
             // Updated packages
             if show_updated && !diff_rc.updated.is_empty() {
-                let filtered_updated: Vec<_> = diff_rc.updated.iter().filter(|u| filter_update(u)).collect();
+                let filtered_updated: Vec<_> = diff_rc
+                    .updated
+                    .iter()
+                    .filter(|u| filter_update(u))
+                    .collect();
                 if !filtered_updated.is_empty() {
                     let updated_section = create_enhanced_section(
                         "Packages Updated",
@@ -246,7 +253,10 @@ pub fn show_package_diff_dialog(
             // No results
             if shown_items == 0 {
                 let status = adw::StatusPage::new();
-                if diff_rc.added.is_empty() && diff_rc.removed.is_empty() && diff_rc.updated.is_empty() {
+                if diff_rc.added.is_empty()
+                    && diff_rc.removed.is_empty()
+                    && diff_rc.updated.is_empty()
+                {
                     status.set_title("No Differences");
                     status.set_description(Some("Both snapshots have identical packages"));
                     status.set_icon_name(Some("emblem-ok-symbolic"));
@@ -269,7 +279,10 @@ pub fn show_package_diff_dialog(
             } else if shown_items == 0 {
                 status_label.set_text("No packages match current filters");
             } else {
-                status_label.set_text(&format!("Showing {} of {} package changes", shown_items, total_items));
+                status_label.set_text(&format!(
+                    "Showing {} of {} package changes",
+                    shown_items, total_items
+                ));
             }
         })
     };
@@ -426,7 +439,10 @@ fn export_comparison(parent: &adw::Window, snap1: &str, snap2: &str, diff: &Pack
 
     let mut content = String::new();
     content.push_str(&format!("Package Comparison: {} → {}\n", snap1, snap2));
-    content.push_str(&format!("Generated: {}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+    content.push_str(&format!(
+        "Generated: {}\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    ));
     content.push_str(&format!("\nSummary:\n"));
     content.push_str(&format!("  Total Changes: {}\n", diff.total_changes()));
     content.push_str(&format!("  Added: {}\n", diff.added.len()));
@@ -450,13 +466,18 @@ fn export_comparison(parent: &adw::Window, snap1: &str, snap2: &str, diff: &Pack
     if !diff.updated.is_empty() {
         content.push_str("\n=== Packages Updated ===\n");
         for upd in &diff.updated {
-            content.push_str(&format!("  * {} ({} → {})\n", upd.name, upd.old_version, upd.new_version));
+            content.push_str(&format!(
+                "  * {} ({} → {})\n",
+                upd.name, upd.old_version, upd.new_version
+            ));
         }
     }
 
     // Try to save to Downloads folder
     let save_path = if let Some(home) = std::env::var_os("HOME") {
-        let downloads = std::path::PathBuf::from(home).join("Downloads").join(&filename);
+        let downloads = std::path::PathBuf::from(home)
+            .join("Downloads")
+            .join(&filename);
         if downloads.parent().unwrap().exists() {
             downloads
         } else {

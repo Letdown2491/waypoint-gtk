@@ -1,8 +1,8 @@
 use crate::snapshot::SnapshotManager;
-use gtk::{Label, Orientation};
-use gtk::prelude::*;
-use libadwaita as adw;
 use adw::prelude::*;
+use gtk::prelude::*;
+use gtk::{Label, Orientation};
+use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -10,7 +10,10 @@ use super::dialogs;
 use super::package_diff_dialog;
 
 /// Show dialog to compare two snapshots
-pub fn show_compare_dialog(window: &adw::ApplicationWindow, manager: &Rc<RefCell<SnapshotManager>>) {
+pub fn show_compare_dialog(
+    window: &adw::ApplicationWindow,
+    manager: &Rc<RefCell<SnapshotManager>>,
+) {
     let snapshots = match manager.borrow().load_snapshots() {
         Ok(s) => s,
         Err(e) => {
@@ -222,11 +225,7 @@ pub fn show_compare_dialog(window: &adw::ApplicationWindow, manager: &Rc<RefCell
         let snap2 = &snapshots_clone2[idx2];
 
         // Show the file diff dialog
-        super::file_diff_dialog::show_file_diff_dialog(
-            &window_clone2,
-            &snap1.name,
-            &snap2.name,
-        );
+        super::file_diff_dialog::show_file_diff_dialog(&window_clone2, &snap1.name, &snap2.name);
 
         dialog_clone2.close();
     });

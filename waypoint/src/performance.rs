@@ -143,10 +143,7 @@ impl PerformanceTracker {
     /// Get all unique operation names
     pub fn get_operations(&self) -> Vec<String> {
         if let Ok(measurements) = self.measurements.lock() {
-            let mut ops: Vec<String> = measurements
-                .iter()
-                .map(|m| m.operation.clone())
-                .collect();
+            let mut ops: Vec<String> = measurements.iter().map(|m| m.operation.clone()).collect();
             ops.sort();
             ops.dedup();
             ops

@@ -2,14 +2,14 @@
 //!
 //! Provides interface for backing up snapshots to external drives
 
+use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Button, Label, Orientation};
 use libadwaita as adw;
-use adw::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::dbus_client::WaypointHelperClient;
 use super::dialogs;
+use crate::dbus_client::WaypointHelperClient;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 enum DriveType {
@@ -27,8 +27,8 @@ struct BackupDestination {
 }
 
 use crate::backup_manager::BackupManager;
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Create the backups content page
 pub fn create_backups_content(
@@ -56,7 +56,7 @@ pub fn create_backups_content(
     header_group.set_title("Snapshot Backups");
     header_group.set_description(Some(
         "Create incremental backups of your snapshots to external drives using btrfs send/receive. \
-         This provides disaster recovery in case of system failure."
+         This provides disaster recovery in case of system failure.",
     ));
 
     content_box.append(&header_group);
@@ -114,7 +114,11 @@ pub fn create_backups_content(
                         continue;
                     }
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        dialogs::show_error(&parent_ref, "Scan Failed", "Scan thread disconnected unexpectedly");
+                        dialogs::show_error(
+                            &parent_ref,
+                            "Scan Failed",
+                            "Scan thread disconnected unexpectedly",
+                        );
                         btn_clone.set_sensitive(true);
                         btn_clone.set_label("Scan");
                         return;
@@ -147,7 +151,11 @@ pub fn create_backups_content(
                     dest_list.set_visible(true);
                 }
                 Err(e) => {
-                    dialogs::show_error(&parent_ref, "Scan Failed", &format!("Failed to scan for destinations: {}", e));
+                    dialogs::show_error(
+                        &parent_ref,
+                        "Scan Failed",
+                        &format!("Failed to scan for destinations: {}", e),
+                    );
                 }
             }
         });
@@ -221,7 +229,8 @@ pub fn create_backups_content(
     interval_row.set_title("Mount Check Interval");
     interval_row.set_subtitle("How often to check for newly mounted backup drives (in seconds)");
 
-    let current_interval = backup_manager.borrow()
+    let current_interval = backup_manager
+        .borrow()
         .get_config()
         .map(|c| c.mount_check_interval_seconds)
         .unwrap_or(60);
@@ -236,7 +245,10 @@ pub fn create_backups_content(
         if let Err(e) = bm_interval.borrow().set_mount_check_interval(new_value) {
             log::error!("Failed to save mount check interval: {}", e);
         } else {
-            log::info!("Updated mount check interval to {} seconds (requires restart to take effect)", new_value);
+            log::info!(
+                "Updated mount check interval to {} seconds (requires restart to take effect)",
+                new_value
+            );
         }
     });
 
@@ -313,7 +325,12 @@ fn create_destination_row(
     let subtitle = if let Some(ref uuid) = dest.uuid {
         let pending_count = backup_manager.borrow().get_pending_count(uuid);
         if pending_count > 0 {
-            format!("{} • {} pending backup{}", dest.mount_point, pending_count, if pending_count == 1 { "" } else { "s" })
+            format!(
+                "{} • {} pending backup{}",
+                dest.mount_point,
+                pending_count,
+                if pending_count == 1 { "" } else { "s" }
+            )
         } else {
             dest.mount_point.clone()
         }
@@ -335,21 +352,22 @@ fn create_destination_row(
 
     // Get current configuration if UUID exists
     let uuid = dest.uuid.clone();
-    let (is_enabled, current_filter, on_snapshot_creation, on_drive_mount) = if let Some(ref uuid) = uuid {
-        let config = backup_manager.borrow().get_config().unwrap_or_default();
-        if let Some(dest_config) = config.destinations.get(uuid) {
-            (
-                dest_config.enabled,
-                dest_config.filter.clone(),
-                dest_config.on_snapshot_creation,
-                dest_config.on_drive_mount,
-            )
+    let (is_enabled, current_filter, on_snapshot_creation, on_drive_mount) =
+        if let Some(ref uuid) = uuid {
+            let config = backup_manager.borrow().get_config().unwrap_or_default();
+            if let Some(dest_config) = config.destinations.get(uuid) {
+                (
+                    dest_config.enabled,
+                    dest_config.filter.clone(),
+                    dest_config.on_snapshot_creation,
+                    dest_config.on_drive_mount,
+                )
+            } else {
+                (false, BackupFilter::All, true, true)
+            }
         } else {
             (false, BackupFilter::All, true, true)
-        }
-    } else {
-        (false, BackupFilter::All, true, true)
-    };
+        };
 
     // Add enable switch
     let enable_switch = gtk::Switch::new();
@@ -563,7 +581,11 @@ fn show_backups_list_dialog(parent: &adw::ApplicationWindow, destination_mount: 
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     content_clone.remove(&loading_label);
                     dialog_clone.close();
-                    dialogs::show_error(&parent_clone, "Load Failed", "List backups thread disconnected unexpectedly");
+                    dialogs::show_error(
+                        &parent_clone,
+                        "Load Failed",
+                        "List backups thread disconnected unexpectedly",
+                    );
                     return;
                 }
             }
@@ -613,7 +635,11 @@ fn show_backups_list_dialog(parent: &adw::ApplicationWindow, destination_mount: 
             }
             Err(e) => {
                 dialog_clone.close();
-                dialogs::show_error(&parent_clone, "Load Failed", &format!("Failed to list backups: {}", e));
+                dialogs::show_error(
+                    &parent_clone,
+                    "Load Failed",
+                    &format!("Failed to list backups: {}", e),
+                );
             }
         }
     });
@@ -688,9 +714,7 @@ fn update_backup_status_summary(row: &adw::ActionRow, backup_manager: Rc<RefCell
 }
 
 /// Create pending backups list widget
-fn create_pending_backups_list(
-    backup_manager: Rc<RefCell<BackupManager>>,
-) -> gtk::Box {
+fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gtk::Box {
     use waypoint_common::BackupStatus;
 
     let container = gtk::Box::new(Orientation::Vertical, 6);
@@ -756,7 +780,10 @@ fn create_pending_backups_list(
         for pb in failed {
             let row = adw::ActionRow::new();
             row.set_title(&pb.snapshot_id);
-            row.set_subtitle(&format!("Destination: {} • {} attempts", pb.destination_uuid, pb.retry_count));
+            row.set_subtitle(&format!(
+                "Destination: {} • {} attempts",
+                pb.destination_uuid, pb.retry_count
+            ));
 
             let status_icon = gtk::Image::from_icon_name("dialog-error-symbolic");
             status_icon.set_pixel_size(16);
@@ -845,12 +872,21 @@ fn create_backup_statistics(backup_manager: Rc<RefCell<BackupManager>>) -> Vec<a
     }
 
     // Incremental backup ratio
-    let incremental_count = config.backup_history.iter().filter(|r| r.is_incremental).count();
+    let incremental_count = config
+        .backup_history
+        .iter()
+        .filter(|r| r.is_incremental)
+        .count();
     if config.backup_history.len() > 0 {
         let ratio = (incremental_count as f64 / config.backup_history.len() as f64) * 100.0;
         let ratio_row = adw::ActionRow::new();
         ratio_row.set_title("Incremental Backups");
-        ratio_row.set_subtitle(&format!("{:.1}% ({} of {})", ratio, incremental_count, config.backup_history.len()));
+        ratio_row.set_subtitle(&format!(
+            "{:.1}% ({} of {})",
+            ratio,
+            incremental_count,
+            config.backup_history.len()
+        ));
         rows.push(ratio_row);
     }
 

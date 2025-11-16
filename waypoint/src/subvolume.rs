@@ -20,10 +20,7 @@ impl SubvolumeInfo {
         let display_name = if mount_point == Path::new("/") {
             "Root filesystem (/)".to_string()
         } else {
-            format!("{} ({})",
-                mount_point.display(),
-                mount_point.display()
-            )
+            format!("{} ({})", mount_point.display(), mount_point.display())
         };
 
         Self {
@@ -40,8 +37,7 @@ pub fn detect_mounted_subvolumes() -> Result<Vec<SubvolumeInfo>> {
     let mut subvolumes = Vec::new();
 
     // Read /proc/mounts to find btrfs mounts
-    let mounts = std::fs::read_to_string("/proc/mounts")
-        .context("Failed to read /proc/mounts")?;
+    let mounts = std::fs::read_to_string("/proc/mounts").context("Failed to read /proc/mounts")?;
 
     for line in mounts.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -85,11 +81,7 @@ pub fn detect_mounted_subvolumes() -> Result<Vec<SubvolumeInfo>> {
             continue;
         };
 
-        let subvol_info = SubvolumeInfo::new(
-            PathBuf::from(mount_point),
-            subvol_path,
-            id,
-        );
+        let subvol_info = SubvolumeInfo::new(PathBuf::from(mount_point), subvol_path, id);
         subvolumes.push(subvol_info);
     }
 
@@ -118,7 +110,9 @@ fn get_subvolume_id(path: &Path) -> Result<u64> {
     for line in output_str.lines() {
         if line.trim().starts_with("Subvolume ID:") {
             if let Some(id_str) = line.split(':').nth(1) {
-                let id: u64 = id_str.trim().parse()
+                let id: u64 = id_str
+                    .trim()
+                    .parse()
                     .context("Failed to parse subvolume ID")?;
                 return Ok(id);
             }
