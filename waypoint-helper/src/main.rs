@@ -6,6 +6,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use waypoint_common::*;
 use zbus::{interface, Connection, ConnectionBuilder};
 
+mod backup;
 mod btrfs;
 mod packages;
 
@@ -333,18 +334,13 @@ impl WaypointHelper {
     ///
     /// # Returns
     /// JSON string containing array of changes, each with: type (Added/Modified/Deleted) and path
+    ///
+    /// This is a read-only operation and does not require authorization
     async fn compare_snapshots(
         &self,
-        #[zbus(header)] hdr: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &Connection,
         old_snapshot_name: String,
         new_snapshot_name: String,
     ) -> (bool, String) {
-        // Check authorization - comparing snapshots requires read access
-        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {}", e));
-        }
-
         // Perform comparison
         match Self::compare_snapshots_impl(&old_snapshot_name, &new_snapshot_name) {
             Ok(json) => (true, json),
@@ -448,6 +444,97 @@ impl WaypointHelper {
         match Self::save_quota_config_impl(&config_toml) {
             Ok(msg) => (true, msg),
             Err(e) => (false, format!("Failed to save quota configuration: {}", e)),
+        }
+    }
+
+    /// Scan for available backup destinations
+    ///
+    /// This is a read-only operation and does not require authorization
+    async fn scan_backup_destinations(&self) -> (bool, String) {
+        match backup::scan_backup_destinations() {
+            Ok(destinations) => {
+                match serde_json::to_string(&destinations) {
+                    Ok(json) => (true, json),
+                    Err(e) => (false, format!("Failed to serialize destinations: {}", e)),
+                }
+            }
+            Err(e) => (false, format!("Failed to scan destinations: {}", e)),
+        }
+    }
+
+    /// Backup a snapshot to an external drive
+    ///
+    /// # Arguments
+    /// * `snapshot_path` - Full path to the snapshot (e.g., /.snapshots/my-snapshot)
+    /// * `destination_mount` - Mount point of backup destination
+    /// * `parent_snapshot` - Optional parent snapshot path for incremental backup
+    ///
+    /// # Returns
+    /// * `(success, message_or_path, size_bytes)` - On success: (true, backup_path, size). On failure: (false, error, 0)
+    async fn backup_snapshot(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        snapshot_path: String,
+        destination_mount: String,
+        parent_snapshot: String,
+    ) -> (bool, String, u64) {
+        // Check authorization
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
+            return (false, format!("Authorization failed: {}", e), 0);
+        }
+
+        let parent = if parent_snapshot.is_empty() {
+            None
+        } else {
+            Some(parent_snapshot.as_str())
+        };
+
+        match backup::backup_snapshot(&snapshot_path, &destination_mount, parent) {
+            Ok((backup_path, size_bytes)) => (true, backup_path, size_bytes),
+            Err(e) => (false, format!("Failed to backup snapshot: {}", e), 0),
+        }
+    }
+
+    /// List backups at a destination
+    async fn list_backups(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        destination_mount: String,
+    ) -> (bool, String) {
+        // Check authorization
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
+            return (false, format!("Authorization failed: {}", e));
+        }
+
+        match backup::list_backups(&destination_mount) {
+            Ok(backups) => {
+                match serde_json::to_string(&backups) {
+                    Ok(json) => (true, json),
+                    Err(e) => (false, format!("Failed to serialize backups: {}", e)),
+                }
+            }
+            Err(e) => (false, format!("Failed to list backups: {}", e)),
+        }
+    }
+
+    /// Restore a snapshot from backup
+    async fn restore_from_backup(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        backup_path: String,
+        snapshots_dir: String,
+    ) -> (bool, String) {
+        // Check authorization - use restore action since we're restoring a snapshot
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
+            return (false, format!("Authorization failed: {}", e));
+        }
+
+        match backup::restore_from_backup(&backup_path, &snapshots_dir) {
+            Ok(restored_path) => (true, restored_path),
+            Err(e) => (false, format!("Failed to restore from backup: {}", e)),
         }
     }
 }

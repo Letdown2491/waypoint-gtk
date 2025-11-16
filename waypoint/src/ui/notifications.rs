@@ -103,3 +103,37 @@ pub fn notify_scheduled_snapshot(app: &Application, snapshot_name: &str) {
         NotificationPriority::Low,
     );
 }
+
+/// Send a notification about successful backup completion
+pub fn notify_backup_completed(app: &Application, destination_label: &str, success_count: usize, failed_count: usize) {
+    if failed_count == 0 {
+        let message = if success_count == 1 {
+            format!("Backed up 1 snapshot to {}", destination_label)
+        } else {
+            format!("Backed up {} snapshots to {}", success_count, destination_label)
+        };
+        send_notification(
+            app,
+            "Backup Completed",
+            &message,
+            NotificationPriority::Normal,
+        );
+    } else if success_count > 0 {
+        send_notification(
+            app,
+            "Backup Partially Completed",
+            &format!(
+                "{} succeeded, {} failed backing up to {}",
+                success_count, failed_count, destination_label
+            ),
+            NotificationPriority::Normal,
+        );
+    } else {
+        send_notification(
+            app,
+            "Backup Failed",
+            &format!("Failed to backup {} snapshot{} to {}", failed_count, if failed_count == 1 { "" } else { "s" }, destination_label),
+            NotificationPriority::High,
+        );
+    }
+}

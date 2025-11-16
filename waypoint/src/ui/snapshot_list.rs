@@ -11,8 +11,9 @@ use std::rc::Rc;
 
 use crate::snapshot::SnapshotManager;
 use crate::user_preferences::UserPreferencesManager;
+use crate::backup_manager::BackupManager;
 use crate::performance;
-use super::snapshot_row::{SnapshotRow, SnapshotAction};
+use super::snapshot_row::{SnapshotRow, SnapshotAction, BackupStatus};
 
 /// Date filter options for snapshot list
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -25,6 +26,53 @@ pub enum DateFilter {
     Last30Days,
     /// Show only snapshots from the last 90 days
     Last90Days,
+}
+
+/// Compute the backup status for a snapshot
+fn compute_backup_status(snapshot_id: &str, backup_manager: &Rc<RefCell<BackupManager>>) -> BackupStatus {
+    use waypoint_common::BackupStatus as ConfigStatus;
+
+    let bm = backup_manager.borrow();
+    let config = match bm.get_config() {
+        Ok(c) => c,
+        Err(_) => return BackupStatus::NotBackedUp,
+    };
+
+    // Count enabled destinations
+    let enabled_count = config.enabled_destinations().count();
+    if enabled_count == 0 {
+        return BackupStatus::NotBackedUp;
+    }
+
+    // Use helper method to get backup destinations
+    let backup_destinations = bm.get_snapshot_backup_destinations(snapshot_id);
+    let backed_up_count = backup_destinations.len();
+
+    // Check for pending and failed backups
+    let mut pending_count = 0;
+    let mut failed_count = 0;
+    for pb in &config.pending_backups {
+        if pb.snapshot_id == snapshot_id {
+            match pb.status {
+                ConfigStatus::Pending => pending_count += 1,
+                ConfigStatus::Failed => failed_count += 1,
+                _ => {}
+            }
+        }
+    }
+
+    // Determine status based on counts
+    if failed_count > 0 {
+        BackupStatus::Failed
+    } else if pending_count > 0 {
+        BackupStatus::Pending
+    } else if backed_up_count == 0 {
+        BackupStatus::NotBackedUp
+    } else if backed_up_count >= enabled_count {
+        BackupStatus::FullyBackedUp
+    } else {
+        BackupStatus::PartiallyBackedUp(backed_up_count, enabled_count)
+    }
 }
 
 /// Refresh the snapshot list with optional filtering
@@ -55,6 +103,7 @@ pub fn refresh_snapshot_list_internal(
     _window: &adw::ApplicationWindow,
     manager: &Rc<RefCell<SnapshotManager>>,
     user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
+    backup_manager: &Rc<RefCell<BackupManager>>,
     list: &ListBox,
     compare_btn: &Button,
     search_text: Option<&str>,
@@ -203,10 +252,11 @@ pub fn refresh_snapshot_list_internal(
             // Add pinned snapshots (most recent first)
             for snapshot in pinned.iter().rev() {
                 let prefs = user_prefs.get(&snapshot.id).cloned().unwrap_or_default();
+                let backup_status = compute_backup_status(&snapshot.id, backup_manager);
                 let handler_clone = action_handler.clone();
                 let row = SnapshotRow::new_with_context(snapshot, &prefs, move |id, action| {
                     handler_clone(&id, action);
-                }, max_size);
+                }, max_size, &backup_status);
                 list.append(&row);
             }
 
@@ -227,10 +277,11 @@ pub fn refresh_snapshot_list_internal(
         // for expensive fields (packages, subvolumes), so cloning snapshots is cheap.
         for snapshot in regular.iter().rev() {
             let prefs = user_prefs.get(&snapshot.id).cloned().unwrap_or_default();
+            let backup_status = compute_backup_status(&snapshot.id, backup_manager);
             let handler_clone = action_handler.clone();
             let row = SnapshotRow::new_with_context(snapshot, &prefs, move |id, action| {
                 handler_clone(&id, action);
-            }, max_size);
+            }, max_size, &backup_status);
             list.append(&row);
         }
     }

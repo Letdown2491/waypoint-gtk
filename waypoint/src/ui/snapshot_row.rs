@@ -16,6 +16,22 @@ pub enum SnapshotAction {
     Delete,
     ToggleFavorite,
     EditNote,
+    Backup,
+}
+
+/// Backup status for a snapshot
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackupStatus {
+    /// Not backed up to any destination
+    NotBackedUp,
+    /// Backed up to all enabled destinations
+    FullyBackedUp,
+    /// Backed up to some but not all enabled destinations
+    PartiallyBackedUp(usize, usize), // (backed_up_count, total_count)
+    /// Has pending backups
+    Pending,
+    /// Has failed backups
+    Failed,
 }
 
 impl SnapshotRow {
@@ -24,7 +40,13 @@ impl SnapshotRow {
     where
         F: Fn(String, SnapshotAction) + 'static,
     {
-        Self::new_with_context(snapshot, &SnapshotPreferences::default(), on_action, None)
+        Self::new_with_context(
+            snapshot,
+            &SnapshotPreferences::default(),
+            on_action,
+            None,
+            &BackupStatus::NotBackedUp,
+        )
     }
 
     pub fn new_with_context<F>(
@@ -32,6 +54,7 @@ impl SnapshotRow {
         preferences: &SnapshotPreferences,
         on_action: F,
         max_size: Option<u64>,
+        backup_status: &BackupStatus,
     ) -> adw::ActionRow
     where
         F: Fn(String, SnapshotAction) + 'static,
@@ -39,10 +62,50 @@ impl SnapshotRow {
         let row = adw::ActionRow::new();
         row.set_title(&snapshot.name);
 
+        // Create prefix box for waypoint icon + backup status
+        let prefix_box = Box::new(Orientation::Horizontal, 4);
+
         // Add waypoint icon as prefix
         let icon = gtk::Image::from_icon_name("waypoint");
         icon.set_pixel_size(16);
-        row.add_prefix(&icon);
+        prefix_box.append(&icon);
+
+        // Add backup status indicator
+        match backup_status {
+            BackupStatus::FullyBackedUp => {
+                let backup_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+                backup_icon.set_pixel_size(12);
+                backup_icon.set_tooltip_text(Some("Backed up to all destinations"));
+                backup_icon.add_css_class("success");
+                prefix_box.append(&backup_icon);
+            }
+            BackupStatus::PartiallyBackedUp(count, total) => {
+                let backup_icon = gtk::Image::from_icon_name("emblem-important-symbolic");
+                backup_icon.set_pixel_size(12);
+                backup_icon.set_tooltip_text(Some(&format!("Backed up to {} of {} destinations", count, total)));
+                backup_icon.add_css_class("warning");
+                prefix_box.append(&backup_icon);
+            }
+            BackupStatus::Pending => {
+                let backup_icon = gtk::Image::from_icon_name("document-save-symbolic");
+                backup_icon.set_pixel_size(12);
+                backup_icon.set_tooltip_text(Some("Backup pending"));
+                backup_icon.add_css_class("dim-label");
+                prefix_box.append(&backup_icon);
+            }
+            BackupStatus::Failed => {
+                let backup_icon = gtk::Image::from_icon_name("dialog-error-symbolic");
+                backup_icon.set_pixel_size(12);
+                backup_icon.set_tooltip_text(Some("Backup failed"));
+                backup_icon.add_css_class("error");
+                prefix_box.append(&backup_icon);
+            }
+            BackupStatus::NotBackedUp => {
+                // No icon for not backed up state
+            }
+        }
+
+        row.add_prefix(&prefix_box);
 
         // Build subtitle with metadata - cleaner format
         let mut subtitle_parts = vec![snapshot.format_timestamp()];
@@ -150,6 +213,10 @@ impl SnapshotRow {
         let verify_action_name = format!("snapshot.verify-{}", snapshot.id.replace('/', "-"));
         menu.append(Some("Verify Integrity"), Some(&verify_action_name));
 
+        // Backup action
+        let backup_action_name = format!("snapshot.backup-{}", snapshot.id.replace('/', "-"));
+        menu.append(Some("Backup to External Drive"), Some(&backup_action_name));
+
         // Edit Note action
         let edit_note_action_name = format!("snapshot.edit-note-{}", snapshot.id.replace('/', "-"));
         menu.append(Some("Edit Note"), Some(&edit_note_action_name));
@@ -201,6 +268,15 @@ impl SnapshotRow {
             verify_cb(verify_id.clone(), SnapshotAction::Verify);
         });
         action_group.add_action(&verify_action);
+
+        // Backup action
+        let backup_action = gtk::gio::SimpleAction::new(&format!("backup-{}", snapshot.id.replace('/', "-")), None);
+        let backup_id = snapshot.id.clone();
+        let backup_cb = callback.clone();
+        backup_action.connect_activate(move |_, _| {
+            backup_cb(backup_id.clone(), SnapshotAction::Backup);
+        });
+        action_group.add_action(&backup_action);
 
         // Edit Note action
         let edit_note_action = gtk::gio::SimpleAction::new(&format!("edit-note-{}", snapshot.id.replace('/', "-")), None);

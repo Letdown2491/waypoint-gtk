@@ -20,6 +20,13 @@
 - Configurable max snapshots, max age, minimum count, and keep patterns for pinned snapshots.
 - Real-time preview of snapshots to be deleted by retention policy.
 - Snapshot analytics dialog with overview statistics, space usage trends, growth analysis, actionable insights and recommendations, and visual size comparison of largest snapshots.
+- Automatic backup system with mount detection for external drives and network shares.
+- Backup destination configuration UI with support for local paths and remote SSH locations.
+- Automatic destination discovery with real-time mount point monitoring for USB drives and network shares.
+- Pending backup queue with automatic retry mechanism for failed backups when destinations become available.
+- Backup size tracking with accurate disk usage calculation for all backup operations.
+- Desktop notifications for backup completion with success/failure status and detailed summaries.
+- Streamlined startup experience with removal of unnecessary authentication prompts for read-only operations.
 - GTK4 + libadwaita modern interface following GNOME HIG with header bar and boxed-list styling.
 - Hamburger menu with theme switcher (system/light/dark mode, 32x32 circular buttons).
 - Custom Waypoint icons in multiple sizes (128x128, 256x256, 512x512, SVG).

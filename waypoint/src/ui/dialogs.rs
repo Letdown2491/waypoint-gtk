@@ -75,3 +75,51 @@ pub fn show_toast_with_timeout(window: &adw::ApplicationWindow, message: &str, t
     // Fallback: print to stdout
     println!("✓ {}", message);
 }
+
+/// Show a detailed error list dialog
+pub fn show_error_list(window: &adw::ApplicationWindow, title: &str, errors: &[String]) {
+    use gtk::Orientation;
+
+    let dialog = adw::Window::new();
+    dialog.set_title(Some(title));
+    dialog.set_modal(true);
+    dialog.set_transient_for(Some(window));
+    dialog.set_default_size(600, 400);
+
+    let content = gtk::Box::new(Orientation::Vertical, 0);
+
+    // Header
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&adw::WindowTitle::new(title, "")));
+    content.append(&header);
+
+    // Scrollable error list
+    let scrolled = gtk::ScrolledWindow::new();
+    scrolled.set_vexpand(true);
+    scrolled.set_hexpand(true);
+
+    let list_box = gtk::ListBox::new();
+    list_box.add_css_class("boxed-list");
+    list_box.set_margin_top(12);
+    list_box.set_margin_bottom(12);
+    list_box.set_margin_start(12);
+    list_box.set_margin_end(12);
+
+    for (i, error) in errors.iter().enumerate() {
+        let row = adw::ActionRow::new();
+        row.set_title(&format!("Error {}", i + 1));
+        row.set_subtitle(error);
+
+        let icon = gtk::Image::from_icon_name("dialog-error-symbolic");
+        icon.add_css_class("error");
+        row.add_prefix(&icon);
+
+        list_box.append(&row);
+    }
+
+    scrolled.set_child(Some(&list_box));
+    content.append(&scrolled);
+
+    dialog.set_content(Some(&content));
+    dialog.present();
+}

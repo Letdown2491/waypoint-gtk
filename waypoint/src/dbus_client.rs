@@ -580,6 +580,10 @@ impl WaypointHelperClient {
     /// Compare two snapshots and get list of changed files
     ///
     /// Returns JSON string containing array of changes
+    ///
+    /// **Limitation**: Due to a 25-second D-Bus timeout in zbus 4.0, this operation
+    /// will fail for large snapshots that take longer than 25 seconds to compare.
+    /// This is a known limitation. For very large snapshots, use package comparison instead.
     pub fn compare_snapshots(
         &self,
         old_snapshot_name: String,
@@ -593,10 +597,7 @@ impl WaypointHelperClient {
         )?;
 
         let result: (bool, String) = proxy
-            .call(
-                "CompareSnapshots",
-                &(old_snapshot_name, new_snapshot_name),
-            )
+            .call("CompareSnapshots", &(old_snapshot_name, new_snapshot_name))
             .context("Failed to call CompareSnapshots")?;
 
         if !result.0 {
@@ -705,5 +706,81 @@ impl WaypointHelperClient {
         }
 
         Ok(result.1)
+    }
+
+    /// Scan for available backup destinations
+    pub fn scan_backup_destinations(&self) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("ScanBackupDestinations", &())
+            .context("Failed to call ScanBackupDestinations")?;
+
+        Ok(result)
+    }
+
+    /// Backup a snapshot to an external drive
+    ///
+    /// Returns (success, path_or_error, size_bytes)
+    pub fn backup_snapshot(
+        &self,
+        snapshot_path: String,
+        destination_mount: String,
+        parent_snapshot: String,
+    ) -> Result<(bool, String, u64)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String, u64) = proxy
+            .call("BackupSnapshot", &(snapshot_path, destination_mount, parent_snapshot))
+            .context("Failed to call BackupSnapshot")?;
+
+        Ok(result)
+    }
+
+    /// List backups at a destination
+    pub fn list_backups(&self, destination_mount: String) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("ListBackups", &(destination_mount,))
+            .context("Failed to call ListBackups")?;
+
+        Ok(result)
+    }
+
+    /// Restore a snapshot from backup
+    #[allow(dead_code)]
+    pub fn restore_from_backup(
+        &self,
+        backup_path: String,
+        snapshots_dir: String,
+    ) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("RestoreFromBackup", &(backup_path, snapshots_dir))
+            .context("Failed to call RestoreFromBackup")?;
+
+        Ok(result)
     }
 }

@@ -4,9 +4,15 @@ use gtk::prelude::*;
 use gtk::{ListBox, Orientation, SelectionMode, Stack};
 use libadwaita as adw;
 use adw::prelude::*;
+use crate::backup_manager::BackupManager;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Show the main preferences window with sidebar navigation
-pub fn show_preferences_window(parent: &adw::ApplicationWindow) {
+pub fn show_preferences_window(
+    parent: &adw::ApplicationWindow,
+    backup_manager: Rc<RefCell<BackupManager>>,
+) {
     let window = adw::Window::new();
     window.set_title(Some("Preferences"));
     window.set_modal(true);
@@ -51,6 +57,9 @@ pub fn show_preferences_window(parent: &adw::ApplicationWindow) {
     let scheduling_page = create_scheduling_content(parent);
     stack.add_named(&scheduling_page, Some("scheduling"));
 
+    let backups_page = super::backup_dialog::create_backups_content(parent, backup_manager);
+    stack.add_named(&backups_page, Some("backups"));
+
     main_box.append(&stack);
 
     // Wire up sidebar navigation with lazy loading for scheduling page
@@ -67,6 +76,7 @@ pub fn show_preferences_window(parent: &adw::ApplicationWindow) {
                 1 => "exclusions",
                 2 => "quotas",
                 3 => "scheduling",
+                4 => "backups",
                 _ => "subvolumes",
             };
 
@@ -118,6 +128,7 @@ fn create_sidebar() -> ListBox {
         ("Exclusions", "edit-delete-symbolic"),
         ("Quotas", "drive-harddisk-symbolic"),
         ("Scheduling", "preferences-system-time-symbolic"),
+        ("Backups", "media-removable-symbolic"),
     ];
 
     for (title, icon_name) in items {

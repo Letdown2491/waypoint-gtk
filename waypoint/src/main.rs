@@ -1,6 +1,8 @@
+mod backup_manager;
 mod btrfs;
 mod cache;
 mod dbus_client;
+mod mount_monitor;
 mod packages;
 mod performance;
 mod signal_listener;

@@ -18,6 +18,9 @@ pub struct WaypointConfig {
     /// Path to schedules TOML configuration (default: /etc/waypoint/schedules.toml)
     pub schedules_config: PathBuf,
 
+    /// Path to backup configuration (default: /etc/waypoint/backups.toml)
+    pub backup_config: PathBuf,
+
     /// Path to service directory for scheduler (default: /var/service, runit-specific)
     pub service_dir: PathBuf,
 
@@ -50,6 +53,7 @@ impl Default for WaypointConfig {
             metadata_file: PathBuf::from("/var/lib/waypoint/snapshots.json"),
             scheduler_config: PathBuf::from("/etc/waypoint/scheduler.conf"),
             schedules_config: PathBuf::from("/etc/waypoint/schedules.toml"),
+            backup_config: PathBuf::from("/etc/waypoint/backups.toml"),
             service_dir: PathBuf::from("/var/service"),
             min_free_space_bytes: 1024 * 1024 * 1024, // 1 GB
             ui_window_width: 800,
@@ -70,6 +74,7 @@ impl WaypointConfig {
     /// - WAYPOINT_METADATA_FILE: Override metadata file path
     /// - WAYPOINT_SCHEDULER_CONFIG: Override scheduler config path (deprecated)
     /// - WAYPOINT_SCHEDULES_CONFIG: Override schedules TOML config path
+    /// - WAYPOINT_BACKUP_CONFIG: Override backup config path
     /// - WAYPOINT_SERVICE_DIR: Override service directory (for init system integration)
     /// - WAYPOINT_MIN_FREE_SPACE_GB: Override minimum free space (in GB)
     pub fn new() -> Self {
@@ -90,6 +95,10 @@ impl WaypointConfig {
 
         if let Ok(conf) = std::env::var("WAYPOINT_SCHEDULES_CONFIG") {
             config.schedules_config = PathBuf::from(conf);
+        }
+
+        if let Ok(conf) = std::env::var("WAYPOINT_BACKUP_CONFIG") {
+            config.backup_config = PathBuf::from(conf);
         }
 
         if let Ok(dir) = std::env::var("WAYPOINT_SERVICE_DIR") {

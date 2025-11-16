@@ -7,6 +7,7 @@ mod quota_preferences;
 mod exclude_preferences;
 mod create_snapshot_dialog;
 mod scheduler_dialog;
+mod backup_dialog;
 mod toolbar;
 mod snapshot_list;
 pub mod notifications;
@@ -18,10 +19,12 @@ mod file_restore_dialog;
 mod file_diff_dialog;
 mod analytics_dialog;
 
+use crate::backup_manager::BackupManager;
 use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
 use crate::snapshot::{Snapshot, SnapshotManager};
 use crate::user_preferences::UserPreferencesManager;
+use anyhow::Context;
 use gtk::prelude::*;
 use gtk::{Application, Button, Label, ListBox, Orientation, ScrolledWindow, SearchEntry, ToggleButton};
 use gtk::glib;
@@ -37,10 +40,26 @@ use snapshot_list::DateFilter;
 
 // Path validation moved to validation module
 
+#[derive(Debug, Clone, serde::Deserialize, PartialEq)]
+enum DriveType {
+    Removable,
+    Network,
+    Internal,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct BackupDestination {
+    mount_point: String,
+    label: String,
+    drive_type: DriveType,
+    uuid: Option<String>,
+}
+
 pub struct MainWindow {
     window: adw::ApplicationWindow,
     snapshot_manager: Rc<RefCell<SnapshotManager>>,
     user_prefs_manager: Rc<RefCell<UserPreferencesManager>>,
+    backup_manager: Rc<RefCell<BackupManager>>,
     snapshot_list: ListBox,
     create_btn: Button,
     compare_btn: Button,
@@ -101,6 +120,19 @@ impl MainWindow {
                 // Continue anyway with a fallback - create temp manager
                 Rc::new(RefCell::new(UserPreferencesManager::new().unwrap_or_else(|_| {
                     panic!("Could not create user preferences manager")
+                })))
+            }
+        };
+
+        // Initialize backup manager
+        let backup_manager = match BackupManager::new() {
+            Ok(bm) => Rc::new(RefCell::new(bm)),
+            Err(e) => {
+                log::error!("Failed to initialize backup manager: {}", e);
+                log::warn!("Automatic backups will not be available");
+                // Continue anyway - backups are optional
+                Rc::new(RefCell::new(BackupManager::new().unwrap_or_else(|_| {
+                    panic!("Could not create backup manager")
                 })))
             }
         };
@@ -384,6 +416,7 @@ impl MainWindow {
             window: window.clone(),
             snapshot_manager: snapshot_manager.clone(),
             user_prefs_manager: user_prefs_manager.clone(),
+            backup_manager: backup_manager.clone(),
             snapshot_list: snapshot_list.clone(),
             create_btn: create_btn.clone(),
             compare_btn: compare_btn.clone(),
@@ -401,6 +434,7 @@ impl MainWindow {
         let win_clone_search = window.clone();
         let sm_clone_search = snapshot_manager.clone();
         let up_clone_search = user_prefs_manager.clone();
+        let bm_clone_search = backup_manager.clone();
         let list_clone_search = snapshot_list.clone();
         let compare_btn_clone_search = compare_btn.clone();
         let disk_space_clone_search = disk_space_label.clone();
@@ -414,6 +448,7 @@ impl MainWindow {
                 &win_clone_search,
                 &sm_clone_search,
                 &up_clone_search,
+                &bm_clone_search,
                 &list_clone_search,
                 &compare_btn_clone_search,
                 &disk_space_clone_search,
@@ -428,6 +463,7 @@ impl MainWindow {
         let win_clone_all = window.clone();
         let sm_clone_all = snapshot_manager.clone();
         let up_clone_all = user_prefs_manager.clone();
+        let bm_clone_all = backup_manager.clone();
         let list_clone_all = snapshot_list.clone();
         let compare_btn_clone_all = compare_btn.clone();
         let disk_space_clone_all = disk_space_label.clone();
@@ -450,6 +486,7 @@ impl MainWindow {
                     &win_clone_all,
                     &sm_clone_all,
                     &up_clone_all,
+                    &bm_clone_all,
                     &list_clone_all,
                     &compare_btn_clone_all,
                     &disk_space_clone_all,
@@ -464,6 +501,7 @@ impl MainWindow {
         let win_clone_week = window.clone();
         let sm_clone_week = snapshot_manager.clone();
         let up_clone_week = user_prefs_manager.clone();
+        let bm_clone_week = backup_manager.clone();
         let list_clone_week = snapshot_list.clone();
         let compare_btn_clone_week = compare_btn.clone();
         let disk_space_clone_week = disk_space_label.clone();
@@ -486,6 +524,7 @@ impl MainWindow {
                     &win_clone_week,
                     &sm_clone_week,
                     &up_clone_week,
+                    &bm_clone_week,
                     &list_clone_week,
                     &compare_btn_clone_week,
                     &disk_space_clone_week,
@@ -500,6 +539,7 @@ impl MainWindow {
         let win_clone_month = window.clone();
         let sm_clone_month = snapshot_manager.clone();
         let up_clone_month = user_prefs_manager.clone();
+        let bm_clone_month = backup_manager.clone();
         let list_clone_month = snapshot_list.clone();
         let compare_btn_clone_month = compare_btn.clone();
         let disk_space_clone_month = disk_space_label.clone();
@@ -522,6 +562,7 @@ impl MainWindow {
                     &win_clone_month,
                     &sm_clone_month,
                     &up_clone_month,
+                    &bm_clone_month,
                     &list_clone_month,
                     &compare_btn_clone_month,
                     &disk_space_clone_month,
@@ -536,6 +577,7 @@ impl MainWindow {
         let win_clone_quarter = window.clone();
         let sm_clone_quarter = snapshot_manager.clone();
         let up_clone_quarter = user_prefs_manager.clone();
+        let bm_clone_quarter = backup_manager.clone();
         let list_clone_quarter = snapshot_list.clone();
         let compare_btn_clone_quarter = compare_btn.clone();
         let disk_space_clone_quarter = disk_space_label.clone();
@@ -558,6 +600,7 @@ impl MainWindow {
                     &win_clone_quarter,
                     &sm_clone_quarter,
                     &up_clone_quarter,
+                    &bm_clone_quarter,
                     &list_clone_quarter,
                     &compare_btn_clone_quarter,
                     &disk_space_clone_quarter,
@@ -572,6 +615,7 @@ impl MainWindow {
         // Connect create button
         let sm_clone = snapshot_manager.clone();
         let up_clone = user_prefs_manager.clone();
+        let bm_clone = backup_manager.clone();
         let list_clone = snapshot_list.clone();
         let win_clone = window.clone();
         let compare_btn_clone = compare_btn.clone();
@@ -579,7 +623,7 @@ impl MainWindow {
         let disk_space_bar_clone = disk_space_bar.clone();
 
         create_btn.connect_clicked(move |_| {
-            Self::on_create_snapshot(&win_clone, sm_clone.clone(), up_clone.clone(), list_clone.clone(), compare_btn_clone.clone(), disk_space_clone.clone(), disk_space_bar_clone.clone());
+            Self::on_create_snapshot(&win_clone, sm_clone.clone(), up_clone.clone(), bm_clone.clone(), list_clone.clone(), compare_btn_clone.clone(), disk_space_clone.clone(), disk_space_bar_clone.clone());
         });
 
         // Connect compare button
@@ -653,16 +697,18 @@ impl MainWindow {
         });
 
         let win_clone_menu_prefs = window.clone();
+        let bm_clone_menu_prefs = backup_manager.clone();
         let popover_clone_prefs = popover.clone();
         preferences_row.connect_activated(move |_| {
             popover_clone_prefs.popdown();
-            Self::show_preferences_dialog(&win_clone_menu_prefs);
+            Self::show_preferences_dialog(&win_clone_menu_prefs, &bm_clone_menu_prefs);
         });
 
         let win_clone_menu_cleanup = window.clone();
         let list_clone_menu_cleanup = snapshot_list.clone();
         let sm_clone_menu_cleanup = snapshot_manager.clone();
         let up_clone_menu_cleanup = user_prefs_manager.clone();
+        let bm_clone_menu_cleanup = backup_manager.clone();
         let compare_clone_menu_cleanup = compare_btn.clone();
         let disk_clone_menu_cleanup = disk_space_label.clone();
         let disk_bar_clone_menu_cleanup = disk_space_bar.clone();
@@ -673,6 +719,7 @@ impl MainWindow {
                 &win_clone_menu_cleanup,
                 &sm_clone_menu_cleanup,
                 &up_clone_menu_cleanup,
+                &bm_clone_menu_cleanup,
                 &list_clone_menu_cleanup,
                 &compare_clone_menu_cleanup,
                 &disk_clone_menu_cleanup,
@@ -703,6 +750,7 @@ impl MainWindow {
         let window_refresh = window.clone();
         let manager_refresh = snapshot_manager.clone();
         let user_prefs_refresh = user_prefs_manager.clone();
+        let backup_manager_refresh = backup_manager.clone();
         let list_refresh = snapshot_list.clone();
         let compare_refresh = compare_btn.clone();
         let disk_space_refresh = disk_space_label.clone();
@@ -712,6 +760,7 @@ impl MainWindow {
                 &window_refresh,
                 &manager_refresh,
                 &user_prefs_refresh,
+                &backup_manager_refresh,
                 &list_refresh,
                 &compare_refresh,
                 &disk_space_refresh,
@@ -719,6 +768,87 @@ impl MainWindow {
             );
             glib::ControlFlow::Continue
         });
+
+        // Initialize mount monitoring for automatic backups
+        use crate::mount_monitor::MountMonitor;
+        let mount_monitor = MountMonitor::new();
+        if let Err(e) = mount_monitor.initialize() {
+            log::warn!("Failed to initialize mount monitor: {}", e);
+        } else {
+            log::info!("Mount monitor initialized");
+
+            // Start monitoring for new drive mounts
+            let backup_manager_monitor = backup_manager.clone();
+            let window_monitor = window.clone();
+            let app_monitor = app.clone();
+
+            // Get configured mount check interval
+            let check_interval = backup_manager.borrow()
+                .get_config()
+                .map(|c| c.mount_check_interval_seconds)
+                .unwrap_or(60);
+
+            mount_monitor.start_monitoring(check_interval, move |uuid, mount_point| {
+                log::info!("New backup drive detected: {} at {}", uuid, mount_point);
+
+                // Get snapshot directory from config
+                let snapshot_dir = waypoint_common::WaypointConfig::new().snapshot_dir
+                    .to_string_lossy()
+                    .to_string();
+
+                // Get destination label for notifications
+                let dest_label = backup_manager_monitor.borrow()
+                    .get_config()
+                    .ok()
+                    .and_then(|c| c.destinations.get(&uuid).map(|d| d.label.clone()))
+                    .unwrap_or_else(|| mount_point.clone());
+
+                // Process pending backups for this destination
+                match backup_manager_monitor.borrow().process_pending_backups(&uuid, &mount_point, &snapshot_dir) {
+                    Ok((success_count, fail_count, errors)) => {
+                        if success_count > 0 || fail_count > 0 {
+                            log::info!("Backup processing complete: {} successful, {} failed", success_count, fail_count);
+
+                            // Send desktop notification
+                            notifications::notify_backup_completed(&app_monitor, &dest_label, success_count, fail_count);
+
+                            // Show notification to user
+                            let message = if fail_count == 0 {
+                                format!("Successfully backed up {} snapshot(s)", success_count)
+                            } else if success_count == 0 {
+                                format!("Failed to backup {} snapshot(s)", fail_count)
+                            } else {
+                                format!("Backed up {} snapshot(s), {} failed", success_count, fail_count)
+                            };
+
+                            let dialog = adw::MessageDialog::new(
+                                Some(&window_monitor),
+                                Some("Automatic Backup Complete"),
+                                Some(&message),
+                            );
+                            dialog.add_response("ok", "OK");
+                            dialog.set_default_response(Some("ok"));
+
+                            if !errors.is_empty() {
+                                dialog.add_response("details", "Show Details");
+                                let errors_clone = errors.clone();
+                                let window_clone = window_monitor.clone();
+                                dialog.connect_response(None, move |_, response| {
+                                    if response == "details" {
+                                        dialogs::show_error_list(&window_clone, "Backup Errors", &errors_clone);
+                                    }
+                                });
+                            }
+
+                            dialog.present();
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to process pending backups: {}", e);
+                    }
+                }
+            });
+        }
 
         window
     }
@@ -856,6 +986,7 @@ impl MainWindow {
         let window = self.window.clone();
         let manager = self.snapshot_manager.clone();
         let user_prefs = self.user_prefs_manager.clone();
+        let backup_manager = self.backup_manager.clone();
         let list = self.snapshot_list.clone();
         let compare_btn = self.compare_btn.clone();
         let disk_space_label = self.disk_space_label.clone();
@@ -865,13 +996,14 @@ impl MainWindow {
             &self.window,
             &self.snapshot_manager,
             &self.user_prefs_manager,
+            &self.backup_manager,
             &self.snapshot_list,
             &self.compare_btn,
             None,  // No search filter
             None,  // No date filter
             None,  // No match label
             move |id, action| {
-                Self::handle_snapshot_action(&window, &manager, &user_prefs, &list, &compare_btn, &disk_space_label, &disk_space_bar, id, action);
+                Self::handle_snapshot_action(&window, &manager, &user_prefs, &backup_manager, &list, &compare_btn, &disk_space_label, &disk_space_bar, id, action);
             },
             Some(&self.create_btn),
         );
@@ -881,6 +1013,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         manager: &Rc<RefCell<SnapshotManager>>,
         user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
+        backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
         disk_space_label: &Label,
@@ -892,6 +1025,7 @@ impl MainWindow {
         let window_clone = window.clone();
         let manager_clone = manager.clone();
         let user_prefs_clone = user_prefs_manager.clone();
+        let backup_manager_clone = backup_manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
         let disk_space_clone = disk_space_label.clone();
@@ -901,13 +1035,14 @@ impl MainWindow {
             window,
             manager,
             user_prefs_manager,
+            backup_manager,
             list,
             compare_btn,
             Some(search_text),
             Some(date_filter),
             Some(match_label),
             move |id, action| {
-                Self::handle_snapshot_action(&window_clone, &manager_clone, &user_prefs_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone, id, action);
+                Self::handle_snapshot_action(&window_clone, &manager_clone, &user_prefs_clone, &backup_manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone, id, action);
             },
             None,  // No create button for filtered view
         );
@@ -917,6 +1052,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         manager: Rc<RefCell<SnapshotManager>>,
         user_prefs_manager: Rc<RefCell<UserPreferencesManager>>,
+        backup_manager: Rc<RefCell<BackupManager>>,
         list: ListBox,
         compare_btn: Button,
         disk_space_label: Label,
@@ -1000,6 +1136,7 @@ impl MainWindow {
             let list_clone2 = list_clone.clone();
             let manager_clone2 = manager_clone.clone();
             let user_prefs_clone2 = user_prefs_clone.clone();
+            let backup_manager_clone2 = backup_manager.clone();
             let compare_btn_clone2 = compare_btn_clone.clone();
             let disk_space_clone2 = disk_space_label.clone();
             let disk_space_bar_clone2 = disk_space_bar.clone();
@@ -1011,6 +1148,7 @@ impl MainWindow {
                         &window_clone2,
                         manager_clone2.clone(),
                         user_prefs_clone2.clone(),
+                        backup_manager_clone2.clone(),
                         list_clone2.clone(),
                         compare_btn_clone2.clone(),
                         disk_space_clone2.clone(),
@@ -1028,6 +1166,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         manager: Rc<RefCell<SnapshotManager>>,
         user_prefs_manager: Rc<RefCell<UserPreferencesManager>>,
+        backup_manager: Rc<RefCell<BackupManager>>,
         list: ListBox,
         compare_btn: Button,
         disk_space_label: Label,
@@ -1039,6 +1178,7 @@ impl MainWindow {
         let list_clone = list.clone();
         let manager_clone = manager.clone();
         let user_prefs_clone = user_prefs_manager.clone();
+        let backup_manager_clone = backup_manager.clone();
         let compare_btn_clone = compare_btn.clone();
         let disk_space_clone = disk_space_label.clone();
         let disk_space_bar_clone = disk_space_bar.clone();
@@ -1123,11 +1263,28 @@ impl MainWindow {
                                 &manager_clone,
                             );
 
+                            // Queue snapshot for automatic backup
+                            if let Ok(prefs) = user_prefs_clone.borrow().get(&snapshot_name) {
+                                let is_favorite = prefs.is_favorite;
+                                if let Err(e) = backup_manager_clone.borrow().queue_snapshot_backup(snapshot_name.clone(), is_favorite) {
+                                    log::warn!("Failed to queue automatic backup for {}: {}", snapshot_name, e);
+                                } else {
+                                    log::info!("Queued snapshot {} for automatic backup", snapshot_name);
+                                }
+                            } else {
+                                // No prefs yet, assume not favorite
+                                if let Err(e) = backup_manager_clone.borrow().queue_snapshot_backup(snapshot_name.clone(), false) {
+                                    log::warn!("Failed to queue automatic backup for {}: {}", snapshot_name, e);
+                                } else {
+                                    log::info!("Queued snapshot {} for automatic backup", snapshot_name);
+                                }
+                            }
+
                             // Note: Retention cleanup is handled automatically by the scheduler service
                             // Users can manually trigger cleanup via the menu if needed
 
                             // Refresh snapshot list
-                            Self::refresh_list_static(&window_clone, &manager_clone, &user_prefs_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone);
+                            Self::refresh_list_static(&window_clone, &manager_clone, &user_prefs_clone, &backup_manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone);
 
                             // Update disk space after creating snapshot
                             Self::update_disk_space_label(&disk_space_clone, &disk_space_bar_clone);
@@ -1235,6 +1392,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         manager: &Rc<RefCell<SnapshotManager>>,
         user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
+        backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
         disk_space_label: &Label,
@@ -1243,6 +1401,7 @@ impl MainWindow {
         let window_clone = window.clone();
         let manager_clone = manager.clone();
         let user_prefs_clone = user_prefs_manager.clone();
+        let backup_manager_clone = backup_manager.clone();
         let list_clone = list.clone();
         let compare_clone = compare_btn.clone();
         let disk_clone = disk_space_label.clone();
@@ -1275,6 +1434,7 @@ impl MainWindow {
                                     &window_clone,
                                     &manager_clone,
                                     &user_prefs_clone,
+                                    &backup_manager_clone,
                                     &list_clone,
                                     &compare_clone,
                                     &disk_clone,
@@ -1308,6 +1468,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         manager: &Rc<RefCell<SnapshotManager>>,
         user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
+        backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
         disk_space_label: &Label,
@@ -1316,6 +1477,7 @@ impl MainWindow {
         let window_clone = window.clone();
         let manager_clone = manager.clone();
         let user_prefs_clone = user_prefs_manager.clone();
+        let backup_manager_clone = backup_manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
         let disk_space_clone = disk_space_label.clone();
@@ -1325,13 +1487,14 @@ impl MainWindow {
             window,
             manager,
             user_prefs_manager,
+            backup_manager,
             list,
             compare_btn,
             None,  // No search filter
             None,  // No date filter
             None,  // No match label
             move |id, action| {
-                Self::handle_snapshot_action(&window_clone, &manager_clone, &user_prefs_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone, id, action);
+                Self::handle_snapshot_action(&window_clone, &manager_clone, &user_prefs_clone, &backup_manager_clone, &list_clone, &compare_btn_clone, &disk_space_clone, &disk_space_bar_clone, id, action);
             },
             None,  // No create button needed here
         );
@@ -1345,6 +1508,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         manager: &Rc<RefCell<SnapshotManager>>,
         user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
+        backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
         disk_space_label: &Label,
@@ -1363,15 +1527,384 @@ impl MainWindow {
                 Self::restore_snapshot(window, manager, list, snapshot_id);
             }
             SnapshotAction::Delete => {
-                Self::delete_snapshot(window, manager, user_prefs_manager, list, compare_btn, disk_space_label, disk_space_bar, snapshot_id);
+                Self::delete_snapshot(window, manager, user_prefs_manager, backup_manager, list, compare_btn, disk_space_label, disk_space_bar, snapshot_id);
             }
             SnapshotAction::ToggleFavorite => {
-                Self::toggle_favorite(window, user_prefs_manager, manager, list, compare_btn, snapshot_id);
+                Self::toggle_favorite(window, user_prefs_manager, manager, backup_manager, list, compare_btn, snapshot_id);
             }
             SnapshotAction::EditNote => {
-                Self::edit_note(window, user_prefs_manager, manager, list, compare_btn, snapshot_id);
+                Self::edit_note(window, user_prefs_manager, manager, backup_manager, list, compare_btn, snapshot_id);
+            }
+            SnapshotAction::Backup => {
+                Self::backup_snapshot(window, manager, snapshot_id);
             }
         }
+    }
+
+    // Helper function to scan for backup destinations
+    fn scan_backup_destinations() -> anyhow::Result<Vec<BackupDestination>> {
+        let client = WaypointHelperClient::new()?;
+        let (success, result) = client.scan_backup_destinations()?;
+
+        if !success {
+            return Err(anyhow::anyhow!(result));
+        }
+
+        // Parse JSON response
+        let destinations: Vec<BackupDestination> = serde_json::from_str(&result)?;
+        Ok(destinations)
+    }
+
+    // Helper function to verify backup exists and is valid
+    fn verify_backup_exists(backup_path: &str) -> anyhow::Result<()> {
+        use std::path::Path;
+
+        let path = Path::new(backup_path);
+
+        // Check if path exists
+        if !path.exists() {
+            return Err(anyhow::anyhow!("Backup path does not exist"));
+        }
+
+        // Check if it's a directory (btrfs subvolume should be a directory)
+        if !path.is_dir() {
+            return Err(anyhow::anyhow!("Backup path is not a directory"));
+        }
+
+        // Verify it's a btrfs subvolume using btrfs subvolume show
+        let output = std::process::Command::new("btrfs")
+            .arg("subvolume")
+            .arg("show")
+            .arg(backup_path)
+            .output()
+            .context("Failed to run btrfs subvolume show")?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Not a valid btrfs subvolume"));
+        }
+
+        Ok(())
+    }
+
+    // Helper function to perform backup
+    fn perform_backup(snapshot_name: &str, destination_mount: &str) -> anyhow::Result<String> {
+        let client = WaypointHelperClient::new()?;
+
+        // Get snapshot path from config
+        let config = waypoint_common::WaypointConfig::default();
+        let snapshot_path = format!("{}/{}", config.snapshot_dir.display(), snapshot_name);
+
+        let (success, result, _size_bytes) = client.backup_snapshot(
+            snapshot_path,
+            destination_mount.to_string(),
+            String::new(), // No parent snapshot for now (full backup)
+        )?;
+
+        if !success {
+            return Err(anyhow::anyhow!(result));
+        }
+
+        Ok(result)
+    }
+
+    fn backup_snapshot(
+        window: &adw::ApplicationWindow,
+        manager: &Rc<RefCell<SnapshotManager>>,
+        snapshot_id: &str,
+    ) {
+        // Get the snapshot to retrieve its actual name (directory name on disk)
+        let snapshot = match manager.borrow().get_snapshot(snapshot_id) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                Self::show_error_dialog(window, "Not Found", "Snapshot not found");
+                return;
+            }
+            Err(e) => {
+                Self::show_error_dialog(window, "Error", &format!("Failed to load snapshot: {}", e));
+                return;
+            }
+        };
+
+        let snapshot_name = snapshot.name.clone();
+
+        // Create backup dialog
+        let dialog = adw::Window::new();
+        dialog.set_title(Some("Backup Snapshot"));
+        dialog.set_modal(true);
+        dialog.set_transient_for(Some(window));
+        dialog.set_default_size(600, 500);
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+        // Header
+        let header = adw::HeaderBar::new();
+        header.set_title_widget(Some(&adw::WindowTitle::new("Backup Snapshot", &snapshot_name)));
+        content.append(&header);
+
+        // Main content area with clamp
+        let scrolled = gtk::ScrolledWindow::new();
+        scrolled.set_vexpand(true);
+
+        let clamp = adw::Clamp::new();
+        clamp.set_maximum_size(600);
+
+        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content_box.set_margin_top(24);
+        content_box.set_margin_bottom(24);
+        content_box.set_margin_start(12);
+        content_box.set_margin_end(12);
+
+        // Info group
+        let info_group = adw::PreferencesGroup::new();
+        info_group.set_title("Backup Destination");
+        info_group.set_description(Some("Select an external drive to backup this snapshot"));
+
+        // Scan button row
+        let scan_row = adw::ActionRow::new();
+        scan_row.set_title("Scan for External Drives");
+        scan_row.set_subtitle("Click to detect available backup destinations");
+
+        let scan_button = gtk::Button::with_label("Scan");
+        scan_button.set_valign(gtk::Align::Center);
+        scan_button.add_css_class("suggested-action");
+        scan_row.add_suffix(&scan_button);
+
+        info_group.add(&scan_row);
+        content_box.append(&info_group);
+
+        // Destinations list group
+        let dest_group = adw::PreferencesGroup::new();
+        dest_group.set_title("Available Destinations");
+        dest_group.set_visible(false);
+        content_box.append(&dest_group);
+
+        // Progress group (hidden initially)
+        let progress_group = adw::PreferencesGroup::new();
+        progress_group.set_title("Backup Progress");
+        progress_group.set_visible(false);
+
+        let progress_row = adw::ActionRow::new();
+        progress_row.set_title("Backing up snapshot...");
+
+        let progress_bar = gtk::ProgressBar::new();
+        progress_bar.set_hexpand(true);
+        progress_bar.pulse();
+        progress_row.add_suffix(&progress_bar);
+
+        progress_group.add(&progress_row);
+        content_box.append(&progress_group);
+
+        clamp.set_child(Some(&content_box));
+        scrolled.set_child(Some(&clamp));
+        content.append(&scrolled);
+
+        dialog.set_content(Some(&content));
+        dialog.present();
+
+        // Connect scan button
+        let dialog_clone = dialog.clone();
+        let window_clone = window.clone();
+        let dest_group_clone = dest_group.clone();
+        let progress_group_clone = progress_group.clone();
+        let snapshot_name_clone = snapshot_name.clone();
+
+        scan_button.connect_clicked(move |btn| {
+            btn.set_sensitive(false);
+            btn.set_label("Scanning...");
+
+            let btn_clone = btn.clone();
+            let dest_group = dest_group_clone.clone();
+            let window_ref = window_clone.clone();
+            let dialog_ref = dialog_clone.clone();
+            let progress_group_ref = progress_group_clone.clone();
+            let snapshot_name_ref = snapshot_name_clone.clone();
+
+            // Use thread + channel pattern
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let result = Self::scan_backup_destinations();
+                let _ = tx.send(result);
+            });
+
+            // Poll for result
+            gtk::glib::spawn_future_local(async move {
+                let result = loop {
+                    match rx.try_recv() {
+                        Ok(result) => break result,
+                        Err(mpsc::TryRecvError::Empty) => {
+                            glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                            continue;
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            dialogs::show_error(
+                                &window_ref,
+                                "Scan Failed",
+                                "Scan thread disconnected unexpectedly",
+                            );
+                            btn_clone.set_sensitive(true);
+                            btn_clone.set_label("Scan");
+                            return;
+                        }
+                    }
+                };
+
+                btn_clone.set_sensitive(true);
+                btn_clone.set_label("Scan");
+
+                // Clear existing destinations
+                while let Some(child) = dest_group.first_child() {
+                    dest_group.remove(&child);
+                }
+
+                match result {
+                    Ok(destinations) => {
+                        if destinations.is_empty() {
+                            let empty_row = adw::ActionRow::new();
+                            empty_row.set_title("No external drives found");
+                            empty_row.set_subtitle("Connect an external btrfs drive and scan again");
+                            dest_group.add(&empty_row);
+                        } else {
+                            for dest in &destinations {
+                                let row = adw::ActionRow::new();
+
+                                // Add drive type badge to title
+                                let type_badge = match dest.drive_type {
+                                    DriveType::Removable => " (USB)",
+                                    DriveType::Network => " (Network)",
+                                    DriveType::Internal => " (Internal)",
+                                };
+                                row.set_title(&format!("{}{}", dest.label, type_badge));
+                                row.set_subtitle(&dest.mount_point);
+
+                                // Add icon based on drive type
+                                let icon_name = match dest.drive_type {
+                                    DriveType::Removable => "media-removable-symbolic",
+                                    DriveType::Network => "network-server-symbolic",
+                                    DriveType::Internal => "drive-harddisk-symbolic",
+                                };
+                                let icon = gtk::Image::from_icon_name(icon_name);
+                                icon.set_margin_start(6);
+                                icon.set_margin_end(6);
+                                row.add_prefix(&icon);
+
+                                // Backup button
+                                let backup_btn = gtk::Button::with_label("Backup Here");
+                                backup_btn.set_valign(gtk::Align::Center);
+                                backup_btn.add_css_class("suggested-action");
+
+                                let dest_mount = dest.mount_point.clone();
+                                let dialog_ref2 = dialog_ref.clone();
+                                let window_ref2 = window_ref.clone();
+                                let progress_group_ref2 = progress_group_ref.clone();
+                                let snapshot_name_ref2 = snapshot_name_ref.clone();
+
+                                backup_btn.connect_clicked(move |_| {
+                                    // Show progress
+                                    progress_group_ref2.set_visible(true);
+
+                                    let dialog_ref3 = dialog_ref2.clone();
+                                    let window_ref3 = window_ref2.clone();
+                                    let dest_mount_clone = dest_mount.clone();
+                                    let snapshot_name_clone = snapshot_name_ref2.clone();
+                                    let progress_group_ref3 = progress_group_ref2.clone();
+
+                                    // Use thread + channel pattern
+                                    let (tx, rx) = mpsc::channel();
+                                    std::thread::spawn(move || {
+                                        let result = Self::perform_backup(&snapshot_name_clone, &dest_mount_clone);
+                                        let _ = tx.send(result);
+                                    });
+
+                                    // Poll for result
+                                    gtk::glib::spawn_future_local(async move {
+                                        let result = loop {
+                                            match rx.try_recv() {
+                                                Ok(result) => break result,
+                                                Err(mpsc::TryRecvError::Empty) => {
+                                                    glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                                                    continue;
+                                                }
+                                                Err(mpsc::TryRecvError::Disconnected) => {
+                                                    progress_group_ref3.set_visible(false);
+                                                    dialog_ref3.close();
+                                                    Self::show_error_dialog(
+                                                        &window_ref3,
+                                                        "Backup Failed",
+                                                        "Backup thread disconnected unexpectedly",
+                                                    );
+                                                    return;
+                                                }
+                                            }
+                                        };
+
+                                        // Hide progress
+                                        progress_group_ref3.set_visible(false);
+
+                                        match result {
+                                            Ok(backup_path) => {
+                                                // Verify the backup using thread + channel
+                                                let (verify_tx, verify_rx) = mpsc::channel();
+                                                let backup_path_clone = backup_path.clone();
+                                                std::thread::spawn(move || {
+                                                    let result = Self::verify_backup_exists(&backup_path_clone);
+                                                    let _ = verify_tx.send(result);
+                                                });
+
+                                                // Poll for verification result
+                                                let verify_result = loop {
+                                                    match verify_rx.try_recv() {
+                                                        Ok(result) => break result,
+                                                        Err(mpsc::TryRecvError::Empty) => {
+                                                            glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                                                            continue;
+                                                        }
+                                                        Err(mpsc::TryRecvError::Disconnected) => {
+                                                            break Err(anyhow::anyhow!("Verification thread disconnected"));
+                                                        }
+                                                    }
+                                                };
+
+                                                dialog_ref3.close();
+
+                                                let message = match verify_result {
+                                                    Ok(()) => format!("✓ Backup completed and verified successfully\n\nLocation: {}", backup_path),
+                                                    Err(e) => format!("⚠ Backup completed but verification failed:\n{}\n\nLocation: {}", e, backup_path),
+                                                };
+
+                                                let success_dialog = adw::MessageDialog::new(
+                                                    Some(&window_ref3),
+                                                    Some("Backup Complete"),
+                                                    Some(&message),
+                                                );
+                                                success_dialog.add_response("ok", "OK");
+                                                success_dialog.set_default_response(Some("ok"));
+                                                success_dialog.present();
+                                            }
+                                            Err(e) => {
+                                                dialog_ref3.close();
+                                                Self::show_error_dialog(
+                                                    &window_ref3,
+                                                    "Backup Failed",
+                                                    &format!("Failed to backup snapshot: {}", e),
+                                                );
+                                            }
+                                        }
+                                    });
+                                });
+
+                                row.add_suffix(&backup_btn);
+                                dest_group.add(&row);
+                            }
+                        }
+
+                        dest_group.set_visible(true);
+                    }
+                    Err(e) => {
+                        dialogs::show_error(&window_ref, "Scan Failed", &format!("Failed to scan for destinations: {}", e));
+                    }
+                }
+            });
+        });
     }
 
     fn verify_snapshot(
@@ -1528,6 +2061,7 @@ impl MainWindow {
         _window: &adw::ApplicationWindow,
         user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
         manager: &Rc<RefCell<SnapshotManager>>,
+        backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
         snapshot_id: &str,
@@ -1544,6 +2078,7 @@ impl MainWindow {
             let window_clone = window.clone();
             let manager_clone = manager.clone();
             let user_prefs_clone = user_prefs_manager.clone();
+            let backup_manager_clone = backup_manager.clone();
             let list_clone = list.clone();
             let compare_btn_clone = compare_btn.clone();
 
@@ -1551,6 +2086,7 @@ impl MainWindow {
                 &window,
                 manager,
                 user_prefs_manager,
+                backup_manager,
                 list,
                 compare_btn,
                 None,
@@ -1561,6 +2097,7 @@ impl MainWindow {
                     let window = window_clone.clone();
                     let manager = manager_clone.clone();
                     let user_prefs = user_prefs_clone.clone();
+                    let backup_manager = backup_manager_clone.clone();
                     let list = list_clone.clone();
                     let compare_btn = compare_btn_clone.clone();
 
@@ -1569,7 +2106,7 @@ impl MainWindow {
                     let disk_space_label = Label::new(None);
                     let disk_space_bar = gtk::LevelBar::new();
 
-                    Self::handle_snapshot_action(&window, &manager, &user_prefs, &list, &compare_btn, &disk_space_label, &disk_space_bar, id, action);
+                    Self::handle_snapshot_action(&window, &manager, &user_prefs, &backup_manager, &list, &compare_btn, &disk_space_label, &disk_space_bar, id, action);
                 },
                 None,
             );
@@ -1580,6 +2117,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
         manager: &Rc<RefCell<SnapshotManager>>,
+        backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
         snapshot_id: &str,
@@ -1753,6 +2291,7 @@ impl MainWindow {
             let dialog = dialog.clone();
             let user_prefs_clone = user_prefs_manager.clone();
             let manager_clone = manager.clone();
+            let backup_manager_clone = backup_manager.clone();
             let list_clone = list.clone();
             let compare_btn_clone = compare_btn.clone();
             let snapshot_id = snapshot_id.to_string();
@@ -1786,6 +2325,7 @@ impl MainWindow {
                     let window_inner = window.clone();
                     let manager_inner = manager_clone.clone();
                     let user_prefs_inner = user_prefs_clone.clone();
+                    let backup_manager_inner = backup_manager_clone.clone();
                     let list_inner = list_clone.clone();
                     let compare_btn_inner = compare_btn_clone.clone();
 
@@ -1793,6 +2333,7 @@ impl MainWindow {
                         &window,
                         &manager_clone,
                         &user_prefs_clone,
+                        &backup_manager_clone,
                         &list_clone,
                         &compare_btn_clone,
                         None,
@@ -1801,7 +2342,7 @@ impl MainWindow {
                         move |id, action| {
                             let disk_space_label = Label::new(None);
                             let disk_space_bar = gtk::LevelBar::new();
-                            Self::handle_snapshot_action(&window_inner, &manager_inner, &user_prefs_inner, &list_inner, &compare_btn_inner, &disk_space_label, &disk_space_bar, id, action);
+                            Self::handle_snapshot_action(&window_inner, &manager_inner, &user_prefs_inner, &backup_manager_inner, &list_inner, &compare_btn_inner, &disk_space_label, &disk_space_bar, id, action);
                         },
                         None,
                     );
@@ -1854,6 +2395,7 @@ impl MainWindow {
         window: &adw::ApplicationWindow,
         manager: &Rc<RefCell<SnapshotManager>>,
         user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
+        backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
         disk_space_label: &Label,
@@ -1883,24 +2425,37 @@ impl MainWindow {
         let window_clone = window.clone();
         let manager_clone = manager.clone();
         let user_prefs_clone = user_prefs_manager.clone();
+        let backup_manager_clone = backup_manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
         let disk_space_clone = disk_space_label.clone();
         let disk_space_bar_clone = disk_space_bar.clone();
 
+        // Check if snapshot has backups
+        let has_backups = backup_manager.borrow().is_snapshot_backed_up(&snapshot.id);
+        let message = if has_backups {
+            format!(
+                "Are you sure you want to delete '{}'?\n\nThis snapshot has backups on external drives. Deleting it here will NOT delete the backups.\n\nThis action cannot be undone.",
+                snapshot_name
+            )
+        } else {
+            format!(
+                "Are you sure you want to delete '{}'?\n\nThis action cannot be undone.",
+                snapshot_name
+            )
+        };
+
         dialogs::show_confirmation(
             window,
             "Delete Snapshot?",
-            &format!(
-                "Are you sure you want to delete '{}'?\n\nThis action cannot be undone.",
-                snapshot_name
-            ),
+            &message,
             "Delete",
             true,
             move || {
                 let window = window_clone.clone();
                 let manager = manager_clone.clone();
                 let user_prefs = user_prefs_clone.clone();
+                let backup_manager = backup_manager_clone.clone();
                 let list = list_clone.clone();
                 let compare_btn = compare_btn_clone.clone();
                 let disk_space = disk_space_clone.clone();
@@ -1956,7 +2511,7 @@ impl MainWindow {
                                     }
 
                                     // Refresh the list
-                                    Self::refresh_list_static(&window, &manager, &user_prefs, &list, &compare_btn, &disk_space, &disk_space_bar);
+                                    Self::refresh_list_static(&window, &manager, &user_prefs, &backup_manager, &list, &compare_btn, &disk_space, &disk_space_bar);
                                     // Update disk space after deletion
                                     Self::update_disk_space_label(&disk_space, &disk_space_bar);
                                 }
@@ -2349,8 +2904,11 @@ impl MainWindow {
 
 
     /// Show preferences dialog
-    fn show_preferences_dialog(window: &adw::ApplicationWindow) {
-        preferences_window::show_preferences_window(window);
+    fn show_preferences_dialog(
+        window: &adw::ApplicationWindow,
+        backup_manager: &Rc<RefCell<BackupManager>>,
+    ) {
+        preferences_window::show_preferences_window(window, backup_manager.clone());
     }
 
     /// Show analytics dialog

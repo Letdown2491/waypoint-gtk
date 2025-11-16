@@ -1,6 +1,5 @@
 //! File diff dialog for showing changed files between two snapshots
 
-use crate::dbus_client::WaypointHelperClient;
 use gtk::prelude::*;
 use gtk::{Label, Orientation};
 use libadwaita as adw;
@@ -50,6 +49,14 @@ pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str
     subtitle.add_css_class("dim-label");
     subtitle.set_halign(gtk::Align::Start);
     title_box.append(&subtitle);
+
+    let warning = Label::new(Some("Large snapshots may take several minutes to compare."));
+    warning.add_css_class("caption");
+    warning.add_css_class("dim-label");
+    warning.set_halign(gtk::Align::Start);
+    warning.set_margin_top(6);
+    title_box.append(&warning);
+
     main_box.append(&title_box);
 
     // Loading spinner
@@ -75,6 +82,8 @@ pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str
 
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<Vec<FileChange>> {
+            use crate::dbus_client::WaypointHelperClient;
+
             let client = WaypointHelperClient::new()?;
             let json = client.compare_snapshots(old_snapshot_owned, new_snapshot_owned)?;
             let changes: Vec<FileChange> = serde_json::from_str(&json)?;
@@ -101,11 +110,24 @@ pub fn show_file_diff_dialog(parent: &adw::ApplicationWindow, old_snapshot: &str
                             display_changes(&dialog_clone, &old_snapshot_owned, &new_snapshot_owned, changes);
                         }
                         Err(e) => {
-                            dialogs::show_error(
-                                &parent_clone,
-                                "Comparison Failed",
-                                &format!("Failed to compare snapshots: {}", e),
-                            );
+                            let error_msg = e.to_string();
+
+                            // Provide a user-friendly error message for timeout issues
+                            if error_msg.contains("timeout") || error_msg.contains("timed out") {
+                                dialogs::show_error(
+                                    &parent_clone,
+                                    "Comparison Timeout",
+                                    "The file comparison took too long (>25 seconds).\n\n\
+                                     This happens with very large snapshots that have many file changes.\n\n\
+                                     Try using \"Compare Packages\" instead, which works for snapshots of any size.",
+                                );
+                            } else {
+                                dialogs::show_error(
+                                    &parent_clone,
+                                    "Comparison Failed",
+                                    &format!("Failed to compare snapshots: {}", e),
+                                );
+                            }
                             dialog_clone.close();
                         }
                     }
