@@ -1,6 +1,6 @@
 # Waypoint
 
-NOTE: APPLICATION STILL IN ALPHA TESTING. DO NOT USE IN PRODUCTION YET.
+NOTE: WAYPOINT IS CURRENTLY IN EARLY BETA. FEEL FREE TO USE IT, BUT KNOW THERE WILL STILL BE SOME BUGS.
 
 Waypoint is a GTK/libadwaita snapshot and rollback tool with a built in scheduling service for Btrfs filesystems on Void Linux.
 
