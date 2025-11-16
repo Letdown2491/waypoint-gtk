@@ -591,6 +591,10 @@ impl WaypointHelperClient {
     /// **Limitation**: Due to a 25-second D-Bus timeout in zbus 4.0, this operation
     /// will fail for large snapshots that take longer than 25 seconds to compare.
     /// This is a known limitation. For very large snapshots, use package comparison instead.
+    ///
+    /// **Note**: Currently unused in favor of local package comparison.
+    /// Kept for potential future use with file-level comparisons.
+    #[allow(dead_code)]
     pub fn compare_snapshots(
         &self,
         old_snapshot_name: String,

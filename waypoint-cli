@@ -28,9 +28,16 @@ Commands:
     cleanup     Apply retention policy to delete old snapshots
     help        Show this help message
 
+Arguments for create:
+    name        Name for the snapshot (required)
+    description Human-readable description (optional)
+    subvolumes  Comma-separated list of mount points to snapshot (optional, defaults to /)
+                Example: "/,/home" to snapshot both root and home
+
 Examples:
     waypoint-cli create "before-upgrade" "Snapshot before system upgrade"
-    waypoint-cli create "test-$(date +%Y%m%d)" "Daily backup"
+    waypoint-cli create "test-$(date +%Y%m%d)" "Daily backup" "/,/home"
+    waypoint-cli create "root-only" "Only root filesystem" "/"
     waypoint-cli list
     waypoint-cli delete "old-snapshot"
     waypoint-cli restore "before-upgrade"
@@ -98,22 +105,28 @@ validate_snapshot_name() {
 cmd_create() {
     local name="${1:-}"
     local description="${2:-Snapshot created via CLI}"
-    local subvolumes="${3:-/}"
+    local subvolumes_arg="${3:-/}"
 
     if [[ -z "$name" ]]; then
         echo "Error: Snapshot name is required" >&2
-        echo "Usage: waypoint-cli create <name> [description]" >&2
+        echo "Usage: waypoint-cli create <name> [description] [subvolumes]" >&2
         exit 1
     fi
 
     # Validate snapshot name
     if ! validate_snapshot_name "$name"; then
-        echo "Usage: waypoint-cli create <name> [description]" >&2
+        echo "Usage: waypoint-cli create <name> [description] [subvolumes]" >&2
         exit 1
     fi
 
     echo "Creating snapshot: $name"
     echo "Description: $description"
+
+    # Parse subvolumes (comma-separated or single value)
+    IFS=',' read -ra subvolumes_array <<< "$subvolumes_arg"
+    local subvolume_count=${#subvolumes_array[@]}
+
+    echo "Subvolumes: ${subvolumes_array[*]}"
 
     # Convert subvolumes to array format for D-Bus
     # The D-Bus method signature is CreateSnapshot(sas) - string, string, array of strings
@@ -126,8 +139,8 @@ cmd_create() {
         'ssas' \
         "$name" \
         "$description" \
-        1 \
-        "$subvolumes" 2>&1)
+        "$subvolume_count" \
+        "${subvolumes_array[@]}" 2>&1)
 
     # Parse result (format: "bs" true "message")
     if echo "$result" | grep -q "true"; then

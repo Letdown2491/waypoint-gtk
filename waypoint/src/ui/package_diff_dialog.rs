@@ -1,3 +1,9 @@
+//! Package diff dialog for comparing packages between two snapshots
+//! NOTE: This is the old implementation, kept for reference.
+//! The new implementation uses comparison_view.rs with NavigationView.
+
+#![allow(dead_code)]
+
 use crate::packages::{Package, PackageDiff, diff_packages};
 use adw::prelude::*;
 use gtk::prelude::*;

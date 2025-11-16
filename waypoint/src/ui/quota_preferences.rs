@@ -22,8 +22,7 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
     let basic_group = adw::PreferencesGroup::new();
     basic_group.set_title("Quota Settings");
     basic_group.set_description(Some(
-        "Control snapshot disk space usage with btrfs quotas. \
-         Quotas prevent snapshots from consuming all available storage.",
+        "Control snapshot disk space usage with btrfs quotas.",
     ));
 
     // Enable quotas switch
@@ -91,6 +90,7 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
     let limits_group = adw::PreferencesGroup::new();
     limits_group.set_title("Limits");
     limits_group.set_description(Some("Set maximum disk space for snapshots"));
+    limits_group.set_margin_top(24);
 
     // Total limit row
     let limit_row = adw::ActionRow::new();

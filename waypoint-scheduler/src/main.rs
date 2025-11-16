@@ -254,6 +254,34 @@ fn calculate_next_monthly(
     Ok(Duration::from_secs(seconds as u64))
 }
 
+/// Load subvolumes configuration from user config
+fn load_subvolumes_config() -> Result<Vec<String>> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    // Try user config first (~/.config/waypoint/subvolumes.json)
+    if let Some(home) = std::env::var_os("HOME") {
+        let user_config = PathBuf::from(home)
+            .join(".config/waypoint/subvolumes.json");
+
+        if user_config.exists() {
+            let content = fs::read_to_string(&user_config)
+                .context("Failed to read subvolumes config")?;
+            let subvolumes: Vec<String> = serde_json::from_str(&content)
+                .context("Failed to parse subvolumes config")?;
+
+            if !subvolumes.is_empty() {
+                log::info!("Loaded subvolumes from user config: {:?}", subvolumes);
+                return Ok(subvolumes);
+            }
+        }
+    }
+
+    // Fall back to just root if no config found
+    log::warn!("No subvolumes config found, defaulting to [/]");
+    Ok(vec!["/".to_string()])
+}
+
 /// Create a snapshot for the given schedule
 fn create_snapshot(schedule: &Schedule) -> Result<()> {
     waypoint_common::validate_snapshot_name(&schedule.prefix)
@@ -262,16 +290,22 @@ fn create_snapshot(schedule: &Schedule) -> Result<()> {
 
     log::info!("Creating scheduled snapshot: {}", snapshot_name);
 
-    // Call waypoint-cli to create snapshot
+    // Load subvolumes configuration
+    let subvolumes = load_subvolumes_config()?;
+    let subvolumes_arg = subvolumes.join(",");
+
+    // Call waypoint-cli to create snapshot with subvolumes
     let output = Command::new("waypoint-cli")
         .arg("create")
         .arg(&snapshot_name)
         .arg(&schedule.description)
+        .arg(&subvolumes_arg)
         .output()
         .context("Failed to execute waypoint-cli")?;
 
     if output.status.success() {
         log::info!("✓ Snapshot created successfully: {}", snapshot_name);
+        log::info!("  Subvolumes: {}", subvolumes_arg);
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         log::error!("✗ Failed to create snapshot: {}", stderr);
