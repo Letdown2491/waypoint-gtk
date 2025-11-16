@@ -149,8 +149,6 @@ pub fn show_compare_dialog(window: &adw::ApplicationWindow, manager: &Rc<RefCell
 
     let compare_files_btn = gtk::Button::with_label("Compare Files");
     compare_files_btn.add_css_class("pill");
-    compare_files_btn.set_sensitive(false);
-    compare_files_btn.set_tooltip_text(Some("File comparison temporarily disabled due to GUI freezing issue"));
     button_box.append(&compare_files_btn);
 
     let compare_packages_btn = gtk::Button::with_label("Compare Packages");

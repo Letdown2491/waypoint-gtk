@@ -800,8 +800,9 @@ impl WaypointHelper {
 
     /// Compare two snapshots using btrfs send/receive
     fn compare_snapshots_impl(old_snapshot_name: &str, new_snapshot_name: &str) -> Result<String> {
+        use std::io::{BufReader, Read};
+        use std::os::unix::process::ExitStatusExt;
         use std::process::{Command, Stdio};
-        use std::io::Read;
 
         let config = WaypointConfig::new();
         let old_path = config.snapshot_dir.join(old_snapshot_name).join("root");
@@ -838,21 +839,35 @@ impl WaypointHelper {
             .stderr(Stdio::null())
             .spawn()
             .context("Failed to spawn btrfs receive")?;
+        let receive_stdout = receive_cmd.stdout.take()
+            .context("Failed to capture btrfs receive stdout")?;
 
-        // Wait for both commands to complete
-        let send_status = send_cmd.wait()?;
-        if !send_status.success() {
-            anyhow::bail!("btrfs send failed with status: {}", send_status);
-        }
+        // Drain receive stdout concurrently to prevent pipe deadlocks
+        let reader_handle = std::thread::spawn(move || -> Result<String> {
+            let mut reader = BufReader::new(receive_stdout);
+            let mut output = String::new();
+            reader.read_to_string(&mut output)?;
+            Ok(output)
+        });
 
-        let mut output = String::new();
-        if let Some(mut stdout) = receive_cmd.stdout.take() {
-            stdout.read_to_string(&mut output)?;
-        }
-
+        // Wait for receive first to ensure dump output is consumed
         let receive_status = receive_cmd.wait()?;
         if !receive_status.success() {
             anyhow::bail!("btrfs receive --dump failed with status: {}", receive_status);
+        }
+
+        let output = reader_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("Failed to join receive output reader"))??;
+
+        let send_status = send_cmd.wait()?;
+        if !send_status.success() {
+            // btrfs send may emit SIGPIPE if receive exits after finishing.
+            if send_status.signal() == Some(libc::SIGPIPE) {
+                log::debug!("btrfs send exited with SIGPIPE after receive completed");
+            } else {
+                anyhow::bail!("btrfs send failed with status: {}", send_status);
+            }
         }
 
         // Parse the dump output and convert to JSON
