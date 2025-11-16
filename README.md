@@ -31,7 +31,7 @@ For Void Linux users, Waypoint integration is available on [Nebula](https://gith
 
 ## Integration
 
-Other Void Linux tools can talk to the privileged helper over D-Bus to trigger snapshots, retention, scheduler changes, and more. See [API.md](API.md) for the complete interface used by Nebula and other front-ends.
+Other Void Linux tools can talk to the privileged helper over D-Bus to trigger snapshots, retention, scheduler changes, and more. See [API.md](API.md) for the complete interface used by Nebula.
 
 ## Requirements
 
