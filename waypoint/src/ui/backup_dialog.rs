@@ -4,7 +4,7 @@
 
 use adw::prelude::*;
 use gtk::prelude::*;
-use gtk::{Button, Label, Orientation};
+use gtk::{Button, Label, Orientation, Widget};
 use libadwaita as adw;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,7 @@ struct BackupDestination {
     label: String,
     drive_type: DriveType,
     uuid: Option<String>,
+    fstype: String, // Filesystem type (btrfs, ntfs, exfat, etc.)
 }
 
 use crate::backup_manager::BackupManager;
@@ -55,8 +56,8 @@ pub fn create_backups_content(
     let header_group = adw::PreferencesGroup::new();
     header_group.set_title("Snapshot Backups");
     header_group.set_description(Some(
-        "Create incremental backups of your snapshots to external drives using btrfs send/receive. \
-         This provides disaster recovery in case of system failure.",
+        "Create backups of your snapshots to external drives. Btrfs drives support efficient incremental backups. \
+         Other filesystems (NTFS, exFAT, etc.) are also supported using full copy backups.",
     ));
 
     content_box.append(&header_group);
@@ -82,20 +83,22 @@ pub fn create_backups_content(
     // Destinations list container
     let destinations_list = adw::PreferencesGroup::new();
     destinations_list.set_margin_top(12);
-    destinations_list.set_visible(false); // Hidden until scan is clicked
+    destinations_list.set_visible(true); // Show by default
+    let destination_rows: Rc<RefCell<Vec<Widget>>> = Rc::new(RefCell::new(Vec::new()));
 
-    let dest_list_clone = destinations_list.clone();
-    let parent_clone = parent.clone();
-    let backup_manager_clone = backup_manager.clone();
+    // Helper function to perform scan
+    let perform_scan = |btn: Option<&Button>,
+                        dest_list: adw::PreferencesGroup,
+                        parent_ref: adw::ApplicationWindow,
+                        bm_clone: Rc<RefCell<BackupManager>>,
+                        rows_store: Rc<RefCell<Vec<Widget>>>| {
 
-    scan_button.connect_clicked(move |btn| {
-        btn.set_sensitive(false);
-        btn.set_label("Scanning...");
+        if let Some(button) = btn {
+            button.set_sensitive(false);
+            button.set_label("Scanning...");
+        }
 
-        let dest_list = dest_list_clone.clone();
-        let parent_ref = parent_clone.clone();
-        let btn_clone = btn.clone();
-        let bm_clone = backup_manager_clone.clone();
+        let btn_opt = btn.map(|b| b.clone());
 
         // Use thread + channel pattern instead of tokio
         let (tx, rx) = std::sync::mpsc::channel();
@@ -105,6 +108,7 @@ pub fn create_backups_content(
         });
 
         // Poll for result
+        let rows_store_clone = rows_store.clone();
         gtk::glib::spawn_future_local(async move {
             let result = loop {
                 match rx.try_recv() {
@@ -119,32 +123,76 @@ pub fn create_backups_content(
                             "Scan Failed",
                             "Scan thread disconnected unexpectedly",
                         );
-                        btn_clone.set_sensitive(true);
-                        btn_clone.set_label("Scan");
+                        if let Some(btn) = btn_opt {
+                            btn.set_sensitive(true);
+                            btn.set_label("Scan");
+                        }
                         return;
                     }
                 }
             };
 
-            btn_clone.set_sensitive(true);
-            btn_clone.set_label("Scan");
+            if let Some(btn) = btn_opt.as_ref() {
+                btn.set_sensitive(true);
+                btn.set_label("Scan");
+            }
 
             // Clear existing destinations
-            while let Some(child) = dest_list.first_child() {
-                dest_list.remove(&child);
+            {
+                let mut existing_rows = rows_store_clone.borrow_mut();
+                for row in existing_rows.drain(..) {
+                    dest_list.remove(&row);
+                }
             }
 
             match result {
-                Ok(destinations) => {
-                    if destinations.is_empty() {
+                Ok(scanned_destinations) => {
+                    // Load saved destinations from config
+                    let saved_config = bm_clone.borrow().get_config().unwrap_or_default();
+
+                    // Build merged list: prioritize scanned (currently mounted) destinations,
+                    // then add saved destinations that aren't currently mounted
+                    let mut merged_destinations: Vec<BackupDestination> = Vec::new();
+                    let mut seen_uuids = std::collections::HashSet::new();
+
+                    // Add scanned destinations
+                    for dest in scanned_destinations {
+                        if let Some(ref uuid) = dest.uuid {
+                            seen_uuids.insert(uuid.clone());
+                        }
+                        merged_destinations.push(dest);
+                    }
+
+                    // Add saved destinations that aren't currently mounted
+                    for (uuid, config) in saved_config.destinations.iter() {
+                        if !seen_uuids.contains(uuid) {
+                            // This is a saved destination that's not currently mounted
+                            // Create a "disconnected" destination entry
+                            merged_destinations.push(BackupDestination {
+                                mount_point: format!("{} (not connected)", config.last_mount_point),
+                                label: config.label.clone(),
+                                drive_type: DriveType::Removable, // Default to removable
+                                uuid: Some(uuid.clone()),
+                                fstype: config.fstype.clone(),
+                            });
+                        }
+                    }
+
+                    if merged_destinations.is_empty() {
                         let empty_row = adw::ActionRow::new();
                         empty_row.set_title("No external drives found");
-                        empty_row.set_subtitle("Connect an external btrfs drive and scan again");
+                        empty_row.set_subtitle("Connect an external drive (btrfs, NTFS, exFAT, etc.) and scan again");
                         dest_list.add(&empty_row);
+                        rows_store_clone
+                            .borrow_mut()
+                            .push(empty_row.clone().upcast::<Widget>());
                     } else {
-                        for dest in &destinations {
+                        for dest in &merged_destinations {
                             let row = create_destination_row(dest, &parent_ref, bm_clone.clone());
                             dest_list.add(&row);
+                            rows_store_clone
+                                .borrow_mut()
+                                .push(row.clone().upcast::<Widget>());
                         }
                     }
 
@@ -159,6 +207,30 @@ pub fn create_backups_content(
                 }
             }
         });
+    };
+
+    // Auto-scan on page load
+    perform_scan(
+        None,
+        destinations_list.clone(),
+        parent.clone(),
+        backup_manager.clone(),
+        destination_rows.clone(),
+    );
+
+    // Wire up manual scan button
+    let dest_list_clone = destinations_list.clone();
+    let parent_clone = parent.clone();
+    let backup_manager_clone = backup_manager.clone();
+
+    scan_button.connect_clicked(move |btn| {
+        perform_scan(
+            Some(btn),
+            dest_list_clone.clone(),
+            parent_clone.clone(),
+            backup_manager_clone.clone(),
+            destination_rows.clone(),
+        );
     });
 
     content_box.append(&dest_group);
@@ -313,37 +385,57 @@ fn create_destination_row(
 
     let row = adw::ExpanderRow::new();
 
+    // Check if drive is currently connected
+    let is_connected = !dest.mount_point.contains("(not connected)");
+
     // Add drive type badge to title
     let type_badge = match dest.drive_type {
         DriveType::Removable => " (USB)",
         DriveType::Network => " (Network)",
         DriveType::Internal => " (Internal)",
     };
-    row.set_title(&format!("{}{}", dest.label, type_badge));
 
-    // Show pending count in subtitle if available
+    let title = if is_connected {
+        format!("{}{}", dest.label, type_badge)
+    } else {
+        format!("{}{} • Disconnected", dest.label, type_badge)
+    };
+    row.set_title(&title);
+
+    // Show filesystem type and pending count in subtitle
+    let fs_badge = if dest.fstype == "btrfs" {
+        "btrfs (incremental backups)"
+    } else {
+        &format!("{} (full copy backups)", dest.fstype)
+    };
+
     let subtitle = if let Some(ref uuid) = dest.uuid {
         let pending_count = backup_manager.borrow().get_pending_count(uuid);
         if pending_count > 0 {
             format!(
-                "{} • {} pending backup{}",
+                "{} • {} • {} pending backup{}",
                 dest.mount_point,
+                fs_badge,
                 pending_count,
                 if pending_count == 1 { "" } else { "s" }
             )
         } else {
-            dest.mount_point.clone()
+            format!("{} • {}", dest.mount_point, fs_badge)
         }
     } else {
-        dest.mount_point.clone()
+        format!("{} • {}", dest.mount_point, fs_badge)
     };
     row.set_subtitle(&subtitle);
 
-    // Add icon based on drive type
-    let icon_name = match dest.drive_type {
-        DriveType::Removable => "media-removable-symbolic",
-        DriveType::Network => "network-server-symbolic",
-        DriveType::Internal => "drive-harddisk-symbolic",
+    // Add icon based on drive type and connection status
+    let icon_name = if !is_connected {
+        "network-offline-symbolic" // Disconnected icon
+    } else {
+        match dest.drive_type {
+            DriveType::Removable => "media-removable-symbolic",
+            DriveType::Network => "network-server-symbolic",
+            DriveType::Internal => "drive-harddisk-symbolic",
+        }
     };
     let icon = gtk::Image::from_icon_name(icon_name);
     icon.set_margin_start(6);
@@ -419,8 +511,13 @@ fn create_destination_row(
         let view_row = adw::ActionRow::new();
         view_row.set_title("View Existing Backups");
 
+        if !is_connected {
+            view_row.set_subtitle("Drive must be connected to view backups");
+        }
+
         let view_button = Button::with_label("View");
         view_button.set_valign(gtk::Align::Center);
+        view_button.set_sensitive(is_connected); // Disable if not connected
         let dest_mount = dest.mount_point.clone();
         let parent_clone = parent.clone();
         view_button.connect_clicked(move |_| {
@@ -474,6 +571,7 @@ fn create_destination_row(
                 let uuid = uuid.clone();
                 let label = dest.label.clone();
                 let mount = dest.mount_point.clone();
+                let fstype = dest.fstype.clone(); // Clone fstype to avoid lifetime issues
                 let bm = backup_manager.clone();
                 let enable_sw = enable_switch.clone();
                 let filter_dd = filter_combo.clone();
@@ -492,10 +590,12 @@ fn create_destination_row(
                         uuid: uuid.clone(),
                         label: label.clone(),
                         last_mount_point: mount.clone(),
+                        fstype: fstype.clone(),
                         enabled: enable_sw.is_active(),
                         filter,
                         on_snapshot_creation: on_creation_sw.is_active(),
                         on_drive_mount: on_mount_sw.is_active(),
+                        retention_days: None, // TODO: Add UI for retention configuration
                     };
 
                     if let Err(e) = bm.borrow().add_destination(uuid.clone(), dest_config) {
@@ -759,7 +859,17 @@ fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gt
         for pb in in_progress {
             let row = adw::ActionRow::new();
             row.set_title(&pb.snapshot_id);
-            row.set_subtitle(&format!("Destination: {}", pb.destination_uuid));
+
+            // Calculate elapsed time
+            let elapsed = if let Some(start_time) = pb.last_attempt {
+                let now = chrono::Utc::now().timestamp();
+                let elapsed_secs = (now - start_time).max(0);
+                format_elapsed_time(elapsed_secs)
+            } else {
+                "Just started".to_string()
+            };
+
+            row.set_subtitle(&format!("Backing up to {} • {}", pb.destination_uuid, elapsed));
 
             let status_icon = gtk::Image::from_icon_name("emblem-synchronizing-symbolic");
             status_icon.set_pixel_size(16);
@@ -949,4 +1059,36 @@ fn create_backup_history(backup_manager: Rc<RefCell<BackupManager>>) -> Vec<adw:
     }
 
     rows
+}
+
+/// Format elapsed time in human-readable format
+/// Examples: "2s", "1m 30s", "2h 15m", "3d 4h"
+fn format_elapsed_time(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        let mins = seconds / 60;
+        let secs = seconds % 60;
+        if secs == 0 {
+            format!("{}m", mins)
+        } else {
+            format!("{}m {}s", mins, secs)
+        }
+    } else if seconds < 86400 {
+        let hours = seconds / 3600;
+        let mins = (seconds % 3600) / 60;
+        if mins == 0 {
+            format!("{}h", hours)
+        } else {
+            format!("{}h {}m", hours, mins)
+        }
+    } else {
+        let days = seconds / 86400;
+        let hours = (seconds % 86400) / 3600;
+        if hours == 0 {
+            format!("{}d", days)
+        } else {
+            format!("{}d {}h", days, hours)
+        }
+    }
 }

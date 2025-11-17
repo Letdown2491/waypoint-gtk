@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::retention::TimelineRetention;
+
 /// Type of snapshot schedule
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -55,11 +57,25 @@ pub struct Schedule {
     /// Description for snapshots created by this schedule
     pub description: String,
 
-    /// Maximum number of snapshots to keep for this schedule
+    /// Maximum number of snapshots to keep for this schedule (legacy)
+    /// Deprecated: Use timeline_retention instead
+    #[serde(default)]
     pub keep_count: u32,
 
-    /// Maximum age in days for snapshots from this schedule
+    /// Maximum age in days for snapshots from this schedule (legacy)
+    /// Deprecated: Use timeline_retention instead
+    #[serde(default)]
     pub keep_days: u32,
+
+    /// Timeline-based retention policy
+    /// If None, falls back to keep_count and keep_days for backward compatibility
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline_retention: Option<TimelineRetention>,
+
+    /// Subvolumes to include in snapshots (mount points like "/", "/home")
+    /// If empty, defaults to ["/"]
+    #[serde(default)]
+    pub subvolumes: Vec<PathBuf>,
 }
 
 impl Schedule {
@@ -75,6 +91,8 @@ impl Schedule {
             description: "Hourly snapshot".to_string(),
             keep_count: 24,
             keep_days: 1,
+            timeline_retention: Some(TimelineRetention::for_hourly()),
+            subvolumes: vec![PathBuf::from("/")],
         }
     }
 
@@ -90,6 +108,8 @@ impl Schedule {
             description: "Daily snapshot".to_string(),
             keep_count: 7,
             keep_days: 7,
+            timeline_retention: Some(TimelineRetention::for_daily()),
+            subvolumes: vec![PathBuf::from("/")],
         }
     }
 
@@ -105,6 +125,8 @@ impl Schedule {
             description: "Weekly snapshot".to_string(),
             keep_count: 4,
             keep_days: 28,
+            timeline_retention: Some(TimelineRetention::for_weekly()),
+            subvolumes: vec![PathBuf::from("/")],
         }
     }
 
@@ -120,6 +142,8 @@ impl Schedule {
             description: "Monthly snapshot".to_string(),
             keep_count: 3,
             keep_days: 90,
+            timeline_retention: Some(TimelineRetention::for_monthly()),
+            subvolumes: vec![PathBuf::from("/")],
         }
     }
 

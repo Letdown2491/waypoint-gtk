@@ -143,29 +143,18 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
 
     page.add(&limits_group);
 
-    // Apply button (standalone at bottom, right-aligned like in scheduler dialog)
-    let button_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    button_box.set_margin_top(24);
-    button_box.set_margin_bottom(12);
-    button_box.set_margin_start(12);
-    button_box.set_margin_end(12);
-    button_box.set_halign(gtk::Align::End);
-
-    let apply_button = gtk::Button::with_label("Apply");
-    apply_button.add_css_class("suggested-action");
-    button_box.append(&apply_button);
-
-    // Create a group to hold the button
-    let button_group = adw::PreferencesGroup::new();
-    button_group.add(&button_box);
-    page.add(&button_group);
-
-    // Wire up sensitivity changes
+    // Wire up sensitivity changes and auto-save
     let type_row_clone = type_row.clone();
     let cleanup_row_clone = cleanup_row.clone();
     let limit_spin_clone = limit_spin.clone();
     let status_row_clone = status_row.clone();
-    let enable_row_clone2 = enable_row.clone();
+    let parent_clone_enable = parent.clone();
+
+    // Store all widgets for auto-save in enable handler
+    let type_row_for_save = type_row.clone();
+    let cleanup_row_for_save = cleanup_row.clone();
+    let limit_spin_for_save = limit_spin.clone();
+    let threshold_spin_for_save = threshold_spin.clone();
 
     enable_row.connect_active_notify(move |switch| {
         let enabled = switch.is_active();
@@ -173,62 +162,218 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
         cleanup_row_clone.set_sensitive(enabled);
         limit_spin_clone.set_sensitive(enabled);
         status_row_clone.set_visible(enabled);
+
+        // Show confirmation dialog before enabling/disabling
+        let parent = parent_clone_enable.clone();
+        let enable_switch = switch.clone();
+        let type_row_save = type_row_for_save.clone();
+        let cleanup_row_save = cleanup_row_for_save.clone();
+        let limit_spin_save = limit_spin_for_save.clone();
+        let threshold_spin_save = threshold_spin_for_save.clone();
+
+        if enabled {
+            // Confirm enable
+            let dialog = adw::MessageDialog::new(
+                Some(&parent),
+                Some("Enable Quotas?"),
+                Some("This will enable btrfs quota tracking on your snapshot filesystem. This operation may take a moment."),
+            );
+            dialog.add_response("cancel", "Cancel");
+            dialog.add_response("enable", "Enable");
+            dialog.set_response_appearance("enable", adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("enable"));
+            dialog.set_close_response("cancel");
+
+            dialog.connect_response(None, move |_, response| {
+                if response == "enable" {
+                    save_quota_config(
+                        &parent,
+                        &enable_switch,
+                        &type_row_save,
+                        &cleanup_row_save,
+                        &limit_spin_save,
+                        &threshold_spin_save,
+                    );
+                } else {
+                    // User cancelled, revert the switch
+                    enable_switch.set_active(false);
+                }
+            });
+
+            dialog.present();
+        } else {
+            // Confirm disable
+            let dialog = adw::MessageDialog::new(
+                Some(&parent),
+                Some("Disable Quotas?"),
+                Some("This will disable quota tracking. Usage information will no longer be available."),
+            );
+            dialog.add_response("cancel", "Cancel");
+            dialog.add_response("disable", "Disable");
+            dialog.set_response_appearance("disable", adw::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("disable"));
+            dialog.set_close_response("cancel");
+
+            dialog.connect_response(None, move |_, response| {
+                if response == "disable" {
+                    save_quota_config(
+                        &parent,
+                        &enable_switch,
+                        &type_row_save,
+                        &cleanup_row_save,
+                        &limit_spin_save,
+                        &threshold_spin_save,
+                    );
+                } else {
+                    // User cancelled, revert the switch
+                    enable_switch.set_active(true);
+                }
+            });
+
+            dialog.present();
+        }
     });
 
+    // Wire up threshold sensitivity based on auto-cleanup
     let threshold_spin_clone2 = threshold_spin.clone();
+    let enable_row_clone2 = enable_row.clone();
     cleanup_row.connect_active_notify(move |switch| {
         if enable_row_clone2.is_active() {
             threshold_spin_clone2.set_sensitive(switch.is_active());
         }
     });
 
-    // Apply button handler
-    let parent_clone = parent.clone();
-    let enable_row_clone = enable_row.clone();
-    let type_row_clone = type_row.clone();
-    let cleanup_row_clone = cleanup_row.clone();
-    let limit_spin_clone = limit_spin.clone();
-    let threshold_spin_clone = threshold_spin.clone();
+    // Auto-save for quota type changes
+    {
+        let parent_clone = parent.clone();
+        let enable_row_clone = enable_row.clone();
+        let type_row_clone = type_row.clone();
+        let cleanup_row_clone = cleanup_row.clone();
+        let limit_spin_clone = limit_spin.clone();
+        let threshold_spin_clone = threshold_spin.clone();
 
-    apply_button.connect_clicked(move |_| {
-        // Build new config
-        let enabled = enable_row_clone.is_active();
-        let quota_type = match type_row_clone.selected() {
-            0 => QuotaType::Simple,
-            _ => QuotaType::Traditional,
-        };
-        let limit_gb = limit_spin_clone.value();
-        let total_limit_bytes = if limit_gb > 0.0 {
-            Some((limit_gb * 1024.0 * 1024.0 * 1024.0) as u64)
-        } else {
-            None
-        };
-        let cleanup_threshold = threshold_spin_clone.value() / 100.0;
-        let auto_cleanup = cleanup_row_clone.is_active();
-
-        let new_config = QuotaConfig {
-            enabled,
-            quota_type,
-            total_limit_bytes,
-            per_snapshot_limit_bytes: None, // Not configurable in UI yet
-            cleanup_threshold,
-            auto_cleanup,
-        };
-
-        // Apply quota settings via D-Bus (includes saving config)
-        if let Err(e) = apply_quota_settings(&parent_clone, &new_config) {
-            dialogs::show_error(
+        type_row.connect_selected_notify(move |_| {
+            save_quota_config(
                 &parent_clone,
-                "Apply Failed",
-                &format!("Failed to apply quota settings: {}", e),
+                &enable_row_clone,
+                &type_row_clone,
+                &cleanup_row_clone,
+                &limit_spin_clone,
+                &threshold_spin_clone,
             );
-            return;
-        }
+        });
+    }
 
-        dialogs::show_toast(&parent_clone, "Quota settings applied successfully");
-    });
+    // Auto-save for auto-cleanup toggle
+    {
+        let parent_clone = parent.clone();
+        let enable_row_clone = enable_row.clone();
+        let type_row_clone = type_row.clone();
+        let cleanup_row_clone = cleanup_row.clone();
+        let limit_spin_clone = limit_spin.clone();
+        let threshold_spin_clone = threshold_spin.clone();
+
+        cleanup_row.connect_active_notify(move |_| {
+            save_quota_config(
+                &parent_clone,
+                &enable_row_clone,
+                &type_row_clone,
+                &cleanup_row_clone,
+                &limit_spin_clone,
+                &threshold_spin_clone,
+            );
+        });
+    }
+
+    // Auto-save for limit changes
+    {
+        let parent_clone = parent.clone();
+        let enable_row_clone = enable_row.clone();
+        let type_row_clone = type_row.clone();
+        let cleanup_row_clone = cleanup_row.clone();
+        let limit_spin_clone = limit_spin.clone();
+        let threshold_spin_clone = threshold_spin.clone();
+
+        limit_spin.connect_value_changed(move |_| {
+            save_quota_config(
+                &parent_clone,
+                &enable_row_clone,
+                &type_row_clone,
+                &cleanup_row_clone,
+                &limit_spin_clone,
+                &threshold_spin_clone,
+            );
+        });
+    }
+
+    // Auto-save for threshold changes
+    {
+        let parent_clone = parent.clone();
+        let enable_row_clone = enable_row.clone();
+        let type_row_clone = type_row.clone();
+        let cleanup_row_clone = cleanup_row.clone();
+        let limit_spin_clone = limit_spin.clone();
+        let threshold_spin_clone = threshold_spin.clone();
+
+        threshold_spin.connect_value_changed(move |_| {
+            save_quota_config(
+                &parent_clone,
+                &enable_row_clone,
+                &type_row_clone,
+                &cleanup_row_clone,
+                &limit_spin_clone,
+                &threshold_spin_clone,
+            );
+        });
+    }
 
     page
+}
+
+/// Save quota configuration (called by auto-save handlers)
+fn save_quota_config(
+    parent: &adw::ApplicationWindow,
+    enable_row: &adw::SwitchRow,
+    type_row: &adw::ComboRow,
+    cleanup_row: &adw::SwitchRow,
+    limit_spin: &SpinButton,
+    threshold_spin: &SpinButton,
+) {
+    // Build config from current UI state
+    let enabled = enable_row.is_active();
+    let quota_type = match type_row.selected() {
+        0 => QuotaType::Simple,
+        _ => QuotaType::Traditional,
+    };
+    let limit_gb = limit_spin.value();
+    let total_limit_bytes = if limit_gb > 0.0 {
+        Some((limit_gb * 1024.0 * 1024.0 * 1024.0) as u64)
+    } else {
+        None
+    };
+    let cleanup_threshold = threshold_spin.value() / 100.0;
+    let auto_cleanup = cleanup_row.is_active();
+
+    let new_config = QuotaConfig {
+        enabled,
+        quota_type,
+        total_limit_bytes,
+        per_snapshot_limit_bytes: None, // Not configurable in UI yet
+        cleanup_threshold,
+        auto_cleanup,
+    };
+
+    // Apply quota settings via D-Bus
+    if let Err(e) = apply_quota_settings(parent, &new_config) {
+        dialogs::show_error(
+            parent,
+            "Save Failed",
+            &format!("Failed to save quota settings: {}", e),
+        );
+        return;
+    }
+
+    dialogs::show_toast(parent, "Quota settings saved");
 }
 
 /// Apply quota settings via D-Bus

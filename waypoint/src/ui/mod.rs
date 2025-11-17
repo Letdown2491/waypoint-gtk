@@ -820,70 +820,109 @@ impl MainWindow {
                     .and_then(|c| c.destinations.get(&uuid).map(|d| d.label.clone()))
                     .unwrap_or_else(|| mount_point.clone());
 
-                // Process pending backups for this destination
-                match backup_manager_monitor.borrow().process_pending_backups(
-                    &uuid,
-                    &mount_point,
-                    &snapshot_dir,
-                ) {
-                    Ok((success_count, fail_count, errors)) => {
-                        if success_count > 0 || fail_count > 0 {
-                            log::info!(
-                                "Backup processing complete: {} successful, {} failed",
-                                success_count,
-                                fail_count
-                            );
+                // Clone backup manager for background thread work
+                let manager_for_thread = { backup_manager_monitor.borrow().clone() };
+                let uuid_clone = uuid.clone();
+                let mount_clone = mount_point.clone();
+                let snapshot_dir_clone = snapshot_dir.clone();
 
-                            // Send desktop notification
-                            notifications::notify_backup_completed(
-                                &app_monitor,
-                                &dest_label,
-                                success_count,
-                                fail_count,
-                            );
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = manager_for_thread.process_pending_backups(
+                        &uuid_clone,
+                        &mount_clone,
+                        &snapshot_dir_clone,
+                    );
+                    let _ = tx.send(result);
+                });
 
-                            // Show notification to user
-                            let message = if fail_count == 0 {
-                                format!("Successfully backed up {} snapshot(s)", success_count)
-                            } else if success_count == 0 {
-                                format!("Failed to backup {} snapshot(s)", fail_count)
-                            } else {
-                                format!(
-                                    "Backed up {} snapshot(s), {} failed",
-                                    success_count, fail_count
-                                )
-                            };
+                let window_ref = window_monitor.clone();
+                let app_ref = app_monitor.clone();
+                let dest_label_ref = dest_label.clone();
 
-                            let dialog = adw::MessageDialog::new(
-                                Some(&window_monitor),
-                                Some("Automatic Backup Complete"),
-                                Some(&message),
-                            );
-                            dialog.add_response("ok", "OK");
-                            dialog.set_default_response(Some("ok"));
-
-                            if !errors.is_empty() {
-                                dialog.add_response("details", "Show Details");
-                                let errors_clone = errors.clone();
-                                let window_clone = window_monitor.clone();
-                                dialog.connect_response(None, move |_, response| {
-                                    if response == "details" {
-                                        dialogs::show_error_list(
-                                            &window_clone,
-                                            "Backup Errors",
-                                            &errors_clone,
-                                        );
-                                    }
-                                });
+                gtk::glib::spawn_future_local(async move {
+                    let result = loop {
+                        match rx.try_recv() {
+                            Ok(result) => break result,
+                            Err(mpsc::TryRecvError::Empty) => {
+                                glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                                continue;
                             }
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                log::error!(
+                                    "Backup processing thread disconnected for {}",
+                                    dest_label_ref
+                                );
+                                dialogs::show_error(
+                                    &window_ref,
+                                    "Backup Failed",
+                                    "Backup worker disconnected unexpectedly",
+                                );
+                                return;
+                            }
+                        }
+                    };
 
-                            dialog.present();
+                    match result {
+                        Ok((success_count, fail_count, errors)) => {
+                            if success_count > 0 || fail_count > 0 {
+                                log::info!(
+                                    "Backup processing complete: {} successful, {} failed",
+                                    success_count,
+                                    fail_count
+                                );
+
+                                // Send desktop notification
+                                notifications::notify_backup_completed(
+                                    &app_ref,
+                                    &dest_label_ref,
+                                    success_count,
+                                    fail_count,
+                                );
+
+                                // Show toast notification to user
+                                let message = if fail_count == 0 {
+                                    format!(
+                                        "Backup complete: {} snapshot(s) to {}",
+                                        success_count, dest_label_ref
+                                    )
+                                } else if success_count == 0 {
+                                    format!(
+                                        "Backup failed: {} snapshot(s) to {}",
+                                        fail_count, dest_label_ref
+                                    )
+                                } else {
+                                    format!(
+                                        "Backup: {} successful, {} failed to {}",
+                                        success_count, fail_count, dest_label_ref
+                                    )
+                                };
+
+                                dialogs::show_toast(&window_ref, &message);
+
+                                // Show error details dialog only if there were failures
+                                if fail_count > 0 && !errors.is_empty() {
+                                    dialogs::show_error_list(
+                                        &window_ref,
+                                        "Backup Errors",
+                                        &errors,
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to process pending backups: {}", e);
+                            dialogs::show_error(
+                                &window_ref,
+                                "Backup Failed",
+                                &format!(
+                                    "Failed to process pending backups for {}: {}",
+                                    dest_label_ref, e
+                                ),
+                            );
                         }
                     }
-                    Err(e) => {
-                        log::error!("Failed to process pending backups: {}", e);
-                    }
-                }
+                });
             });
         }
 
@@ -1735,6 +1774,44 @@ impl MainWindow {
         Ok(())
     }
 
+    /// Format elapsed time in human-readable format
+    /// Examples: "2s", "1m 30s", "2h 15m", "3d 4h"
+    fn format_elapsed_time(seconds: i64) -> String {
+        if seconds < 60 {
+            format!("{}s", seconds)
+        } else if seconds < 3600 {
+            let mins = seconds / 60;
+            let secs = seconds % 60;
+            if secs == 0 {
+                format!("{}m", mins)
+            } else {
+                format!("{}m {}s", mins, secs)
+            }
+        } else if seconds < 86400 {
+            let hours = seconds / 3600;
+            let mins = (seconds % 3600) / 60;
+            if mins == 0 {
+                format!("{}h", hours)
+            } else {
+                format!("{}h {}m", hours, mins)
+            }
+        } else {
+            let days = seconds / 86400;
+            let hours = (seconds % 86400) / 3600;
+            if hours == 0 {
+                format!("{}d", days)
+            } else {
+                format!("{}d {}h", days, hours)
+            }
+        }
+    }
+
+    fn stop_progress_pulse(handle: &Rc<RefCell<Option<glib::SourceId>>>) {
+        if let Some(source_id) = handle.borrow_mut().take() {
+            source_id.remove();
+        }
+    }
+
     // Helper function to perform backup
     fn perform_backup(snapshot_name: &str, destination_mount: &str) -> anyhow::Result<String> {
         let client = WaypointHelperClient::new()?;
@@ -1833,6 +1910,8 @@ impl MainWindow {
         dest_group.set_title("Available Destinations");
         dest_group.set_visible(false);
         content_box.append(&dest_group);
+        let destination_rows: Rc<RefCell<Vec<gtk::Widget>>> =
+            Rc::new(RefCell::new(Vec::new()));
 
         // Progress group (hidden initially)
         let progress_group = adw::PreferencesGroup::new();
@@ -1844,11 +1923,15 @@ impl MainWindow {
 
         let progress_bar = gtk::ProgressBar::new();
         progress_bar.set_hexpand(true);
+        progress_bar.set_valign(gtk::Align::Center);
         progress_bar.pulse();
         progress_row.add_suffix(&progress_bar);
 
         progress_group.add(&progress_row);
         content_box.append(&progress_group);
+
+        let progress_pulse_handle: Rc<RefCell<Option<glib::SourceId>>> =
+            Rc::new(RefCell::new(None));
 
         clamp.set_child(Some(&content_box));
         scrolled.set_child(Some(&clamp));
@@ -1857,12 +1940,22 @@ impl MainWindow {
         dialog.set_content(Some(&content));
         dialog.present();
 
+        // Auto-scan on dialog open (trigger scan button click)
+        let scan_button_clone = scan_button.clone();
+        gtk::glib::idle_add_local_once(move || {
+            scan_button_clone.emit_clicked();
+        });
+
         // Connect scan button
         let dialog_clone = dialog.clone();
         let window_clone = window.clone();
         let dest_group_clone = dest_group.clone();
+        let destination_rows_clone = destination_rows.clone();
         let progress_group_clone = progress_group.clone();
+        let progress_bar_clone = progress_bar.clone();
+        let progress_pulse_clone = progress_pulse_handle.clone();
         let snapshot_name_clone = snapshot_name.clone();
+        let progress_row_for_scan = progress_row.clone(); // Clone for scan button handler
 
         scan_button.connect_clicked(move |btn| {
             btn.set_sensitive(false);
@@ -1873,7 +1966,11 @@ impl MainWindow {
             let window_ref = window_clone.clone();
             let dialog_ref = dialog_clone.clone();
             let progress_group_ref = progress_group_clone.clone();
+            let progress_bar_ref = progress_bar_clone.clone();
+            let pulse_handle_ref = progress_pulse_clone.clone();
+            let stored_rows_ref = destination_rows_clone.clone();
             let snapshot_name_ref = snapshot_name_clone.clone();
+            let progress_row_ref = progress_row_for_scan.clone(); // Clone before async block
 
             // Use thread + channel pattern
             let (tx, rx) = mpsc::channel();
@@ -1908,8 +2005,11 @@ impl MainWindow {
                 btn_clone.set_label("Scan");
 
                 // Clear existing destinations
-                while let Some(child) = dest_group.first_child() {
-                    dest_group.remove(&child);
+                {
+                    let mut rows = stored_rows_ref.borrow_mut();
+                    for row in rows.drain(..) {
+                        dest_group.remove(&row);
+                    }
                 }
 
                 match result {
@@ -1919,6 +2019,9 @@ impl MainWindow {
                             empty_row.set_title("No external drives found");
                             empty_row.set_subtitle("Connect an external btrfs drive and scan again");
                             dest_group.add(&empty_row);
+                            stored_rows_ref
+                                .borrow_mut()
+                                .push(empty_row.clone().upcast::<gtk::Widget>());
                         } else {
                             for dest in &destinations {
                                 let row = adw::ActionRow::new();
@@ -1952,17 +2055,36 @@ impl MainWindow {
                                 let dialog_ref2 = dialog_ref.clone();
                                 let window_ref2 = window_ref.clone();
                                 let progress_group_ref2 = progress_group_ref.clone();
+                                let progress_bar_ref2 = progress_bar_ref.clone();
+                                let pulse_handle_row = pulse_handle_ref.clone();
                                 let snapshot_name_ref2 = snapshot_name_ref.clone();
+                                let progress_row_clone = progress_row_ref.clone();
 
                                 backup_btn.connect_clicked(move |_| {
                                     // Show progress
                                     progress_group_ref2.set_visible(true);
+                                    if pulse_handle_row.borrow().is_none() {
+                                        let bar = progress_bar_ref2.clone();
+                                        let source_id = gtk::glib::timeout_add_local(
+                                            std::time::Duration::from_millis(120),
+                                            move || {
+                                                bar.pulse();
+                                                gtk::glib::ControlFlow::Continue
+                                            },
+                                        );
+                                        *pulse_handle_row.borrow_mut() = Some(source_id);
+                                    }
 
                                     let dialog_ref3 = dialog_ref2.clone();
                                     let window_ref3 = window_ref2.clone();
                                     let dest_mount_clone = dest_mount.clone();
                                     let snapshot_name_clone = snapshot_name_ref2.clone();
                                     let progress_group_ref3 = progress_group_ref2.clone();
+                                    let pulse_handle_async = pulse_handle_row.clone();
+                                    let progress_row_ref = progress_row_clone.clone();
+
+                                    // Track start time for elapsed time display
+                                    let start_time = std::time::Instant::now();
 
                                     // Use thread + channel pattern
                                     let (tx, rx) = mpsc::channel();
@@ -1971,16 +2093,22 @@ impl MainWindow {
                                         let _ = tx.send(result);
                                     });
 
-                                    // Poll for result
+                                    // Poll for result and update elapsed time
                                     gtk::glib::spawn_future_local(async move {
                                         let result = loop {
                                             match rx.try_recv() {
                                                 Ok(result) => break result,
                                                 Err(mpsc::TryRecvError::Empty) => {
+                                                    // Update elapsed time
+                                                    let elapsed = start_time.elapsed().as_secs() as i64;
+                                                    let elapsed_str = Self::format_elapsed_time(elapsed);
+                                                    progress_row_ref.set_subtitle(&format!("Elapsed: {}", elapsed_str));
+
                                                     glib::timeout_future(std::time::Duration::from_millis(50)).await;
                                                     continue;
                                                 }
                                                 Err(mpsc::TryRecvError::Disconnected) => {
+                                                    Self::stop_progress_pulse(&pulse_handle_async);
                                                     progress_group_ref3.set_visible(false);
                                                     dialog_ref3.close();
                                                     Self::show_error_dialog(
@@ -1995,6 +2123,7 @@ impl MainWindow {
 
                                         // Hide progress
                                         progress_group_ref3.set_visible(false);
+                                        Self::stop_progress_pulse(&pulse_handle_async);
 
                                         match result {
                                             Ok(backup_path) => {
@@ -2050,10 +2179,13 @@ impl MainWindow {
 
                                 row.add_suffix(&backup_btn);
                                 dest_group.add(&row);
+                                stored_rows_ref
+                                    .borrow_mut()
+                                    .push(row.clone().upcast::<gtk::Widget>());
                             }
-                        }
+                            }
 
-                        dest_group.set_visible(true);
+                            dest_group.set_visible(true);
                     }
                     Err(e) => {
                         dialogs::show_error(&window_ref, "Scan Failed", &format!("Failed to scan for destinations: {}", e));

@@ -35,6 +35,10 @@ pub struct BackupDestinationConfig {
     #[serde(default)]
     pub last_mount_point: String,
 
+    /// Filesystem type (btrfs, ntfs, exfat, vfat, cifs, nfs, etc.)
+    #[serde(default)]
+    pub fstype: String,
+
     /// Whether automatic backups are enabled for this destination
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -50,6 +54,10 @@ pub struct BackupDestinationConfig {
     /// Backup when drive is mounted
     #[serde(default = "default_true")]
     pub on_drive_mount: bool,
+
+    /// Retention days (optional, None means keep all backups)
+    #[serde(default)]
+    pub retention_days: Option<u32>,
 }
 
 fn default_true() -> bool {
@@ -151,6 +159,32 @@ fn default_mount_check_interval() -> u64 {
 }
 
 impl BackupConfig {
+    /// Get the default config file path (~/.config/waypoint/backup-config.toml)
+    pub fn default_path() -> anyhow::Result<PathBuf> {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map_err(|_| anyhow::anyhow!("Could not determine home directory"))?;
+
+        let mut path = PathBuf::from(home);
+        path.push(".config");
+        path.push("waypoint");
+        path.push("backup-config.toml");
+
+        Ok(path)
+    }
+
+    /// Load configuration from default path
+    pub fn load_from_default() -> anyhow::Result<Self> {
+        let path = Self::default_path()?;
+        Self::load(&path)
+    }
+
+    /// Save configuration to default path
+    pub fn save_to_default(&self) -> anyhow::Result<()> {
+        let path = Self::default_path()?;
+        self.save(&path)
+    }
+
     /// Load configuration from file
     pub fn load(path: &PathBuf) -> anyhow::Result<Self> {
         if !path.exists() {

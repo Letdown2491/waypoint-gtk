@@ -39,6 +39,7 @@ Other Void Linux tools can talk to the privileged helper over D-Bus to trigger s
 - GTK 4.10+ and libadwaita 1.4+ runtimes
 - Rust 1.70 or newer
 - DBus and Polkit
+- Rsync for snapshot backups to non-Btrfs drives
 - @snapshots subvolume mounted at `/.snapshots`
 
 ## Quick Start

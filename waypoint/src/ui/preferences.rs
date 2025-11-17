@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::subvolume::{SubvolumeInfo, detect_mounted_subvolumes};
+use crate::subvolume::{SubvolumeInfo, detect_mounted_subvolumes, should_allow_snapshot};
 
 // Global state for current subvolume selection (used across dialogs)
 thread_local! {
@@ -35,15 +35,15 @@ pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::Preferenc
 
     // Create preferences page
     let page = adw::PreferencesPage::new();
-    page.set_title("Snapshot Targets");
+    page.set_title("Manual Snapshots");
     page.set_icon_name(Some("drive-harddisk-symbolic"));
 
     // Create group for subvolume selection
     let group = adw::PreferencesGroup::new();
-    group.set_title("Snapshot Targets");
+    group.set_title("Manual Snapshots");
     group.set_description(Some(
-        "Select which Btrfs subvolumes should be included when creating restore points. \
-         The root filesystem (/) is always required.",
+        "Select which Btrfs subvolumes to include when manually creating snapshots. \
+         Scheduled snapshots have separate settings configured in each schedule.",
     ));
 
     // Detect available subvolumes
@@ -64,8 +64,8 @@ pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::Preferenc
         let checkboxes: Vec<(SubvolumeInfo, CheckButton)> = subvolumes
             .into_iter()
             .filter_map(|subvol| {
-                // Filter out @snapshots and @swap - these should never be snapshotted
-                if subvol.subvol_path == "/@snapshots" || subvol.subvol_path == "/@swap" {
+                // Filter out subvolumes that should never be snapshotted
+                if !should_allow_snapshot(&subvol.subvol_path) {
                     return None;
                 }
 
@@ -108,7 +108,7 @@ pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::Preferenc
                     );
                 } else {
                     log::info!("Saved subvolume preferences: {:?}", enabled);
-                    super::dialogs::show_toast(&parent_clone, "Snapshot targets updated");
+                    super::dialogs::show_toast(&parent_clone, "Manual snapshot settings updated");
                 }
             });
         }

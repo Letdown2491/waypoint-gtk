@@ -122,6 +122,16 @@ fn get_subvolume_id(path: &Path) -> Result<u64> {
     anyhow::bail!("Could not find subvolume ID in btrfs output")
 }
 
+/// Check if a subvolume should be allowed for snapshotting
+///
+/// Returns false for subvolumes that should never be snapshotted:
+/// - @snapshots: The snapshot storage location itself
+/// - @swap: Swap space
+pub fn should_allow_snapshot(subvol_path: &str) -> bool {
+    // Filter out snapshots and swap subvolumes
+    subvol_path != "/@snapshots" && subvol_path != "/@swap"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +143,17 @@ mod tests {
 
         let home = SubvolumeInfo::new(PathBuf::from("/home"), "@home".to_string(), 257);
         assert!(home.display_name.contains("/home"));
+    }
+
+    #[test]
+    fn test_should_allow_snapshot() {
+        // Should allow regular subvolumes
+        assert!(should_allow_snapshot("/@"));
+        assert!(should_allow_snapshot("/@home"));
+        assert!(should_allow_snapshot("/@var"));
+
+        // Should NOT allow snapshots and swap
+        assert!(!should_allow_snapshot("/@snapshots"));
+        assert!(!should_allow_snapshot("/@swap"));
     }
 }

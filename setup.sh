@@ -21,6 +21,7 @@ install_dependencies() {
         pkg-config
         polkit-devel
         dbus-devel
+        rsync
     )
 
     if ! command -v xbps-query >/dev/null 2>&1; then

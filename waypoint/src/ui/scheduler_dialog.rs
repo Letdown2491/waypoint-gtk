@@ -4,7 +4,7 @@ use super::schedule_edit_dialog;
 use crate::dbus_client::WaypointHelperClient;
 use adw::prelude::*;
 use gtk::prelude::*;
-use gtk::{Box, Button, Label, Orientation};
+use gtk::{Box, Label, Orientation};
 use libadwaita as adw;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,6 +17,13 @@ pub fn create_scheduler_content_lazy(parent: &adw::ApplicationWindow) -> Box {
 
 fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_load: bool) -> Box {
     let content_box = Box::new(Orientation::Vertical, 24);
+
+    // InfoBar for restart prompt (initially hidden)
+    let info_bar = adw::Banner::new("");
+    info_bar.set_title("Schedules updated. Restart the service to apply changes.");
+    info_bar.set_button_label(Some("Restart Service"));
+    info_bar.set_revealed(false);
+    content_box.append(&info_bar);
 
     // Service status group
     let status_group = adw::PreferencesGroup::new();
@@ -91,16 +98,21 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
         cards_box.append(card.borrow().widget());
 
         // Wire up edit button
-        let parent_clone = parent.clone();
         let card_clone = card.clone();
+        let info_bar_clone = info_bar.clone();
+        let schedule_cards_for_edit = schedule_cards.clone();
+        let parent_for_edit = parent.clone();
 
         card.borrow().edit_button().connect_clicked(move |_| {
             let dialog = schedule_edit_dialog::create_schedule_edit_dialog(
-                &parent_clone,
+                &parent_for_edit,
                 card_clone.borrow().schedule().clone(),
             );
 
             let card_for_close = card_clone.clone();
+            let info_bar_for_close = info_bar_clone.clone();
+            let schedule_cards_for_save = schedule_cards_for_edit.clone();
+            let parent_for_save = parent_for_edit.clone();
 
             dialog.connect_close_request(move |dialog| {
                 // Extract edited schedule from dialog
@@ -113,6 +125,10 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
 
                     // Update the card
                     card_for_close.borrow_mut().set_schedule(edited_schedule);
+
+                    // Auto-save all schedules and show InfoBar
+                    save_all_schedules_from_cards(&parent_for_save, &schedule_cards_for_save);
+                    info_bar_for_close.set_revealed(true);
                 }
                 gtk::glib::Propagation::Proceed
             });
@@ -123,6 +139,9 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
         // Wire up enable switch
         let card_clone = card.clone();
         let schedule_cards_clone = schedule_cards.clone();
+        let info_bar_clone2 = info_bar.clone();
+        let parent_for_toggle = parent.clone();
+
         card.borrow()
             .enable_switch()
             .connect_state_set(move |_, state| {
@@ -137,32 +156,31 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
                     update_schedule_cards_data(&cards_for_update);
                 }
 
+                // Auto-save when toggling schedules
+                drop(card_ref); // Release the borrow before saving
+                save_all_schedules_from_cards(&parent_for_toggle, &schedule_cards_clone);
+                info_bar_clone2.set_revealed(true);
+
                 gtk::glib::Propagation::Proceed
             });
 
         schedule_cards.borrow_mut().push(card);
     }
 
-    // Save button at bottom
-    let button_box = Box::new(Orientation::Horizontal, 12);
-    button_box.set_margin_top(12);
-    button_box.set_margin_bottom(12);
-    button_box.set_margin_start(12);
-    button_box.set_margin_end(12);
-    button_box.set_halign(gtk::Align::End);
+    // Wire up InfoBar restart button
+    let parent_for_restart = parent.clone();
+    let info_bar_for_restart = info_bar.clone();
+    let status_label_for_restart = status_label.clone();
 
-    let save_btn = Button::with_label("Save & Restart Service");
-    save_btn.add_css_class("suggested-action");
-    button_box.append(&save_btn);
+    info_bar.connect_button_clicked(move |_| {
+        // Restart the scheduler service
+        restart_scheduler_service(&parent_for_restart);
 
-    content_box.append(&button_box);
+        // Hide the info bar after restart
+        info_bar_for_restart.set_revealed(false);
 
-    // Save button handler
-    let parent_for_save = parent.clone();
-    let schedule_cards_for_save = schedule_cards.clone();
-
-    save_btn.connect_clicked(move |_| {
-        save_all_schedules_from_cards(&parent_for_save, &schedule_cards_for_save);
+        // Update status label
+        update_service_status(&status_label_for_restart);
     });
 
     // Update status in thread to avoid blocking UI (only if not lazy loading)
@@ -620,12 +638,7 @@ fn save_all_schedules_from_cards(
                 return Err(anyhow::anyhow!(message));
             }
 
-            // Restart service
-            let (success, message) = client.restart_scheduler()?;
-            if !success {
-                return Err(anyhow::anyhow!(message));
-            }
-
+            // Note: Service restart is now separate (via InfoBar button)
             Ok(())
         })();
 
@@ -637,16 +650,54 @@ fn save_all_schedules_from_cards(
         if let Ok(result) = rx.try_recv() {
             match result {
                 Ok(_) => {
-                    dialogs::show_toast(
-                        &parent_clone,
-                        "Scheduler configuration saved and service restarted",
-                    );
+                    // Success - config saved (InfoBar will prompt for restart)
+                    log::info!("Scheduler configuration saved successfully");
                 }
                 Err(e) => {
                     dialogs::show_error(
                         &parent_clone,
                         "Save Failed",
                         &format!("Failed to save scheduler configuration: {}", e),
+                    );
+                }
+            }
+            gtk::glib::ControlFlow::Break
+        } else {
+            gtk::glib::ControlFlow::Continue
+        }
+    });
+}
+
+/// Restart the scheduler service
+fn restart_scheduler_service(parent: &adw::ApplicationWindow) {
+    let parent_clone = parent.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let result = (|| -> anyhow::Result<()> {
+            let client = WaypointHelperClient::new()?;
+            let (success, message) = client.restart_scheduler()?;
+            if !success {
+                return Err(anyhow::anyhow!(message));
+            }
+            Ok(())
+        })();
+
+        let _ = tx.send(result);
+    });
+
+    // Wait for result in main thread
+    gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        if let Ok(result) = rx.try_recv() {
+            match result {
+                Ok(_) => {
+                    dialogs::show_toast(&parent_clone, "Scheduler service restarted");
+                }
+                Err(e) => {
+                    dialogs::show_error(
+                        &parent_clone,
+                        "Restart Failed",
+                        &format!("Failed to restart scheduler service: {}", e),
                     );
                 }
             }

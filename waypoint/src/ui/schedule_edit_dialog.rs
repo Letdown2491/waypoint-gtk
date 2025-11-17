@@ -1,8 +1,11 @@
 use adw::prelude::*;
 use gtk::prelude::*;
-use gtk::{Box, Label, Orientation, SpinButton};
+use gtk::{Box, CheckButton, Label, Orientation, SpinButton};
 use libadwaita as adw;
+use std::path::PathBuf;
 use waypoint_common::{Schedule, ScheduleType};
+
+use crate::subvolume::{detect_mounted_subvolumes, should_allow_snapshot};
 
 /// Create a modal dialog for editing a schedule
 pub fn create_schedule_edit_dialog(
@@ -83,19 +86,45 @@ pub fn create_schedule_edit_dialog(
 
     naming_group.add(&preview_label);
 
-    // Retention group
+    // Subvolumes group
+    let subvolumes_group = adw::PreferencesGroup::new();
+    subvolumes_group.set_title("Subvolumes to Snapshot");
+    subvolumes_group.set_description(Some(
+        "Select which btrfs subvolumes to include in this schedule's snapshots",
+    ));
+    page.add(&subvolumes_group);
+
+    let subvolume_checkboxes = create_subvolume_selection(&schedule);
+    for checkbox_row in &subvolume_checkboxes {
+        subvolumes_group.add(checkbox_row);
+    }
+
+    // Retention group with timeline-based retention
     let retention_group = adw::PreferencesGroup::new();
     retention_group.set_title("Retention Policy");
     retention_group.set_description(Some(
-        "Snapshots will be deleted when either limit is reached",
+        "Timeline-based retention keeps the most recent snapshot in each time period",
     ));
     page.add(&retention_group);
 
+    // Add timeline retention expander
+    let timeline_expander = create_timeline_retention_expander(&schedule);
+    retention_group.add(&timeline_expander);
+
+    // Legacy retention (for backward compatibility, hidden by default)
+    let legacy_group = adw::PreferencesGroup::new();
+    legacy_group.set_title("Legacy Retention (Deprecated)");
+    legacy_group.set_description(Some(
+        "Simple count and age limits. Use timeline retention instead for better control.",
+    ));
+    legacy_group.set_visible(false);
+    page.add(&legacy_group);
+
     let keep_count_row = create_keep_count_row(&schedule);
-    retention_group.add(&keep_count_row);
+    legacy_group.add(&keep_count_row);
 
     let keep_days_row = create_keep_days_row(&schedule);
-    retention_group.add(&keep_days_row);
+    legacy_group.add(&keep_days_row);
 
     dialog.add(&page);
 
@@ -113,6 +142,8 @@ pub fn create_schedule_edit_dialog(
             dialog.set_data("day_of_month_row", day_row);
         }
         dialog.set_data("prefix_row", prefix_row.clone());
+        dialog.set_data("subvolume_checkboxes", subvolume_checkboxes);
+        dialog.set_data("timeline_expander", timeline_expander.clone());
         dialog.set_data("keep_count_row", keep_count_row.clone());
         dialog.set_data("keep_days_row", keep_days_row.clone());
     }
@@ -266,6 +297,138 @@ fn create_keep_days_row(schedule: &Schedule) -> adw::ActionRow {
     row
 }
 
+/// Create timeline retention expander with all time buckets
+fn create_timeline_retention_expander(schedule: &Schedule) -> adw::ExpanderRow {
+    use waypoint_common::TimelineRetention;
+
+    let expander = adw::ExpanderRow::new();
+    expander.set_title("Timeline Retention");
+    expander.set_subtitle("Keep most recent snapshot in each time period");
+
+    // Get current timeline retention or create default
+    let timeline = schedule.timeline_retention.as_ref()
+        .cloned()
+        .unwrap_or_else(|| match schedule.schedule_type {
+            waypoint_common::ScheduleType::Hourly => TimelineRetention::for_hourly(),
+            waypoint_common::ScheduleType::Daily => TimelineRetention::for_daily(),
+            waypoint_common::ScheduleType::Weekly => TimelineRetention::for_weekly(),
+            waypoint_common::ScheduleType::Monthly => TimelineRetention::for_monthly(),
+        });
+
+    // Hourly retention row
+    let hourly_row = create_timeline_bucket_row(
+        "Hourly",
+        "Keep last N hours (0 = disabled)",
+        timeline.hourly_limit
+    );
+    expander.add_row(&hourly_row);
+
+    // Daily retention row
+    let daily_row = create_timeline_bucket_row(
+        "Daily",
+        "Keep last N days (0 = disabled)",
+        timeline.daily_limit
+    );
+    expander.add_row(&daily_row);
+
+    // Weekly retention row
+    let weekly_row = create_timeline_bucket_row(
+        "Weekly",
+        "Keep last N weeks (0 = disabled)",
+        timeline.weekly_limit
+    );
+    expander.add_row(&weekly_row);
+
+    // Monthly retention row
+    let monthly_row = create_timeline_bucket_row(
+        "Monthly",
+        "Keep last N months (0 = disabled)",
+        timeline.monthly_limit
+    );
+    expander.add_row(&monthly_row);
+
+    // Yearly retention row
+    let yearly_row = create_timeline_bucket_row(
+        "Yearly",
+        "Keep last N years (0 = disabled)",
+        timeline.yearly_limit
+    );
+    expander.add_row(&yearly_row);
+
+    // Store rows for later retrieval
+    unsafe {
+        expander.set_data("hourly_row", hourly_row);
+        expander.set_data("daily_row", daily_row);
+        expander.set_data("weekly_row", weekly_row);
+        expander.set_data("monthly_row", monthly_row);
+        expander.set_data("yearly_row", yearly_row);
+    }
+
+    expander
+}
+
+/// Create a single timeline bucket row
+fn create_timeline_bucket_row(title: &str, subtitle: &str, initial_value: u32) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+
+    let spin = SpinButton::with_range(0.0, 365.0, 1.0);
+    spin.set_value(initial_value as f64);
+    spin.set_width_chars(5);
+    spin.set_valign(gtk::Align::Center);
+    row.add_suffix(&spin);
+
+    // Store for later retrieval
+    unsafe {
+        row.set_data("limit_spin", spin);
+    }
+
+    row
+}
+
+/// Create subvolume selection checkboxes
+fn create_subvolume_selection(schedule: &Schedule) -> Vec<adw::ActionRow> {
+    let mut rows = Vec::new();
+
+    // Detect mounted subvolumes
+    let subvolumes = match detect_mounted_subvolumes() {
+        Ok(subs) => subs,
+        Err(e) => {
+            log::warn!("Failed to detect subvolumes: {}", e);
+            return rows; // Return empty if detection fails
+        }
+    };
+
+    for subvol in subvolumes {
+        // Filter out subvolumes that should never be snapshotted
+        if !should_allow_snapshot(&subvol.subvol_path) {
+            continue;
+        }
+
+        let row = adw::ActionRow::new();
+        row.set_title(&subvol.display_name);
+        row.set_subtitle(&format!("Mount point: {} ({})", subvol.mount_point.display(), subvol.subvol_path));
+
+        let checkbox = CheckButton::new();
+        // Check if this subvolume is in the schedule's subvolumes list
+        let is_selected = schedule.subvolumes.contains(&subvol.mount_point);
+        checkbox.set_active(is_selected);
+        checkbox.set_valign(gtk::Align::Center);
+        row.add_suffix(&checkbox);
+
+        // Store mount point in the row for later retrieval
+        unsafe {
+            row.set_data("mount_point", subvol.mount_point.clone());
+            row.set_data("checkbox", checkbox);
+        }
+
+        rows.push(row);
+    }
+
+    rows
+}
+
 /// Update the preview label with current prefix
 fn update_preview_label(label: &Label, prefix: &str) {
     let now = chrono::Local::now();
@@ -296,6 +459,8 @@ pub fn extract_schedule_from_dialog(dialog: &adw::PreferencesWindow) -> Option<S
             description: format!("{:?} snapshot", schedule_type),
             keep_count: 0,
             keep_days: 0,
+            timeline_retention: None, // Will be populated if using timeline retention
+            subvolumes: Vec::new(), // Will be populated from UI
         };
 
         // Extract prefix
@@ -320,6 +485,65 @@ pub fn extract_schedule_from_dialog(dialog: &adw::PreferencesWindow) -> Option<S
             {
                 schedule.keep_days = keep_days_spin.as_ref().value() as u32;
             }
+        }
+
+        // Extract timeline retention
+        if let Some(timeline_expander) = dialog.data::<adw::ExpanderRow>("timeline_expander") {
+            use waypoint_common::TimelineRetention;
+
+            let mut timeline = TimelineRetention::default();
+
+            // Extract hourly limit
+            if let Some(hourly_row) = timeline_expander.as_ref().data::<adw::ActionRow>("hourly_row") {
+                if let Some(spin) = hourly_row.as_ref().data::<SpinButton>("limit_spin") {
+                    timeline.hourly_limit = spin.as_ref().value() as u32;
+                }
+            }
+
+            // Extract daily limit
+            if let Some(daily_row) = timeline_expander.as_ref().data::<adw::ActionRow>("daily_row") {
+                if let Some(spin) = daily_row.as_ref().data::<SpinButton>("limit_spin") {
+                    timeline.daily_limit = spin.as_ref().value() as u32;
+                }
+            }
+
+            // Extract weekly limit
+            if let Some(weekly_row) = timeline_expander.as_ref().data::<adw::ActionRow>("weekly_row") {
+                if let Some(spin) = weekly_row.as_ref().data::<SpinButton>("limit_spin") {
+                    timeline.weekly_limit = spin.as_ref().value() as u32;
+                }
+            }
+
+            // Extract monthly limit
+            if let Some(monthly_row) = timeline_expander.as_ref().data::<adw::ActionRow>("monthly_row") {
+                if let Some(spin) = monthly_row.as_ref().data::<SpinButton>("limit_spin") {
+                    timeline.monthly_limit = spin.as_ref().value() as u32;
+                }
+            }
+
+            // Extract yearly limit
+            if let Some(yearly_row) = timeline_expander.as_ref().data::<adw::ActionRow>("yearly_row") {
+                if let Some(spin) = yearly_row.as_ref().data::<SpinButton>("limit_spin") {
+                    timeline.yearly_limit = spin.as_ref().value() as u32;
+                }
+            }
+
+            schedule.timeline_retention = Some(timeline);
+        }
+
+        // Extract subvolume selections
+        if let Some(checkbox_rows) = dialog.data::<Vec<adw::ActionRow>>("subvolume_checkboxes") {
+            let mut selected_subvolumes = Vec::new();
+            for row in checkbox_rows.as_ref() {
+                if let Some(checkbox) = row.data::<CheckButton>("checkbox") {
+                    if checkbox.as_ref().is_active() {
+                        if let Some(mount_point) = row.data::<PathBuf>("mount_point") {
+                            selected_subvolumes.push(mount_point.as_ref().clone());
+                        }
+                    }
+                }
+            }
+            schedule.subvolumes = selected_subvolumes;
         }
 
         // Extract time (for non-hourly)

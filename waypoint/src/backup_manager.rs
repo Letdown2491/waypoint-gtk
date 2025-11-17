@@ -14,6 +14,7 @@ use waypoint_common::{BackupConfig, BackupDestinationConfig, BackupFilter, Waypo
 use crate::dbus_client::WaypointHelperClient;
 
 /// Manages automatic backups
+#[derive(Clone)]
 pub struct BackupManager {
     config: Arc<Mutex<BackupConfig>>,
     config_path: PathBuf,

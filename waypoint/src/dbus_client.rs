@@ -753,18 +753,43 @@ impl WaypointHelperClient {
 
     /// Scan for available backup destinations
     pub fn scan_backup_destinations(&self) -> Result<(bool, String)> {
-        let proxy = zbus::blocking::Proxy::new(
-            &self.connection,
-            DBUS_SERVICE_NAME,
-            DBUS_OBJECT_PATH,
-            DBUS_INTERFACE_NAME,
-        )?;
+        // Use a channel and thread with timeout to prevent indefinite blocking
+        let (tx, rx) = std::sync::mpsc::channel();
 
-        let result: (bool, String) = proxy
-            .call("ScanBackupDestinations", &())
-            .context("Failed to call ScanBackupDestinations")?;
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(bool, String)> {
+                let connection = BlockingConnection::system()
+                    .context("Failed to connect to system bus")?;
 
-        Ok(result)
+                let proxy = zbus::blocking::Proxy::new(
+                    &connection,
+                    DBUS_SERVICE_NAME,
+                    DBUS_OBJECT_PATH,
+                    DBUS_INTERFACE_NAME,
+                )?;
+
+                let result: (bool, String) = proxy
+                    .call("ScanBackupDestinations", &())
+                    .context("Failed to call ScanBackupDestinations")?;
+
+                Ok(result)
+            })();
+
+            let _ = tx.send(result);
+        });
+
+        // Wait for result with timeout (5 seconds)
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                Err(anyhow::anyhow!(
+                    "Scan timed out after 5 seconds. Is waypoint-helper service running?"
+                ))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(anyhow::anyhow!("Scan thread disconnected unexpectedly"))
+            }
+        }
     }
 
     /// Backup a snapshot to an external drive

@@ -72,12 +72,12 @@ pub fn show_preferences_window(
         if let Some(row) = row {
             let index = row.index();
             let page_name = match index {
-                0 => "subvolumes",
-                1 => "exclusions",
-                2 => "quotas",
-                3 => "scheduling",
+                0 => "scheduling",
+                1 => "subvolumes",
+                2 => "exclusions",
+                3 => "quotas",
                 4 => "backups",
-                _ => "subvolumes",
+                _ => "scheduling",
             };
 
             // Lazy load scheduling data when first viewed
@@ -126,10 +126,10 @@ fn create_sidebar() -> ListBox {
     sidebar.add_css_class("navigation-sidebar");
 
     let items = [
-        ("Snapshot Targets", "folder-symbolic"),
+        ("Scheduled Snapshots", "preferences-system-time-symbolic"),
+        ("Manual Snapshots", "folder-symbolic"),
         ("Exclusions", "edit-delete-symbolic"),
         ("Quotas", "drive-harddisk-symbolic"),
-        ("Scheduling", "preferences-system-time-symbolic"),
         ("Backups", "media-removable-symbolic"),
     ];
 

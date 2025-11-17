@@ -254,33 +254,6 @@ fn calculate_next_monthly(
     Ok(Duration::from_secs(seconds as u64))
 }
 
-/// Load subvolumes configuration from user config
-fn load_subvolumes_config() -> Result<Vec<String>> {
-    use std::fs;
-    use std::path::PathBuf;
-
-    // Try user config first (~/.config/waypoint/subvolumes.json)
-    if let Some(home) = std::env::var_os("HOME") {
-        let user_config = PathBuf::from(home)
-            .join(".config/waypoint/subvolumes.json");
-
-        if user_config.exists() {
-            let content = fs::read_to_string(&user_config)
-                .context("Failed to read subvolumes config")?;
-            let subvolumes: Vec<String> = serde_json::from_str(&content)
-                .context("Failed to parse subvolumes config")?;
-
-            if !subvolumes.is_empty() {
-                log::info!("Loaded subvolumes from user config: {:?}", subvolumes);
-                return Ok(subvolumes);
-            }
-        }
-    }
-
-    // Fall back to just root if no config found
-    log::warn!("No subvolumes config found, defaulting to [/]");
-    Ok(vec!["/".to_string()])
-}
 
 /// Create a snapshot for the given schedule
 fn create_snapshot(schedule: &Schedule) -> Result<()> {
@@ -290,8 +263,16 @@ fn create_snapshot(schedule: &Schedule) -> Result<()> {
 
     log::info!("Creating scheduled snapshot: {}", snapshot_name);
 
-    // Load subvolumes configuration
-    let subvolumes = load_subvolumes_config()?;
+    // Use schedule-specific subvolumes
+    // If empty, default to root filesystem only
+    let subvolumes: Vec<String> = if !schedule.subvolumes.is_empty() {
+        schedule.subvolumes.iter()
+            .filter_map(|p| p.to_str().map(|s| s.to_string()))
+            .collect()
+    } else {
+        log::warn!("Schedule '{}' has no subvolumes configured, defaulting to [/]", schedule.prefix);
+        vec!["/".to_string()]
+    };
     let subvolumes_arg = subvolumes.join(",");
 
     // Call waypoint-cli to create snapshot with subvolumes

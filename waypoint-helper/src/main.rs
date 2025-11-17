@@ -602,6 +602,7 @@ impl WaypointHelper {
         use std::collections::HashSet;
         use waypoint_common::WaypointConfig;
         use waypoint_common::schedules::SchedulesConfig;
+        use waypoint_common::retention::{apply_timeline_retention, SnapshotForRetention};
 
         let config = WaypointConfig::new();
         let snapshots = btrfs::list_snapshots().context("Failed to list snapshots")?;
@@ -643,39 +644,63 @@ impl WaypointHelper {
                     continue;
                 }
 
-                let mut matching: Vec<_> = snapshots
+                let matching: Vec<_> = snapshots
                     .iter()
                     .filter(|s| s.name.starts_with(&schedule.prefix))
                     .collect();
 
-                // Sort by timestamp (oldest first)
-                matching.sort_by_key(|s| s.timestamp);
-
                 let now = chrono::Utc::now();
 
-                for (idx, snapshot) in matching.iter().enumerate() {
-                    let mut should_delete = false;
+                // Use timeline retention if available, otherwise fall back to legacy keep_count/keep_days
+                let delete_list = if let Some(timeline) = &schedule.timeline_retention {
+                    // Convert to SnapshotForRetention format
+                    let retention_snapshots: Vec<SnapshotForRetention> = matching
+                        .iter()
+                        .map(|s| SnapshotForRetention {
+                            name: s.name.clone(),
+                            timestamp: s.timestamp,
+                        })
+                        .collect();
 
-                    // Apply keep_count
-                    if schedule.keep_count > 0 {
-                        let position_from_end = matching.len() - idx;
-                        if position_from_end > schedule.keep_count as usize {
-                            should_delete = true;
+                    // Apply timeline-based retention
+                    apply_timeline_retention(&retention_snapshots, timeline, now)
+                } else {
+                    // Legacy retention: use keep_count and keep_days
+                    let mut legacy_delete = Vec::new();
+                    let mut matching_sorted = matching.clone();
+                    matching_sorted.sort_by_key(|s| s.timestamp);
+
+                    for (idx, snapshot) in matching_sorted.iter().enumerate() {
+                        let mut should_delete = false;
+
+                        // Apply keep_count
+                        if schedule.keep_count > 0 {
+                            let position_from_end = matching_sorted.len() - idx;
+                            if position_from_end > schedule.keep_count as usize {
+                                should_delete = true;
+                            }
+                        }
+
+                        // Apply keep_days
+                        if schedule.keep_days > 0 && !should_delete {
+                            let age = now.signed_duration_since(snapshot.timestamp);
+                            let max_age = chrono::Duration::days(schedule.keep_days as i64);
+                            if age > max_age {
+                                should_delete = true;
+                            }
+                        }
+
+                        if should_delete {
+                            legacy_delete.push(snapshot.name.clone());
                         }
                     }
+                    legacy_delete
+                };
 
-                    // Apply keep_days
-                    if schedule.keep_days > 0 && !should_delete {
-                        let age = now.signed_duration_since(snapshot.timestamp);
-                        let max_age = chrono::Duration::days(schedule.keep_days as i64);
-                        if age > max_age {
-                            should_delete = true;
-                        }
-                    }
-
-                    // Never delete favorited/pinned snapshots
-                    if should_delete && !favorited_ids.contains(&snapshot.name) {
-                        all_to_delete.push(snapshot.name.clone());
+                // Filter out favorited snapshots
+                for name in delete_list {
+                    if !favorited_ids.contains(&name) {
+                        all_to_delete.push(name);
                     }
                 }
             }
