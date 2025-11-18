@@ -102,6 +102,14 @@ Other Void Linux tools can talk to the privileged helper over D-Bus to trigger s
 - Rsync for snapshot backups to non-Btrfs drives
 - @snapshots subvolume mounted at `/.snapshots`
 
+## System Install
+
+```sh
+./setup.sh install
+```
+
+The helper script builds the release binaries, installs them into `/usr/bin`, registers the desktop entry, D-Bus service, and Polkit policies. Use `sudo ./setup.sh uninstall` to remove those assets.
+
 ## Quick Start
 
 ```sh
@@ -115,14 +123,6 @@ cargo build --release
 ```
 
 The optimized binaries are written to `target/release/`. Use `cargo run --release` to execute the release build directly after compiling.
-
-## System Install
-
-```sh
-./setup.sh install
-```
-
-The helper script builds the release binaries, installs them into `/usr/bin`, registers the desktop entry, D-Bus service, and Polkit policies. Use `sudo ./setup.sh uninstall` to remove those assets.
 
 ## Command Line
 
