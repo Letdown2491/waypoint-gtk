@@ -8,7 +8,7 @@ Waypoint exposes a privileged D-Bus helper so GUI applications, schedulers, or e
 - **Service name**: `tech.geektoshi.waypoint`
 - **Object path**: `/tech/geektoshi/waypoint`
 - **Interface**: `tech.geektoshi.waypoint.Helper`
-- **Activation**: systemd/runit launches `/usr/bin/waypoint-helper` on demand through `data/dbus-1/tech.geektoshi.waypoint.service`
+- **Activation**: D-Bus launches `/usr/bin/waypoint-helper` on demand via `data/dbus-1/tech.geektoshi.waypoint.service`
 
 The helper always runs as root and enforces authorization by delegating to Polkit. Callers connect over the system bus (`zbus::ConnectionBuilder::system()` in `waypoint-helper/src/main.rs`) and the service stays idle until a client invokes it.
 
@@ -27,11 +27,20 @@ Read-only helpers such as `ListSnapshots`, `VerifySnapshot`, `GetSchedulerStatus
 
 ## Signals
 
-The interface currently emits one signal:
+The interface emits the following signals:
 
 - `SnapshotCreated(string snapshot_name, string created_by)`
   - Fired when `CreateSnapshot` completes successfully.
-  - `created_by` is either `"gui"` or `"scheduler"` depending on the caller’s bus name.
+  - `created_by` is either `"gui"` or `"scheduler"` depending on the caller's bus name.
+
+- `BackupProgress(string snapshot_id, string destination_uuid, uint64 bytes_transferred, uint64 total_bytes, uint64 speed_bytes_per_sec, string stage)`
+  - Fired during backup operations to report progress.
+  - `snapshot_id`: Name of the snapshot being backed up
+  - `destination_uuid`: UUID of the backup destination drive
+  - `bytes_transferred`: Number of bytes transferred so far
+  - `total_bytes`: Total bytes to transfer
+  - `speed_bytes_per_sec`: Current transfer speed in bytes per second
+  - `stage`: Current operation stage, one of: `"preparing"`, `"transferring"`, `"verifying"`, or `"complete"`
 
 ## Methods
 
@@ -48,10 +57,13 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
 - **RestoreSnapshot** `(s name) → (b, s)`  
   Configures the system to boot into a snapshot, automatically creating a safety snapshot first. Requires `restore-snapshot`. A reboot is mandatory for changes to apply.
 
-- **ListSnapshots** `() → s json`  
+- **ListSnapshots** `() → s json`
   Returns a JSON array of `SnapshotInfo` objects. No authentication required.
 
-- **VerifySnapshot** `(s name) → s json`  
+- **GetSnapshotSizes** `(as snapshot_names) → s json`
+  Returns a JSON object mapping snapshot names to their sizes in bytes. Efficiently retrieves sizes for multiple snapshots in a single call. No authentication required.
+
+- **VerifySnapshot** `(s name) → s json`
   Returns a `VerificationResult` JSON document summarizing any integrity errors or warnings. Read-only.
 
 - **PreviewRestore** `(s name) → (b success, s json)`  
@@ -112,10 +124,16 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
 - **BackupSnapshot** `(s snapshot_path, s destination_mount, s parent_snapshot) → (b success, s result, t size_bytes)`  
   Runs `btrfs send|receive` into `<destination>/waypoint-backups`. `parent_snapshot` may be empty for full backups. On success `result` is the new backup path; on failure it contains an error string. Requires `create-snapshot`.
 
-- **ListBackups** `(s destination_mount) → (b, s json)`  
+- **ListBackups** `(s destination_mount) → (b, s json)`
   Returns a JSON array of absolute subvolume paths below `<destination>/waypoint-backups`. Requires `create-snapshot`.
 
-- **RestoreFromBackup** `(s backup_path, s snapshots_dir) → (b, s)`  
+- **GetDriveStats** `(s destination_mount) → (b, s json)`
+  Returns a `DriveStats` JSON document with drive health statistics including total/used/available space, backup count, and timestamp information. No authentication required.
+
+- **VerifyBackup** `(s snapshot_path, s destination_mount, s snapshot_id) → (b, s json)`
+  Verifies backup integrity by comparing file counts, sizes, and optionally checksums. Returns a `BackupVerificationResult` JSON document. No authentication required.
+
+- **RestoreFromBackup** `(s backup_path, s snapshots_dir) → (b, s)`
   Receives a backup into the live snapshots directory. Requires `restore-snapshot`.
 
 ### Miscellaneous
@@ -178,6 +196,8 @@ Waypoint serializes several structs directly; consumers should deserialize them 
 }
 ```
 
+Note: `limit` is optional and may be `null` if no quota limit is configured.
+
 - **BackupDestination** (from `waypoint-helper/src/backup.rs`)
 
 ```json
@@ -185,9 +205,43 @@ Waypoint serializes several structs directly; consumers should deserialize them 
   "mount_point": "/media/usb",
   "label": "usb-disk",
   "drive_type": "removable",
-  "uuid": "1234-ABCD"
+  "uuid": "1234-ABCD",
+  "fstype": "btrfs"
 }
 ```
+
+Note: `drive_type` can be "removable", "network", or "internal". The `uuid` field may be `null` for some filesystem types.
+
+- **DriveStats** (from `waypoint-helper/src/backup.rs`)
+
+```json
+{
+  "total_bytes": 1000000000000,
+  "used_bytes": 500000000000,
+  "available_bytes": 500000000000,
+  "backup_count": 5,
+  "last_backup_timestamp": 1737206400,
+  "oldest_backup_timestamp": 1734614400
+}
+```
+
+Note: Timestamp fields (`last_backup_timestamp`, `oldest_backup_timestamp`) are Unix timestamps in seconds and may be `null` if no backups exist.
+
+- **BackupVerificationResult** (from `waypoint-helper/src/backup.rs`)
+
+```json
+{
+  "success": true,
+  "message": "Backup verified successfully",
+  "details": [
+    "File count matches: 1234 files",
+    "Size comparison passed",
+    "Checksum validation: 50 files sampled, all valid"
+  ]
+}
+```
+
+Note: This is distinct from the snapshot `VerificationResult`. The `details` array contains human-readable verification steps performed.
 
 Other methods that return JSON (e.g., `ListBackups`, `CompareSnapshots`) serialize either arrays of strings or method-specific structures; refer to the helper sources if you need the exact schema.
 

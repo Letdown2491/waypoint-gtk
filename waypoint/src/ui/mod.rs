@@ -27,6 +27,7 @@ use crate::btrfs;
 use crate::dbus_client::WaypointHelperClient;
 use crate::snapshot::{Snapshot, SnapshotManager};
 use crate::user_preferences::UserPreferencesManager;
+use waypoint_common::BackupConfig;
 use adw::prelude::*;
 use anyhow::Context;
 use gtk::glib;
@@ -77,7 +78,10 @@ pub struct MainWindow {
 }
 
 impl MainWindow {
-    pub fn new(app: &Application) -> adw::ApplicationWindow {
+    pub fn new(
+        app: &Application,
+        backup_progress_rx: std::sync::mpsc::Receiver<crate::signal_listener::BackupProgressEvent>,
+    ) -> adw::ApplicationWindow {
         let snapshot_manager = match SnapshotManager::new() {
             Ok(sm) => Rc::new(RefCell::new(sm)),
             Err(e) => {
@@ -141,6 +145,19 @@ impl MainWindow {
                 ))
             }
         };
+
+        // Start listening for backup progress events
+        let bm_clone = backup_manager.clone();
+        gtk::glib::spawn_future_local(async move {
+            loop {
+                if let Ok(event) = backup_progress_rx.try_recv() {
+                    bm_clone.borrow().update_progress(event);
+                }
+
+                // Sleep briefly to avoid busy waiting
+                gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
+            }
+        });
 
         // Create header bar
         let header = adw::HeaderBar::new();
@@ -398,6 +415,15 @@ impl MainWindow {
         let search_entry_for_shortcut = search_entry.clone();
         let search_btn_for_shortcut = search_btn.clone();
 
+        let create_btn_for_shortcut = create_btn.clone();
+        let win_for_prefs_shortcut = window.clone();
+        let bm_for_prefs_shortcut = backup_manager.clone();
+        let list_for_refresh_shortcut = snapshot_list.clone();
+        let sm_for_refresh_shortcut = snapshot_manager.clone();
+        let up_for_refresh_shortcut = user_prefs_manager.clone();
+        let bm_for_refresh_shortcut = backup_manager.clone();
+        let compare_for_refresh_shortcut = compare_btn.clone();
+
         window_key_controller.connect_key_pressed(move |_, key, _code, modifier| {
             // Check for Ctrl+F (Cmd+F on macOS)
             let is_ctrl_f =
@@ -408,10 +434,60 @@ impl MainWindow {
                 revealer_for_shortcut.set_reveal_child(true);
                 search_btn_for_shortcut.add_css_class("suggested-action");
                 search_entry_for_shortcut.grab_focus();
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
+                return glib::Propagation::Stop;
             }
+
+            // Ctrl+N: Create new snapshot
+            let is_ctrl_n =
+                key == gtk::gdk::Key::n && modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+
+            if is_ctrl_n {
+                create_btn_for_shortcut.emit_clicked();
+                return glib::Propagation::Stop;
+            }
+
+            // Ctrl+, (comma): Open preferences
+            let is_ctrl_comma =
+                key == gtk::gdk::Key::comma && modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+
+            if is_ctrl_comma {
+                Self::show_preferences_dialog(&win_for_prefs_shortcut, &bm_for_prefs_shortcut);
+                return glib::Propagation::Stop;
+            }
+
+            // F5 or Ctrl+R: Refresh snapshot list
+            let is_f5 = key == gtk::gdk::Key::F5;
+            let is_ctrl_r =
+                key == gtk::gdk::Key::r && modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+
+            if is_f5 || is_ctrl_r {
+                let sm_clone = sm_for_refresh_shortcut.clone();
+                let up_clone = up_for_refresh_shortcut.clone();
+                let bm_clone = bm_for_refresh_shortcut.clone();
+                let list_clone = list_for_refresh_shortcut.clone();
+                let compare_clone = compare_for_refresh_shortcut.clone();
+                let win_clone_for_refresh = win_for_prefs_shortcut.clone();
+
+                snapshot_list::refresh_snapshot_list_internal(
+                    &win_clone_for_refresh,
+                    &sm_clone,
+                    &up_clone,
+                    &bm_clone,
+                    &list_clone,
+                    &compare_clone,
+                    None,  // No search filter
+                    None,  // No date filter
+                    None,  // No match label
+                    move |_id, _action| {
+                        // Empty callback - action handlers are set up elsewhere
+                    },
+                    None,  // No create button for refresh
+                );
+
+                return glib::Propagation::Stop;
+            }
+
+            glib::Propagation::Proceed
         });
         window.add_controller(window_key_controller);
 
@@ -1817,7 +1893,7 @@ impl MainWindow {
         let client = WaypointHelperClient::new()?;
 
         // Get snapshot path from config
-        let config = waypoint_common::WaypointConfig::default();
+        let config = waypoint_common::WaypointConfig::new();
         let snapshot_path = format!("{}/{}", config.snapshot_dir.display(), snapshot_name);
 
         let (success, result, _size_bytes) = client.backup_snapshot(
@@ -2014,6 +2090,10 @@ impl MainWindow {
 
                 match result {
                     Ok(destinations) => {
+                        // Load saved config to get nicknames
+                        let saved_config = BackupConfig::load(&waypoint_common::WaypointConfig::new().backup_config)
+                            .unwrap_or_default();
+
                         if destinations.is_empty() {
                             let empty_row = adw::ActionRow::new();
                             empty_row.set_title("No external drives found");
@@ -2024,7 +2104,31 @@ impl MainWindow {
                                 .push(empty_row.clone().upcast::<gtk::Widget>());
                         } else {
                             for dest in &destinations {
+                                // Update last_mount_point if drive is at a new location
+                                if let Some(ref uuid) = dest.uuid {
+                                    if let Some(saved_dest) = saved_config.destinations.get(uuid) {
+                                        // If mount point changed, log it (config update happens in preferences)
+                                        if saved_dest.last_mount_point != dest.mount_point {
+                                            log::info!(
+                                                "Drive {} detected at new mount point: {}",
+                                                dest.label,
+                                                dest.mount_point
+                                            );
+                                        }
+                                    }
+                                }
+
                                 let row = adw::ActionRow::new();
+
+                                // Get display name (nickname or label)
+                                let display_name = if let Some(ref uuid) = dest.uuid {
+                                    saved_config.destinations
+                                        .get(uuid)
+                                        .map(|d| d.display_name().to_string())
+                                        .unwrap_or_else(|| dest.label.clone())
+                                } else {
+                                    dest.label.clone()
+                                };
 
                                 // Add drive type badge to title
                                 let type_badge = match dest.drive_type {
@@ -2032,7 +2136,7 @@ impl MainWindow {
                                     DriveType::Network => " (Network)",
                                     DriveType::Internal => " (Internal)",
                                 };
-                                row.set_title(&format!("{}{}", dest.label, type_badge));
+                                row.set_title(&format!("{}{}", display_name, type_badge));
                                 row.set_subtitle(&dest.mount_point);
 
                                 // Add icon based on drive type
@@ -3046,170 +3150,286 @@ impl MainWindow {
         snapshot_basename: &str,
         preview: crate::dbus_client::RestorePreview,
     ) {
-        // Build comprehensive preview message
-        let mut preview_parts = Vec::new();
+        // Create custom window for better preview
+        let dialog = adw::Window::new();
+        dialog.set_title(Some("Restore System Preview"));
+        dialog.set_modal(true);
+        dialog.set_transient_for(Some(window));
+        dialog.set_default_size(700, 600);
 
-        // Header info
-        preview_parts.push(format!(
-            "📸 Snapshot: {}\n📅 Created: {}",
-            preview.snapshot_name, preview.snapshot_timestamp
-        ));
+        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
+        // Header bar
+        let header = adw::HeaderBar::new();
+        let cancel_button = gtk::Button::with_label("Cancel");
+        header.pack_start(&cancel_button);
+
+        let restore_button = gtk::Button::with_label("Restore and Reboot");
+        restore_button.add_css_class("destructive-action");
+        header.pack_end(&restore_button);
+
+        content_box.append(&header);
+
+        // Scrolled content area
+        let scrolled = gtk::ScrolledWindow::new();
+        scrolled.set_vexpand(true);
+        scrolled.set_hexpand(true);
+
+        let clamp = adw::Clamp::new();
+        clamp.set_maximum_size(600);
+
+        let inner_box = gtk::Box::new(gtk::Orientation::Vertical, 18);
+        inner_box.set_margin_top(24);
+        inner_box.set_margin_bottom(24);
+        inner_box.set_margin_start(18);
+        inner_box.set_margin_end(18);
+
+        // Snapshot info banner
+        let info_banner = adw::Banner::new(&format!("Snapshot: {}", preview.snapshot_name));
+        info_banner.set_title(&format!("Created: {}", preview.snapshot_timestamp));
         if let Some(desc) = &preview.snapshot_description {
-            preview_parts.push(format!("📝 {}", desc));
+            info_banner.set_button_label(Some(desc));
         }
+        info_banner.set_revealed(true);
+        inner_box.append(&info_banner);
 
-        // Kernel changes
+        // Kernel changes group
+        let kernel_group = adw::PreferencesGroup::new();
+        kernel_group.set_title("System Changes");
+
         let kernel_current = preview.current_kernel.as_deref().unwrap_or("unknown");
         let kernel_snapshot = preview.snapshot_kernel.as_deref().unwrap_or("unknown");
+
+        let kernel_row = adw::ActionRow::new();
+        kernel_row.set_title("Kernel Version");
+
         if kernel_current != kernel_snapshot {
-            preview_parts.push(format!(
-                "\n🐧 Kernel: {} → {}",
-                kernel_current, kernel_snapshot
-            ));
+            kernel_row.set_subtitle(&format!("{} → {}", kernel_current, kernel_snapshot));
+            let kernel_icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+            kernel_icon.add_css_class("warning");
+            kernel_row.add_prefix(&kernel_icon);
         } else {
-            preview_parts.push(format!("\n🐧 Kernel: {} (no change)", kernel_current));
+            kernel_row.set_subtitle(&format!("{} (no change)", kernel_current));
+            let kernel_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            kernel_icon.add_css_class("success");
+            kernel_row.add_prefix(&kernel_icon);
         }
 
-        // Package changes summary
-        preview_parts.push(format!(
-            "\n📦 Package Changes: {}",
-            preview.total_package_changes
-        ));
+        kernel_group.add(&kernel_row);
+        inner_box.append(&kernel_group);
 
+        // Package changes summary with visual indicators
+        let pkg_group = adw::PreferencesGroup::new();
+        pkg_group.set_title("Package Changes");
+        pkg_group.set_description(Some(&format!("{} total changes", preview.total_package_changes)));
+
+        // Packages to add
         if !preview.packages_to_add.is_empty() {
-            preview_parts.push(format!("  ➕ {} to install", preview.packages_to_add.len()));
+            let add_row = adw::ExpanderRow::new();
+            add_row.set_title(&format!("{} packages to install", preview.packages_to_add.len()));
+            let add_icon = gtk::Image::from_icon_name("list-add-symbolic");
+            add_icon.add_css_class("success");
+            add_row.add_prefix(&add_icon);
+
             // Show first few examples
-            for pkg in preview.packages_to_add.iter().take(3) {
-                let version = pkg.snapshot_version.as_deref().unwrap_or("unknown");
-                preview_parts.push(format!("     • {} ({})", pkg.name, version));
+            for pkg in preview.packages_to_add.iter().take(5) {
+                let pkg_row = adw::ActionRow::new();
+                pkg_row.set_title(&pkg.name);
+                if let Some(ref version) = pkg.snapshot_version {
+                    pkg_row.set_subtitle(version);
+                }
+                add_row.add_row(&pkg_row);
             }
-            if preview.packages_to_add.len() > 3 {
-                preview_parts.push(format!(
-                    "     • ... and {} more",
-                    preview.packages_to_add.len() - 3
-                ));
+
+            if preview.packages_to_add.len() > 5 {
+                let more_row = adw::ActionRow::new();
+                more_row.set_title(&format!("... and {} more", preview.packages_to_add.len() - 5));
+                more_row.add_css_class("dim-label");
+                add_row.add_row(&more_row);
             }
+
+            pkg_group.add(&add_row);
         }
+
+        // Packages to remove
         if !preview.packages_to_remove.is_empty() {
-            preview_parts.push(format!(
-                "  ➖ {} to remove",
-                preview.packages_to_remove.len()
-            ));
-            for pkg in preview.packages_to_remove.iter().take(3) {
-                let version = pkg.current_version.as_deref().unwrap_or("unknown");
-                preview_parts.push(format!("     • {} ({})", pkg.name, version));
+            let remove_row = adw::ExpanderRow::new();
+            remove_row.set_title(&format!("{} packages to remove", preview.packages_to_remove.len()));
+            let remove_icon = gtk::Image::from_icon_name("list-remove-symbolic");
+            remove_icon.add_css_class("error");
+            remove_row.add_prefix(&remove_icon);
+
+            for pkg in preview.packages_to_remove.iter().take(5) {
+                let pkg_row = adw::ActionRow::new();
+                pkg_row.set_title(&pkg.name);
+                if let Some(ref version) = pkg.current_version {
+                    pkg_row.set_subtitle(version);
+                }
+                remove_row.add_row(&pkg_row);
             }
-            if preview.packages_to_remove.len() > 3 {
-                preview_parts.push(format!(
-                    "     • ... and {} more",
-                    preview.packages_to_remove.len() - 3
-                ));
+
+            if preview.packages_to_remove.len() > 5 {
+                let more_row = adw::ActionRow::new();
+                more_row.set_title(&format!("... and {} more", preview.packages_to_remove.len() - 5));
+                more_row.add_css_class("dim-label");
+                remove_row.add_row(&more_row);
             }
+
+            pkg_group.add(&remove_row);
         }
+
+        // Packages to upgrade
         if !preview.packages_to_upgrade.is_empty() {
-            preview_parts.push(format!(
-                "  ⬆️  {} to upgrade",
-                preview.packages_to_upgrade.len()
-            ));
-            for pkg in preview.packages_to_upgrade.iter().take(3) {
+            let upgrade_row = adw::ExpanderRow::new();
+            upgrade_row.set_title(&format!("{} packages to upgrade", preview.packages_to_upgrade.len()));
+            let upgrade_icon = gtk::Image::from_icon_name("go-up-symbolic");
+            upgrade_icon.add_css_class("accent");
+            upgrade_row.add_prefix(&upgrade_icon);
+
+            for pkg in preview.packages_to_upgrade.iter().take(5) {
+                let pkg_row = adw::ActionRow::new();
+                pkg_row.set_title(&pkg.name);
                 let curr = pkg.current_version.as_deref().unwrap_or("?");
                 let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
-                preview_parts.push(format!("     • {} ({} → {})", pkg.name, curr, snap));
+                pkg_row.set_subtitle(&format!("{} → {}", curr, snap));
+                upgrade_row.add_row(&pkg_row);
             }
-            if preview.packages_to_upgrade.len() > 3 {
-                preview_parts.push(format!(
-                    "     • ... and {} more",
-                    preview.packages_to_upgrade.len() - 3
-                ));
+
+            if preview.packages_to_upgrade.len() > 5 {
+                let more_row = adw::ActionRow::new();
+                more_row.set_title(&format!("... and {} more", preview.packages_to_upgrade.len() - 5));
+                more_row.add_css_class("dim-label");
+                upgrade_row.add_row(&more_row);
             }
+
+            pkg_group.add(&upgrade_row);
         }
+
+        // Packages to downgrade
         if !preview.packages_to_downgrade.is_empty() {
-            preview_parts.push(format!(
-                "  ⬇️  {} to downgrade",
-                preview.packages_to_downgrade.len()
-            ));
-            for pkg in preview.packages_to_downgrade.iter().take(3) {
+            let downgrade_row = adw::ExpanderRow::new();
+            downgrade_row.set_title(&format!("{} packages to downgrade", preview.packages_to_downgrade.len()));
+            let downgrade_icon = gtk::Image::from_icon_name("go-down-symbolic");
+            downgrade_icon.add_css_class("warning");
+            downgrade_row.add_prefix(&downgrade_icon);
+
+            for pkg in preview.packages_to_downgrade.iter().take(5) {
+                let pkg_row = adw::ActionRow::new();
+                pkg_row.set_title(&pkg.name);
                 let curr = pkg.current_version.as_deref().unwrap_or("?");
                 let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
-                preview_parts.push(format!("     • {} ({} → {})", pkg.name, curr, snap));
+                pkg_row.set_subtitle(&format!("{} → {}", curr, snap));
+                downgrade_row.add_row(&pkg_row);
             }
-            if preview.packages_to_downgrade.len() > 3 {
-                preview_parts.push(format!(
-                    "     • ... and {} more",
-                    preview.packages_to_downgrade.len() - 3
-                ));
+
+            if preview.packages_to_downgrade.len() > 5 {
+                let more_row = adw::ActionRow::new();
+                more_row.set_title(&format!("... and {} more", preview.packages_to_downgrade.len() - 5));
+                more_row.add_css_class("dim-label");
+                downgrade_row.add_row(&more_row);
             }
+
+            pkg_group.add(&downgrade_row);
         }
 
-        // Affected subvolumes
+        inner_box.append(&pkg_group);
+
+        // Affected subvolumes section
         if !preview.affected_subvolumes.is_empty() {
-            preview_parts.push(format!(
-                "\n💾 Affected: {}",
-                preview.affected_subvolumes.join(", ")
-            ));
+            let subvol_group = adw::PreferencesGroup::new();
+            subvol_group.set_title("Affected Subvolumes");
+            subvol_group.set_description(Some("The following filesystem subvolumes will be restored"));
+
+            for subvol in &preview.affected_subvolumes {
+                let subvol_row = adw::ActionRow::new();
+                subvol_row.set_title(subvol);
+                let subvol_icon = gtk::Image::from_icon_name("drive-harddisk-symbolic");
+                subvol_icon.add_css_class("dim-label");
+                subvol_row.add_prefix(&subvol_icon);
+                subvol_group.add(&subvol_row);
+            }
+
+            inner_box.append(&subvol_group);
         }
 
-        // Warning footer
-        preview_parts.push(
-            "\n⚠️  WARNING:\n\
-            • All changes after this snapshot will be LOST\n\
-            • System will require a REBOOT\n\
-            • A backup snapshot will be created first"
-                .to_string(),
-        );
+        // Warning section
+        let warning_group = adw::PreferencesGroup::new();
+        warning_group.set_title("Important");
 
-        let preview_message = preview_parts.join("\n");
+        let warning_row1 = adw::ActionRow::new();
+        warning_row1.set_title("All changes after this snapshot will be LOST");
+        let warning_icon1 = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        warning_icon1.add_css_class("warning");
+        warning_row1.add_prefix(&warning_icon1);
+        warning_group.add(&warning_row1);
 
-        let dialog = adw::MessageDialog::new(
-            Some(window),
-            Some("Restore System Snapshot?"),
-            Some(&preview_message),
-        );
+        let warning_row2 = adw::ActionRow::new();
+        warning_row2.set_title("System will require a REBOOT");
+        let warning_icon2 = gtk::Image::from_icon_name("system-reboot-symbolic");
+        warning_icon2.add_css_class("error");
+        warning_row2.add_prefix(&warning_icon2);
+        warning_group.add(&warning_row2);
 
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("restore", "Restore and Reboot");
-        dialog.set_response_appearance("restore", adw::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
+        let warning_row3 = adw::ActionRow::new();
+        warning_row3.set_title("A backup snapshot will be created first");
+        let warning_icon3 = gtk::Image::from_icon_name("emblem-ok-symbolic");
+        warning_icon3.add_css_class("success");
+        warning_row3.add_prefix(&warning_icon3);
+        warning_group.add(&warning_row3);
 
+        inner_box.append(&warning_group);
+
+        clamp.set_child(Some(&inner_box));
+        scrolled.set_child(Some(&clamp));
+        content_box.append(&scrolled);
+        dialog.set_content(Some(&content_box));
+
+        // Wire up cancel button
+        let dialog_clone = dialog.clone();
+        cancel_button.connect_clicked(move |_| {
+            dialog_clone.close();
+        });
+
+        // Wire up restore button
         let window_clone = window.clone();
         let snapshot_name = snapshot_basename.to_string();
+        let dialog_clone = dialog.clone();
 
-        dialog.connect_response(None, move |_, response| {
-            if response == "restore" {
-                let window = window_clone.clone();
-                let name = snapshot_name.clone();
-                let name_for_notification = snapshot_name.clone();
+        restore_button.connect_clicked(move |_| {
+            dialog_clone.close();
 
-                // Show loading state
-                dialogs::show_toast(&window, "Restoring snapshot...");
+            let window = window_clone.clone();
+            let name = snapshot_name.clone();
+            let name_for_notification = snapshot_name.clone();
 
-                // Create channel for thread communication
-                let (sender, receiver) = mpsc::channel();
+            // Show loading state
+            dialogs::show_toast(&window, "Restoring snapshot...");
 
-                // Spawn blocking operation in thread
-                std::thread::spawn(move || {
-                    // Connect to D-Bus helper
-                    let client = match WaypointHelperClient::new() {
-                        Ok(c) => c,
-                        Err(e) => {
-                            let error = format!("Failed to connect to snapshot service: {}", e);
-                            let _ = sender.send((None, Some(("Connection Error".to_string(), error))));
-                            return;
-                        }
-                    };
+            // Create channel for thread communication
+            let (sender, receiver) = mpsc::channel();
 
-                    // Restore snapshot via D-Bus (password prompt happens here)
-                    let result = client.restore_snapshot(name);
+            // Spawn blocking operation in thread
+            std::thread::spawn(move || {
+                // Connect to D-Bus helper
+                let client = match WaypointHelperClient::new() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let error = format!("Failed to connect to snapshot service: {}", e);
+                        let _ = sender.send((None, Some(("Connection Error".to_string(), error))));
+                        return;
+                    }
+                };
 
-                    // Send result back to main thread
-                    let _ = sender.send((Some(result), None));
-                });
+                // Restore snapshot via D-Bus (password prompt happens here)
+                let result = client.restore_snapshot(name);
 
-                // Receive results on main thread
-                glib::source::idle_add_local_once(move || {
-                    if let Ok(msg) = receiver.recv() {
+                // Send result back to main thread
+                let _ = sender.send((Some(result), None));
+            });
+
+            // Receive results on main thread
+            glib::source::idle_add_local_once(move || {
+                if let Ok(msg) = receiver.recv() {
                         let (result_opt, error_opt) = msg;
 
                         // Handle connection error
@@ -3274,7 +3494,6 @@ impl MainWindow {
                         }
                     }
                 });
-            }
         });
 
         dialog.present();

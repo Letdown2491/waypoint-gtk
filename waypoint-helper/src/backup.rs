@@ -1,11 +1,27 @@
 //! Backup operations for waypoint-helper
 //! This module handles btrfs send/receive operations with root privileges
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc::SyncSender;
+use waypoint_common::WaypointConfig;
+
+/// Progress update message for backup operations
+#[derive(Debug, Clone)]
+pub struct BackupProgress {
+    pub snapshot_id: String,
+    /// UUID is filled in by the D-Bus layer, not directly read in this module
+    #[allow(dead_code)]
+    pub destination_uuid: String,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
+    pub speed_bytes_per_sec: u64,
+    pub stage: String,
+}
 
 /// Drive type classification
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,6 +82,7 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
         .context("Failed to parse findmnt JSON output")?;
 
     let mut destinations = Vec::new();
+    let mut seen_uuids = std::collections::HashSet::new();
 
     for entry in findmnt_result.filesystems {
         let mount_point = entry.target;
@@ -86,6 +103,15 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
             continue;
         }
 
+        // Exclude auto-mounted waypoint backup subvolumes
+        // These are btrfs subvolumes within waypoint-backups/ that get auto-mounted
+        // Check mount point path first
+        if mount_point.contains("/waypoint-backups/")
+        {
+            log::debug!("Skipping waypoint backup subvolume at {}", mount_point);
+            continue;
+        }
+
         // Use label if available, otherwise use last component of mount path
         let label = entry.label
             .filter(|l| !l.is_empty())
@@ -97,10 +123,29 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
                     .to_string()
             });
 
+        // Also exclude if label looks like a snapshot name
+        let label_lower = label.to_lowercase();
+        if label_lower.starts_with("snapshot-")
+        {
+            log::debug!("Skipping snapshot-like label: {}", label);
+            continue;
+        }
+
         // Detect drive type and filesystem
         let source = entry.source.as_deref().unwrap_or("");
         let fstype = entry.fstype;
         let drive_type = detect_drive_type(&mount_point, source, &fstype);
+
+        // Skip duplicates by UUID (same drive mounted multiple times)
+        if let Some(ref uuid) = entry.uuid {
+            if !uuid.is_empty() {
+                if seen_uuids.contains(uuid) {
+                    log::info!("Skipping duplicate mount of {} at {}", label, mount_point);
+                    continue;
+                }
+                seen_uuids.insert(uuid.clone());
+            }
+        }
 
         destinations.push(BackupDestination {
             mount_point,
@@ -112,6 +157,70 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
     }
 
     Ok(destinations)
+}
+
+/// Validate that a destination mount is a legitimate backup destination
+/// Returns the canonical path if valid, error otherwise
+fn validate_backup_destination(destination_mount: &str) -> Result<std::path::PathBuf> {
+    let dest_path = Path::new(destination_mount);
+
+    // Must exist
+    if !dest_path.exists() {
+        anyhow::bail!("Destination does not exist: {}", destination_mount);
+    }
+
+    // Canonicalize to resolve symlinks and get absolute path
+    let canonical = dest_path.canonicalize()
+        .with_context(|| format!("Failed to canonicalize destination path: {}", destination_mount))?;
+
+    // Get list of valid backup destinations
+    let valid_destinations = scan_backup_destinations()
+        .context("Failed to scan valid backup destinations")?;
+
+    // Check if the canonical path matches any valid destination
+    let canonical_str = canonical.to_str()
+        .ok_or_else(|| anyhow::anyhow!("Destination path contains invalid UTF-8: {}", canonical.display()))?;
+
+    for dest in valid_destinations {
+        // Canonicalize the valid destination for comparison
+        if let Ok(valid_canonical) = Path::new(&dest.mount_point).canonicalize() {
+            if canonical == valid_canonical {
+                log::info!("Validated backup destination: {} ({})", dest.label, canonical_str);
+                return Ok(canonical);
+            }
+        }
+    }
+
+    // If we get here, the destination is not in the valid list
+    anyhow::bail!(
+        "Security: Destination '{}' is not a valid backup destination. \
+         Only removable drives and network shares returned by scan_backup_destinations are allowed. \
+         This prevents writing to system directories.",
+        canonical_str
+    )
+}
+
+/// Validate that a backup path resides under a legitimate destination's waypoint-backups directory
+fn validate_backup_path(backup_path: &Path) -> Result<PathBuf> {
+    let canonical = backup_path.canonicalize()
+        .with_context(|| format!("Failed to canonicalize backup path {}", backup_path.display()))?;
+
+    let destinations = scan_backup_destinations()
+        .context("Failed to enumerate backup destinations for validation")?;
+
+    for dest in destinations {
+        if let Ok(dest_canonical) = Path::new(&dest.mount_point).canonicalize() {
+            let backups_root = dest_canonical.join("waypoint-backups");
+            if canonical.starts_with(&backups_root) {
+                return Ok(canonical);
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "Security: Backup path '{}' is not within a waypoint-backups directory on a trusted destination",
+        canonical.display()
+    )
 }
 
 /// Detect the type of drive based on mount point, source device, and filesystem type
@@ -193,6 +302,41 @@ fn calculate_directory_size(path: &Path) -> Result<u64> {
         .context("Failed to parse size from du output")
 }
 
+/// Load snapshot metadata from the waypoint metadata file
+/// This reads the snapshots.json file to get information about which subvolumes are included
+fn load_snapshot_metadata(snapshot_name: &str) -> Result<waypoint_common::SnapshotInfo> {
+    let config = WaypointConfig::new();
+    let metadata_path = &config.metadata_file;
+
+    if !metadata_path.exists() {
+        bail!("Snapshot metadata file not found: {}", metadata_path.display());
+    }
+
+    let contents = fs::read_to_string(metadata_path)
+        .context("Failed to read snapshot metadata")?;
+
+    let snapshots: Vec<waypoint_common::SnapshotInfo> = serde_json::from_str(&contents)
+        .context("Failed to parse snapshot metadata")?;
+
+    snapshots
+        .into_iter()
+        .find(|s| s.name == snapshot_name)
+        .ok_or_else(|| anyhow!("Snapshot '{}' not found in metadata", snapshot_name))
+}
+
+/// Convert a mount point path to a subdirectory name for backups
+/// "/" becomes "root", "/home" becomes "home", "/var/lib" becomes "var_lib"
+fn mount_point_to_subdir_name(mount_point: &Path) -> String {
+    if mount_point == Path::new("/") {
+        "root".to_string()
+    } else {
+        mount_point
+            .to_string_lossy()
+            .trim_start_matches('/')
+            .replace('/', "_")
+    }
+}
+
 /// Backup a snapshot to destination using btrfs send/receive or rsync
 ///
 /// Automatically detects filesystem type and uses appropriate method:
@@ -204,9 +348,9 @@ pub fn backup_snapshot(
     snapshot_path: &str,
     destination_mount: &str,
     parent_snapshot: Option<&str>,
+    progress_tx: Option<SyncSender<BackupProgress>>,
 ) -> Result<(String, u64)> {
     let snapshot = Path::new(snapshot_path);
-    let dest_mount = Path::new(destination_mount);
 
     // Validate inputs
     if !snapshot.exists() {
@@ -216,21 +360,20 @@ pub fn backup_snapshot(
         ));
     }
 
-    if !dest_mount.exists() {
-        return Err(anyhow::anyhow!(
-            "Destination does not exist: {}",
-            destination_mount
-        ));
-    }
+    // SECURITY: Validate destination_mount is a legitimate backup destination
+    // This prevents attackers from writing to arbitrary system directories like /etc, /usr, etc.
+    let validated_dest = validate_backup_destination(destination_mount)?;
+    let destination_mount_str = validated_dest.to_str()
+        .ok_or_else(|| anyhow::anyhow!("Validated destination path contains invalid UTF-8"))?;
 
     // Detect destination filesystem type
-    let fstype = detect_filesystem_type(destination_mount)?;
+    let fstype = detect_filesystem_type(destination_mount_str)?;
 
-    // Route to appropriate backup method
+    // Route to appropriate backup method (use validated path)
     if fstype == "btrfs" {
-        backup_snapshot_btrfs(snapshot_path, destination_mount, parent_snapshot)
+        backup_snapshot_btrfs(snapshot_path, destination_mount_str, parent_snapshot, progress_tx)
     } else {
-        backup_snapshot_rsync(snapshot_path, destination_mount)
+        backup_snapshot_rsync(snapshot_path, destination_mount_str, progress_tx)
     }
 }
 
@@ -259,21 +402,24 @@ fn detect_filesystem_type(mount_point: &str) -> Result<String> {
     Ok(fstype)
 }
 
-/// Backup a snapshot to a btrfs destination using btrfs send/receive
-///
-/// Returns a tuple of (backup_path, size_bytes)
-fn backup_snapshot_btrfs(
-    snapshot_path: &str,
-    destination_mount: &str,
-    parent_snapshot: Option<&str>,
-) -> Result<(String, u64)> {
-    let snapshot = Path::new(snapshot_path);
-    let dest_mount = Path::new(destination_mount);
+/// Backup a single subvolume using btrfs send/receive
+/// Returns Ok(()) on success
+fn backup_single_subvolume_btrfs(
+    subvol_path: &Path,
+    parent_subvol: Option<&Path>,
+    receive_dir: &Path,
+) -> Result<()> {
+    // Verify it's actually a btrfs subvolume
+    let is_subvolume = Command::new("btrfs")
+        .arg("subvolume")
+        .arg("show")
+        .arg(subvol_path)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
 
-    // Create waypoint-backups directory at destination
-    let backup_dir = dest_mount.join("waypoint-backups");
-    if !backup_dir.exists() {
-        std::fs::create_dir_all(&backup_dir).context("Failed to create backup directory")?;
+    if !is_subvolume {
+        bail!("Path is not a btrfs subvolume: {}", subvol_path.display());
     }
 
     // Build btrfs send command
@@ -281,24 +427,20 @@ fn backup_snapshot_btrfs(
     send_cmd.arg("send");
 
     // Add parent if this is incremental
-    if let Some(parent) = parent_snapshot {
-        let parent_path = Path::new(parent);
-        if !parent_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Parent snapshot does not exist: {}",
-                parent
-            ));
+    if let Some(parent) = parent_subvol {
+        if !parent.exists() {
+            bail!("Parent subvolume does not exist: {}", parent.display());
         }
         send_cmd.arg("-p").arg(parent);
     }
 
-    send_cmd.arg(snapshot);
+    send_cmd.arg(subvol_path);
     send_cmd.stdout(std::process::Stdio::piped());
     send_cmd.stderr(std::process::Stdio::piped());
 
     // Build btrfs receive command
     let mut receive_cmd = Command::new("btrfs");
-    receive_cmd.arg("receive").arg(&backup_dir);
+    receive_cmd.arg("receive").arg(receive_dir);
 
     // Execute send | receive pipeline
     let mut send_child = send_cmd.spawn().context("Failed to start btrfs send")?;
@@ -306,7 +448,7 @@ fn backup_snapshot_btrfs(
     let send_stdout = send_child
         .stdout
         .take()
-        .ok_or_else(|| anyhow::anyhow!("Failed to capture send output"))?;
+        .ok_or_else(|| anyhow!("Failed to capture send output"))?;
 
     let send_stderr_handle = send_child.stderr.take().map(|mut stderr| {
         std::thread::spawn(move || {
@@ -330,7 +472,7 @@ fn backup_snapshot_btrfs(
     };
 
     if !send_status.success() {
-        return Err(anyhow::anyhow!(
+        bail!(
             "btrfs send failed: {}{}",
             send_status,
             if send_stderr.trim().is_empty() {
@@ -338,89 +480,339 @@ fn backup_snapshot_btrfs(
             } else {
                 format!(" - {}", send_stderr.trim())
             }
-        ));
+        );
     }
 
     if !receive_output.status.success() {
         let stderr = String::from_utf8_lossy(&receive_output.stderr);
-        return Err(anyhow::anyhow!("btrfs receive failed: {}", stderr));
+        bail!("btrfs receive failed: {}", stderr);
     }
 
-    // Return the backup path and size
+    Ok(())
+}
+
+/// Backup a snapshot to a btrfs destination using btrfs send/receive
+/// Handles multi-subvolume snapshots by backing up each subvolume separately
+///
+/// Returns a tuple of (backup_path, size_bytes)
+fn backup_snapshot_btrfs(
+    snapshot_path: &str,
+    destination_mount: &str,
+    parent_snapshot: Option<&str>,
+    progress_tx: Option<SyncSender<BackupProgress>>,
+) -> Result<(String, u64)> {
+    let snapshot = Path::new(snapshot_path);
+    let dest_mount = Path::new(destination_mount);
+
+    // Get snapshot name from path
     let snapshot_name = snapshot
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Invalid snapshot path"))?;
+        .ok_or_else(|| anyhow!("Invalid snapshot path"))?;
 
-    let backup_path = backup_dir.join(snapshot_name);
+    // Load snapshot metadata to get list of subvolumes
+    let metadata = load_snapshot_metadata(snapshot_name)
+        .context("Failed to load snapshot metadata")?;
 
-    // Calculate backup size using du
-    let size_bytes = calculate_directory_size(&backup_path)?;
+    // Send "preparing" stage
+    if let Some(ref tx) = progress_tx {
+        match tx.try_send(BackupProgress {
+            snapshot_id: snapshot_name.to_string(),
+            destination_uuid: String::new(), // Will be filled by caller
+            bytes_transferred: 0,
+            total_bytes: 0,
+            speed_bytes_per_sec: 0,
+            stage: "preparing".to_string(),
+        }) {
+            Ok(()) => {},
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                log::warn!("Progress channel full (preparing stage), consumer may be slow");
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                log::debug!("Progress channel disconnected, consumer has stopped");
+            }
+        }
+    }
 
-    Ok((backup_path.to_string_lossy().to_string(), size_bytes))
+    // Create waypoint-backups directory at destination
+    let backup_dir = dest_mount.join("waypoint-backups");
+    fs::create_dir_all(&backup_dir).context("Failed to create backup directory")?;
+
+    // Create snapshot-specific directory
+    let snapshot_backup_dir = backup_dir.join(snapshot_name);
+    fs::create_dir_all(&snapshot_backup_dir)
+        .context("Failed to create snapshot backup directory")?;
+
+    log::info!(
+        "Backing up {} subvolumes for snapshot '{}'",
+        metadata.subvolumes.len(),
+        snapshot_name
+    );
+
+    // Send "transferring" stage
+    if let Some(ref tx) = progress_tx {
+        match tx.try_send(BackupProgress {
+            snapshot_id: snapshot_name.to_string(),
+            destination_uuid: String::new(),
+            bytes_transferred: 0,
+            total_bytes: 0,
+            speed_bytes_per_sec: 0,
+            stage: "transferring".to_string(),
+        }) {
+            Ok(()) => {},
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                log::warn!("Progress channel full (transferring stage), consumer may be slow");
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                log::debug!("Progress channel disconnected, consumer has stopped");
+            }
+        }
+    }
+
+    // Backup each subvolume
+    for mount_point in &metadata.subvolumes {
+        let subvol_name = mount_point_to_subdir_name(mount_point);
+        let subvol_path = snapshot.join(&subvol_name);
+
+        if !subvol_path.exists() {
+            log::warn!(
+                "Subvolume '{}' not found in snapshot, skipping",
+                subvol_name
+            );
+            continue;
+        }
+
+        log::info!("Backing up subvolume: {} ({})", subvol_name, mount_point.display());
+
+        // Determine parent subvolume for incremental backup
+        let parent_subvol = if let Some(parent_snap) = parent_snapshot {
+            let parent_path = Path::new(parent_snap);
+            let parent_subvol_path = parent_path.join(&subvol_name);
+            if parent_subvol_path.exists() {
+                Some(parent_subvol_path)
+            } else {
+                log::warn!(
+                    "Parent subvolume '{}' not found, doing full backup",
+                    subvol_name
+                );
+                None
+            }
+        } else {
+            None
+        };
+
+        // Create subdirectory for this subvolume in the backup
+        let subvol_backup_dir = snapshot_backup_dir.join(&subvol_name);
+        if let Some(parent) = subvol_backup_dir.parent() {
+            fs::create_dir_all(parent)
+                .context("Failed to create subvolume backup directory")?;
+        } else {
+            anyhow::bail!("Backup directory has no parent: {}", subvol_backup_dir.display());
+        }
+
+        // Backup this subvolume
+        backup_single_subvolume_btrfs(
+            &subvol_path,
+            parent_subvol.as_deref(),
+            &snapshot_backup_dir,
+        )
+        .with_context(|| format!("Failed to backup subvolume '{}'", subvol_name))?;
+
+        log::info!("Successfully backed up subvolume: {}", subvol_name);
+    }
+
+    // Calculate total backup size
+    let size_bytes = calculate_directory_size(&snapshot_backup_dir)?;
+
+    log::info!(
+        "Backup complete: {} ({} bytes)",
+        snapshot_backup_dir.display(),
+        size_bytes
+    );
+
+    // Send "complete" stage
+    if let Some(ref tx) = progress_tx {
+        match tx.try_send(BackupProgress {
+            snapshot_id: snapshot_name.to_string(),
+            destination_uuid: String::new(),
+            bytes_transferred: size_bytes,
+            total_bytes: size_bytes,
+            speed_bytes_per_sec: 0,
+            stage: "complete".to_string(),
+        }) {
+            Ok(()) => {},
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                log::warn!("Progress channel full (complete stage), consumer may be slow");
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                log::debug!("Progress channel disconnected, consumer has stopped");
+            }
+        }
+    }
+
+    Ok((snapshot_backup_dir.to_string_lossy().to_string(), size_bytes))
 }
 
 /// Backup a snapshot to a non-btrfs destination using rsync
+/// Handles multi-subvolume snapshots by rsyncing each subvolume into separate directories
 ///
 /// Returns a tuple of (backup_path, size_bytes)
 fn backup_snapshot_rsync(
     snapshot_path: &str,
     destination_mount: &str,
+    progress_tx: Option<SyncSender<BackupProgress>>,
 ) -> Result<(String, u64)> {
     let snapshot = Path::new(snapshot_path);
     let dest_mount = Path::new(destination_mount);
-
-    // Create waypoint-backups directory at destination
-    let backup_dir = dest_mount.join("waypoint-backups");
-    if !backup_dir.exists() {
-        std::fs::create_dir_all(&backup_dir).context("Failed to create backup directory")?;
-    }
 
     // Get snapshot name
     let snapshot_name = snapshot
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Invalid snapshot path"))?;
+        .ok_or_else(|| anyhow!("Invalid snapshot path"))?;
 
-    let backup_path = backup_dir.join(snapshot_name);
+    // Load snapshot metadata to get list of subvolumes
+    let metadata = load_snapshot_metadata(snapshot_name)
+        .context("Failed to load snapshot metadata")?;
 
-    // The snapshot contains a "root" subdirectory with the actual filesystem
-    let snapshot_root = snapshot.join("root");
-    if !snapshot_root.exists() {
-        return Err(anyhow::anyhow!("Snapshot root directory not found"));
+    // Send "preparing" stage
+    if let Some(ref tx) = progress_tx {
+        let _ = tx.send(BackupProgress {
+            snapshot_id: snapshot_name.to_string(),
+            destination_uuid: String::new(),
+            bytes_transferred: 0,
+            total_bytes: 0,
+            speed_bytes_per_sec: 0,
+            stage: "preparing".to_string(),
+        });
     }
 
-    // Use rsync to copy snapshot contents
-    //
-    // Flags overview:
-    // - -aHAX: archive + preserve hard-links, ACLs, xattrs
-    // - --delete-after: defer deletions until the end to reduce random seeks
-    // - --inplace/--partial: write in-place so only touched blocks are updated and allow resume
-    // - --no-inc-recursive: avoid the incremental recursion bookkeeping (less metadata churn)
-    // - --human-readable/--info=progress2/--outbuf=L: friendlier logging + steady progress output
-    let output = Command::new("rsync")
-        .arg("-aHAX")
-        .arg("--delete-after")
-        .arg("--inplace")
-        .arg("--partial")
-        .arg("--no-inc-recursive")
-        .arg("--human-readable")
-        .arg("--info=progress2")
-        .arg("--outbuf=L")
-        .arg(format!("{}/", snapshot_root.display())) // Trailing slash = copy contents
-        .arg(&backup_path)
-        .output()
-        .context("Failed to run rsync")?;
+    // Create waypoint-backups directory at destination
+    let backup_dir = dest_mount.join("waypoint-backups");
+    fs::create_dir_all(&backup_dir).context("Failed to create backup directory")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("rsync failed: {}", stderr));
+    // Create snapshot-specific directory
+    let snapshot_backup_dir = backup_dir.join(snapshot_name);
+    fs::create_dir_all(&snapshot_backup_dir)
+        .context("Failed to create snapshot backup directory")?;
+
+    log::info!(
+        "Backing up {} subvolumes for snapshot '{}' using rsync",
+        metadata.subvolumes.len(),
+        snapshot_name
+    );
+
+    // Send "transferring" stage
+    if let Some(ref tx) = progress_tx {
+        match tx.try_send(BackupProgress {
+            snapshot_id: snapshot_name.to_string(),
+            destination_uuid: String::new(),
+            bytes_transferred: 0,
+            total_bytes: 0,
+            speed_bytes_per_sec: 0,
+            stage: "transferring".to_string(),
+        }) {
+            Ok(()) => {},
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                log::warn!("Progress channel full (transferring stage), consumer may be slow");
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                log::debug!("Progress channel disconnected, consumer has stopped");
+            }
+        }
     }
 
-    // Calculate backup size using du
-    let size_bytes = calculate_directory_size(&backup_path)?;
+    // Backup each subvolume
+    for mount_point in &metadata.subvolumes {
+        let subvol_name = mount_point_to_subdir_name(mount_point);
+        let subvol_snapshot_path = snapshot.join(&subvol_name);
 
-    Ok((backup_path.to_string_lossy().to_string(), size_bytes))
+        if !subvol_snapshot_path.exists() {
+            log::warn!(
+                "Subvolume '{}' not found in snapshot, skipping",
+                subvol_name
+            );
+            continue;
+        }
+
+        // For btrfs subvolumes, the actual filesystem is inside a "root" subdirectory
+        // For rsync backups, we want to copy the contents, not the subvolume structure
+        let source_dir = subvol_snapshot_path.join("root");
+        if !source_dir.exists() {
+            log::warn!(
+                "Subvolume '{}' does not have a root directory, skipping",
+                subvol_name
+            );
+            continue;
+        }
+
+        log::info!("Backing up subvolume: {} ({})", subvol_name, mount_point.display());
+
+        // Create destination directory for this subvolume
+        let dest_subvol_dir = snapshot_backup_dir.join(&subvol_name);
+        fs::create_dir_all(&dest_subvol_dir)
+            .context("Failed to create subvolume backup directory")?;
+
+        // Use rsync to copy snapshot contents
+        //
+        // Flags overview:
+        // - -aHAX: archive + preserve hard-links, ACLs, xattrs
+        // - --delete-after: defer deletions until the end to reduce random seeks
+        // - --inplace/--partial: write in-place so only touched blocks are updated and allow resume
+        // - --no-inc-recursive: avoid the incremental recursion bookkeeping (less metadata churn)
+        // - --human-readable/--info=progress2/--outbuf=L: friendlier logging + steady progress output
+        let output = Command::new("rsync")
+            .arg("-aHAX")
+            .arg("--delete-after")
+            .arg("--inplace")
+            .arg("--partial")
+            .arg("--no-inc-recursive")
+            .arg("--human-readable")
+            .arg("--info=progress2")
+            .arg("--outbuf=L")
+            .arg(format!("{}/", source_dir.display())) // Trailing slash = copy contents
+            .arg(&dest_subvol_dir)
+            .output()
+            .context("Failed to run rsync")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("rsync failed for subvolume '{}': {}", subvol_name, stderr);
+        }
+
+        log::info!("Successfully backed up subvolume: {}", subvol_name);
+    }
+
+    // Calculate total backup size
+    let size_bytes = calculate_directory_size(&snapshot_backup_dir)?;
+
+    log::info!(
+        "Backup complete: {} ({} bytes)",
+        snapshot_backup_dir.display(),
+        size_bytes
+    );
+
+    // Send "complete" stage
+    if let Some(ref tx) = progress_tx {
+        match tx.try_send(BackupProgress {
+            snapshot_id: snapshot_name.to_string(),
+            destination_uuid: String::new(),
+            bytes_transferred: size_bytes,
+            total_bytes: size_bytes,
+            speed_bytes_per_sec: 0,
+            stage: "complete".to_string(),
+        }) {
+            Ok(()) => {},
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                log::warn!("Progress channel full (complete stage), consumer may be slow");
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                log::debug!("Progress channel disconnected, consumer has stopped");
+            }
+        }
+    }
+
+    Ok((snapshot_backup_dir.to_string_lossy().to_string(), size_bytes))
 }
 
 /// List backups at a destination
@@ -475,6 +867,13 @@ pub fn list_backups(destination_mount: &str) -> Result<Vec<String>> {
 
 /// Restore a backup from destination to snapshots directory
 /// Automatically detects if backup is btrfs subvolume or rsync directory
+///
+/// TODO: Multi-subvolume restore support
+/// Currently, this function assumes single-subvolume backups. For multi-subvolume
+/// backups created after the multi-subvolume backup feature, this needs to:
+/// 1. Detect if the backup directory contains multiple subvolumes
+/// 2. Restore each subvolume to the correct location
+/// 3. Recreate the snapshot directory structure
 pub fn restore_from_backup(backup_path: &str, snapshots_dir: &str) -> Result<String> {
     let backup = Path::new(backup_path);
     let dest = Path::new(snapshots_dir);
@@ -483,28 +882,47 @@ pub fn restore_from_backup(backup_path: &str, snapshots_dir: &str) -> Result<Str
         return Err(anyhow::anyhow!("Paths must be absolute"));
     }
 
-    let backup = backup
-        .canonicalize()
-        .context("Failed to resolve backup path")?;
+    // Canonicalize both paths - this validates they exist and resolves symlinks
+    // The canonicalization happens immediately before use to minimize TOCTOU window
+    //
+    // SECURITY NOTE: There is still a small race window between canonicalization and use
+    // where an attacker with filesystem write access could replace the path with a symlink.
+    // Mitigations in place:
+    // 1. Polkit authentication required (must be admin)
+    // 2. Path validation requires "waypoint-backups" substring
+    // 3. Commands use .arg() preventing shell injection
+    // 4. Immediate re-verification after canonicalization
+    let backup = validate_backup_path(backup)?;
     let dest = dest
         .canonicalize()
-        .context("Failed to resolve snapshots directory")?;
+        .context("Failed to resolve snapshots directory - does not exist or is inaccessible")?;
 
-    if !backup.exists() {
+    // SECURITY: Validate snapshots_dir is the legitimate snapshot directory
+    // This prevents attackers from restoring to arbitrary directories like / or /etc
+    use waypoint_common::WaypointConfig;
+    let config = WaypointConfig::new();
+    let expected_snapshot_dir = config.snapshot_dir.canonicalize()
+        .context("Failed to canonicalize configured snapshot directory")?;
+
+    if dest != expected_snapshot_dir {
         return Err(anyhow::anyhow!(
-            "Backup does not exist: {}",
-            backup.display()
+            "Security: Destination directory '{}' does not match the configured snapshot directory '{}'. \
+             This prevents restoring backups to arbitrary filesystem locations.",
+            dest.display(),
+            expected_snapshot_dir.display()
         ));
     }
 
-    if !dest.exists() {
+    // Re-verify the backup path still exists and hasn't been swapped
+    // This reduces the TOCTOU window further
+    if !backup.exists() {
         return Err(anyhow::anyhow!(
-            "Snapshots directory does not exist: {}",
-            dest.display()
+            "Backup path no longer exists - possible race condition or filesystem modification"
         ));
     }
 
     // Detect if backup is a btrfs subvolume or rsync directory
+    // Use the canonicalized path immediately to minimize race window
     let is_btrfs_subvolume = Command::new("btrfs")
         .arg("subvolume")
         .arg("show")
@@ -638,4 +1056,450 @@ fn restore_from_backup_rsync(backup: &Path, dest: &Path) -> Result<String> {
     }
 
     Ok(restored_path.to_string_lossy().to_string())
+}
+
+/// Drive health statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriveStats {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+    pub backup_count: usize,
+    pub last_backup_timestamp: Option<i64>, // Unix timestamp
+    pub oldest_backup_timestamp: Option<i64>,
+}
+
+/// Get drive statistics for a backup destination
+pub fn get_drive_stats(destination_mount: &str) -> Result<DriveStats> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mount_path = Path::new(destination_mount);
+
+    // Get filesystem space using statvfs
+    let stats = nix::sys::statvfs::statvfs(mount_path)
+        .context("Failed to get filesystem statistics")?;
+
+    let total_bytes = stats.blocks() * stats.block_size();
+    let available_bytes = stats.blocks_available() * stats.block_size();
+    let used_bytes = total_bytes - available_bytes;
+
+    // Get backup information
+    let backup_dir = mount_path.join("waypoint-backups");
+    let mut backup_count = 0;
+    let mut last_backup_timestamp: Option<i64> = None;
+    let mut oldest_backup_timestamp: Option<i64> = None;
+
+    if backup_dir.exists() {
+        for entry in std::fs::read_dir(&backup_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_dir() {
+                continue;
+            }
+
+            // Check if it's a valid backup
+            // Backups are directories containing subvolume directories (root/, home/, etc.)
+            // or btrfs subvolumes themselves
+            let is_valid_backup = {
+                // Check if this directory contains subvolume directories
+                // Common subvolume names: root, home, var, etc.
+                let has_subvolumes = path.join("root").exists()
+                    || path.join("home").exists()
+                    || path.join("var").exists();
+
+                if has_subvolumes {
+                    true
+                } else {
+                    // For single-subvolume backups, check if it's a btrfs subvolume
+                    Command::new("btrfs")
+                        .arg("subvolume")
+                        .arg("show")
+                        .arg(&path)
+                        .output()
+                        .map(|output| output.status.success())
+                        .unwrap_or(false)
+                }
+            };
+
+            if !is_valid_backup {
+                continue;
+            }
+
+            backup_count += 1;
+
+            // Get modification time
+            if let Ok(metadata) = entry.metadata() {
+                let mtime = metadata.mtime();
+
+                match last_backup_timestamp {
+                    None => last_backup_timestamp = Some(mtime),
+                    Some(current) if mtime > current => last_backup_timestamp = Some(mtime),
+                    _ => {}
+                }
+
+                match oldest_backup_timestamp {
+                    None => oldest_backup_timestamp = Some(mtime),
+                    Some(current) if mtime < current => oldest_backup_timestamp = Some(mtime),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(DriveStats {
+        total_bytes,
+        used_bytes,
+        available_bytes,
+        backup_count,
+        last_backup_timestamp,
+        oldest_backup_timestamp,
+    })
+}
+
+/// Check if a path is on a btrfs filesystem
+fn is_btrfs_filesystem(path: &Path) -> Result<bool> {
+    let output = Command::new("stat")
+        .args(["-f", "-c", "%T"])
+        .arg(path)
+        .output()?;
+
+    if !output.status.success() {
+        bail!("Failed to check filesystem type");
+    }
+
+    let fstype = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(fstype == "btrfs")
+}
+
+/// Verification result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationResult {
+    pub success: bool,
+    pub message: String,
+    pub details: Vec<String>,
+}
+
+/// Verify a backup exists and check its integrity
+pub fn verify_backup(
+    snapshot_path: &str,
+    destination_mount: &str,
+    snapshot_id: &str,
+) -> Result<VerificationResult> {
+    let config = WaypointConfig::new();
+    let snapshot_path = Path::new(snapshot_path);
+    let destination_mount = Path::new(destination_mount);
+
+    // Ensure snapshot lives within configured snapshot directory
+    let canonical_snapshot = snapshot_path
+        .canonicalize()
+        .context("Failed to resolve snapshot path")?;
+    let canonical_snapshot_root = config
+        .snapshot_dir
+        .canonicalize()
+        .context("Failed to resolve configured snapshot directory")?;
+    if !canonical_snapshot.starts_with(&canonical_snapshot_root) {
+        anyhow::bail!(
+            "Security: Snapshot path {} is outside configured snapshot directory {}",
+            canonical_snapshot.display(),
+            canonical_snapshot_root.display()
+        );
+    }
+
+    // Ensure destination mount is a valid backup destination
+    let canonical_destination = validate_backup_destination(
+        destination_mount
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Destination mount contains invalid UTF-8"))?,
+    )?;
+
+    // Check if original snapshot exists
+    if !canonical_snapshot.exists() {
+        return Ok(VerificationResult {
+            success: false,
+            message: "Original snapshot not found".to_string(),
+            details: vec![format!(
+                "Snapshot path {} does not exist",
+                canonical_snapshot.display()
+            )],
+        });
+    }
+
+    // Find the backup directory
+    let waypoint_backups = canonical_destination.join("waypoint-backups");
+    if !waypoint_backups.exists() {
+        return Ok(VerificationResult {
+            success: false,
+            message: "No backups found on destination".to_string(),
+            details: vec![format!("Directory {} does not exist", waypoint_backups.display())],
+        });
+    }
+
+    let backup_path = waypoint_backups.join(snapshot_id);
+    if !backup_path.exists() {
+        return Ok(VerificationResult {
+            success: false,
+            message: "Backup not found".to_string(),
+            details: vec![format!("Backup {} does not exist on destination", snapshot_id)],
+        });
+    }
+
+    // Check if destination is btrfs
+    let is_btrfs_dest = is_btrfs_filesystem(&canonical_destination)?;
+    let mut details = Vec::new();
+
+    if is_btrfs_dest {
+        // For btrfs: verify subvolume properties
+        details.push("Destination filesystem: btrfs".to_string());
+
+        // Check if backup is a valid btrfs subvolume
+        let output = Command::new("btrfs")
+            .args(["subvolume", "show", &backup_path.to_string_lossy()])
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(VerificationResult {
+                success: false,
+                message: "Backup is not a valid btrfs subvolume".to_string(),
+                details: vec![
+                    "Expected a btrfs subvolume but verification failed".to_string(),
+                ],
+            });
+        }
+
+        details.push("✓ Backup is a valid btrfs subvolume".to_string());
+
+        // Compare basic metadata
+        let backup_info = String::from_utf8_lossy(&output.stdout);
+        if backup_info.contains("Snapshot(s):") || backup_info.contains("UUID:") {
+            details.push("✓ Subvolume metadata present".to_string());
+        }
+    } else {
+        // For non-btrfs: compare file counts and total size
+        details.push(format!("Destination filesystem: non-btrfs"));
+
+        let orig_stats = get_directory_stats(&canonical_snapshot)?;
+        let backup_stats = get_directory_stats(&backup_path)?;
+
+        details.push(format!("Original: {} files, {} MB",
+            orig_stats.0,
+            orig_stats.1 / (1024 * 1024)
+        ));
+        details.push(format!("Backup: {} files, {} MB",
+            backup_stats.0,
+            backup_stats.1 / (1024 * 1024)
+        ));
+
+        // Allow small differences due to filesystem overhead
+        let size_diff_percent = if orig_stats.1 > 0 {
+            ((backup_stats.1 as i64 - orig_stats.1 as i64).abs() as f64 / orig_stats.1 as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        if backup_stats.0 != orig_stats.0 {
+            return Ok(VerificationResult {
+                success: false,
+                message: format!("File count mismatch: {} files backed up vs {} original",
+                    backup_stats.0, orig_stats.0),
+                details,
+            });
+        }
+
+        if size_diff_percent > 5.0 {
+            return Ok(VerificationResult {
+                success: false,
+                message: format!("Size difference too large: {:.1}%", size_diff_percent),
+                details,
+            });
+        }
+
+        details.push("✓ File counts match".to_string());
+        details.push("✓ Sizes are consistent".to_string());
+    }
+
+    // Check read access
+    match fs::read_dir(&backup_path) {
+        Ok(_) => details.push("✓ Backup is readable".to_string()),
+        Err(e) => {
+            return Ok(VerificationResult {
+                success: false,
+                message: format!("Cannot read backup: {}", e),
+                details,
+            });
+        }
+    }
+
+    Ok(VerificationResult {
+        success: true,
+        message: "Backup verified successfully".to_string(),
+        details,
+    })
+}
+
+/// Enhanced verification with optional checksum validation
+/// This is more thorough but slower - samples random files for content verification
+pub fn verify_backup_enhanced(
+    snapshot_path: &str,
+    destination_mount: &str,
+    snapshot_id: &str,
+    sample_size: usize, // Number of files to checksum (0 = skip checksums)
+) -> Result<VerificationResult> {
+    let snapshot_path = Path::new(snapshot_path);
+    let backup_path = Path::new(destination_mount)
+        .join("waypoint-backups")
+        .join(snapshot_id);
+
+    // First do basic verification
+    let mut basic_result = verify_backup(
+        snapshot_path.to_str()
+            .ok_or_else(|| anyhow::anyhow!("Snapshot path contains invalid UTF-8: {}", snapshot_path.display()))?,
+        destination_mount,
+        snapshot_id,
+    )?;
+
+    if !basic_result.success {
+        return Ok(basic_result);
+    }
+
+    // If sample_size is 0, return basic result
+    if sample_size == 0 {
+        return Ok(basic_result);
+    }
+
+    // Enhanced verification: sample random files and compare checksums
+    basic_result.details.push(format!("🔍 Enhanced verification: checking {} file samples", sample_size));
+
+    let sample_files = collect_sample_files(&snapshot_path, sample_size)?;
+    let mut verified_count = 0;
+    let mut failed_files = Vec::new();
+
+    for file_path in sample_files {
+        // Get relative path
+        let relative_path = file_path.strip_prefix(&snapshot_path)
+            .context("Failed to get relative path")?;
+
+        let backup_file = backup_path.join(relative_path);
+
+        // Check if file exists in backup
+        if !backup_file.exists() {
+            failed_files.push(format!("Missing in backup: {}", relative_path.display()));
+            continue;
+        }
+
+        // Compare checksums
+        match compare_file_checksums(&file_path, &backup_file) {
+            Ok(true) => {
+                verified_count += 1;
+            }
+            Ok(false) => {
+                failed_files.push(format!("Checksum mismatch: {}", relative_path.display()));
+            }
+            Err(e) => {
+                failed_files.push(format!("Failed to verify {}: {}", relative_path.display(), e));
+            }
+        }
+    }
+
+    if !failed_files.is_empty() {
+        basic_result.success = false;
+        basic_result.message = format!("Content verification failed: {} files with issues", failed_files.len());
+        basic_result.details.extend(failed_files);
+        return Ok(basic_result);
+    }
+
+    basic_result.details.push(format!("✓ All {} sampled files verified", verified_count));
+    basic_result.details.push("✓ Content integrity confirmed".to_string());
+
+    Ok(basic_result)
+}
+
+/// Collect a random sample of files from a directory
+fn collect_sample_files(root: &Path, sample_size: usize) -> Result<Vec<PathBuf>> {
+    use walkdir::WalkDir;
+
+    let files: Vec<PathBuf> = WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    // If we have fewer files than requested, return all
+    if files.len() <= sample_size {
+        return Ok(files);
+    }
+
+    // Sample files evenly distributed through the list
+    // Use step size to get representative sample across entire directory
+    let step = files.len() / sample_size;
+    let mut sampled = Vec::with_capacity(sample_size);
+
+    for i in 0..sample_size {
+        sampled.push(files[i * step].clone());
+    }
+
+    Ok(sampled)
+}
+
+/// Compare checksums of two files using SHA256
+fn compare_file_checksums(file1: &Path, file2: &Path) -> Result<bool> {
+    let hash1 = compute_file_hash(file1)?;
+    let hash2 = compute_file_hash(file2)?;
+
+    Ok(hash1 == hash2)
+}
+
+/// Compute SHA256 hash of a file
+fn compute_file_hash(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    use sha2::{Sha256, Digest};
+
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("Failed to open file: {}", path.display()))?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+
+    loop {
+        let bytes_read = file.read(&mut buffer)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(hasher.finalize().to_vec())
+}
+
+/// Get directory statistics (file count and total size)
+fn get_directory_stats(path: &Path) -> Result<(usize, u64)> {
+    let output = Command::new("du")
+        .args(["-s", "--apparent-size", "--block-size=1"])
+        .arg(path)
+        .output()?;
+
+    if !output.status.success() {
+        bail!("Failed to get directory size");
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let size: u64 = output_str
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // Count files
+    let output = Command::new("find")
+        .arg(path)
+        .args(["-type", "f"])
+        .output()?;
+
+    let file_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
+
+    Ok((file_count, size))
 }

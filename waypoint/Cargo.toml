@@ -35,6 +35,7 @@ zbus = { version = "4.0", default-features = false, features = ["blocking", "tok
 futures-executor = "0.3"
 futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+async-channel = "2.1"
 fs2.workspace = true
 
 # Shared types

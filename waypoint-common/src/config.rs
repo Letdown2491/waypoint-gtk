@@ -18,7 +18,7 @@ pub struct WaypointConfig {
     /// Path to schedules TOML configuration (default: /etc/waypoint/schedules.toml)
     pub schedules_config: PathBuf,
 
-    /// Path to backup configuration (default: /etc/waypoint/backups.toml)
+    /// Path to backup configuration (default: ~/.config/waypoint/backup-config.toml)
     pub backup_config: PathBuf,
 
     /// Path to service directory for scheduler (default: /var/service, runit-specific)
@@ -48,12 +48,24 @@ pub struct WaypointConfig {
 
 impl Default for WaypointConfig {
     fn default() -> Self {
+        // Get user's config directory for backup config
+        let backup_config = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map(|home| {
+                let mut path = PathBuf::from(home);
+                path.push(".config");
+                path.push("waypoint");
+                path.push("backup-config.toml");
+                path
+            })
+            .unwrap_or_else(|_| PathBuf::from("/tmp/waypoint-backup-config.toml"));
+
         Self {
             snapshot_dir: PathBuf::from("/.snapshots"),
             metadata_file: PathBuf::from("/var/lib/waypoint/snapshots.json"),
             scheduler_config: PathBuf::from("/etc/waypoint/scheduler.conf"),
             schedules_config: PathBuf::from("/etc/waypoint/schedules.toml"),
-            backup_config: PathBuf::from("/etc/waypoint/backups.toml"),
+            backup_config,
             service_dir: PathBuf::from("/var/service"),
             min_free_space_bytes: 1024 * 1024 * 1024, // 1 GB
             ui_window_width: 800,

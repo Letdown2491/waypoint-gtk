@@ -69,3 +69,22 @@
 - Notes and favorites stored per-user at ~/.local/share/waypoint/user-preferences.json allowing multiple users different preferences.
 - World-readable shared snapshot metadata at /var/lib/waypoint/snapshots.json accessible to all users.
 - Enhanced note display in snapshot list with 60-character truncation and clean "Note:" prefix.
+- Timeline-based retention policies with configurable hourly, daily, weekly, monthly, and yearly buckets.
+- Non-btrfs external drive backup support via rsync for NTFS, exFAT, and network shares.
+- Backup verification with file count and size comparison between source and destination.
+- Enhanced backup verification with SHA256 checksum validation for sampled files.
+- Structured JSON audit logging for security events (snapshot creation, deletion, restore, configuration changes).
+- Rate limiting for expensive operations (5-second cooldown per user/operation) to prevent DoS attacks.
+- Configurable Polkit authentication timeout via WAYPOINT_POLKIT_TIMEOUT environment variable (default: 120 seconds).
+- Input validation for octal escape sequences in btrfs paths preventing control character injection.
+- Path validation enforcing UTF-8 compliance for all filesystem operations.
+- Integer overflow protection using checked arithmetic for quota calculations.
+- Backup destination validation restricting writes to approved removable drives and network shares only.
+- Restore destination validation preventing arbitrary filesystem writes outside snapshot directory.
+- Multi-subvolume file restore with automatic subvolume detection from snapshot metadata.
+- Symlink attack prevention with comprehensive target validation and boundary checks.
+- TOCTOU mitigation with immediate path re-verification after canonicalization.
+- Mutex poisoning recovery for rate limiter and progress channels.
+- Error message sanitization removing sensitive paths before displaying to users.
+- Defensive bounds checking for /proc filesystem parsing.
+- Progress channel backpressure monitoring with warning logs for slow consumers.

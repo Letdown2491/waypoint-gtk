@@ -29,6 +29,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 libc = "0.2"
 walkdir = "2.4"
 rayon = "1.10"
+nix = { version = "0.29", features = ["fs"] }
+sha2 = "0.10"
 
 # Shared types
 waypoint-common = { path = "../waypoint-common" }

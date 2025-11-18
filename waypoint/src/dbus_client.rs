@@ -39,6 +39,14 @@ pub struct VerificationResult {
     pub warnings: Vec<String>,
 }
 
+/// Result of backup verification
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BackupVerificationResult {
+    pub success: bool,
+    pub message: String,
+    pub details: Vec<String>,
+}
+
 /// Information about a single package change during restore
 ///
 /// Represents the difference between the current system state and the snapshot state
@@ -55,6 +63,25 @@ pub struct PackageChange {
     /// but kept for JSON schema consistency
     #[allow(dead_code)]
     pub change_type: String,
+}
+
+/// Drive health statistics for backup destinations
+///
+/// Contains information about drive capacity, backup count, and backup age.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DriveStats {
+    /// Total drive capacity in bytes
+    pub total_bytes: u64,
+    /// Used space in bytes
+    pub used_bytes: u64,
+    /// Available space in bytes
+    pub available_bytes: u64,
+    /// Number of backups stored on this drive
+    pub backup_count: usize,
+    /// Unix timestamp of most recent backup (None if no backups)
+    pub last_backup_timestamp: Option<i64>,
+    /// Unix timestamp of oldest backup (None if no backups)
+    pub oldest_backup_timestamp: Option<i64>,
 }
 
 /// Preview of system changes that will occur during snapshot restore
@@ -834,6 +861,29 @@ impl WaypointHelperClient {
         Ok(result)
     }
 
+    /// Get drive health statistics
+    pub fn get_drive_stats(&self, destination_mount: String) -> Result<DriveStats> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("GetDriveStats", &(destination_mount,))
+            .context("Failed to call GetDriveStats")?;
+
+        if !result.0 {
+            return Err(anyhow::anyhow!("GetDriveStats failed: {}", result.1));
+        }
+
+        let stats: DriveStats = serde_json::from_str(&result.1)
+            .context("Failed to parse drive stats JSON")?;
+
+        Ok(stats)
+    }
+
     /// Restore a snapshot from backup
     #[allow(dead_code)]
     pub fn restore_from_backup(
@@ -851,6 +901,29 @@ impl WaypointHelperClient {
         let result: (bool, String) = proxy
             .call("RestoreFromBackup", &(backup_path, snapshots_dir))
             .context("Failed to call RestoreFromBackup")?;
+
+        Ok(result)
+    }
+
+    /// Verify a backup's integrity
+    ///
+    /// Returns JSON with verification details
+    pub fn verify_backup(
+        &self,
+        snapshot_path: String,
+        destination_mount: String,
+        snapshot_id: String,
+    ) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("VerifyBackup", &(snapshot_path, destination_mount, snapshot_id))
+            .context("Failed to call VerifyBackup")?;
 
         Ok(result)
     }

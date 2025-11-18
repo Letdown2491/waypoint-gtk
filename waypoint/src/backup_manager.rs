@@ -7,17 +7,36 @@
 //! - Tracking backup history
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use waypoint_common::{BackupConfig, BackupDestinationConfig, BackupFilter, WaypointConfig};
 
 use crate::dbus_client::WaypointHelperClient;
+use crate::signal_listener::BackupProgressEvent;
+
+/// Live progress information for a backup
+#[derive(Clone, Debug)]
+pub struct LiveBackupProgress {
+    pub stage: String,
+    /// Transferred bytes - tracked but not yet displayed in UI
+    #[allow(dead_code)]
+    pub bytes_transferred: u64,
+    /// Total bytes - tracked but not yet displayed in UI
+    #[allow(dead_code)]
+    pub total_bytes: u64,
+    /// Transfer speed - tracked but not yet displayed in UI
+    #[allow(dead_code)]
+    pub speed_bytes_per_sec: u64,
+}
 
 /// Manages automatic backups
 #[derive(Clone)]
 pub struct BackupManager {
     config: Arc<Mutex<BackupConfig>>,
     config_path: PathBuf,
+    /// Live progress tracking: (snapshot_id, destination_uuid) -> progress
+    progress: Arc<Mutex<HashMap<(String, String), LiveBackupProgress>>>,
 }
 
 impl BackupManager {
@@ -32,6 +51,7 @@ impl BackupManager {
         Ok(Self {
             config: Arc::new(Mutex::new(backup_config)),
             config_path,
+            progress: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -46,7 +66,9 @@ impl BackupManager {
         let config = self.config.lock().unwrap();
         config
             .save(&self.config_path)
-            .context("Failed to save backup configuration")?;
+            .with_context(|| {
+                format!("Failed to save backup configuration to {:?}", self.config_path)
+            })?;
         Ok(())
     }
 
@@ -259,5 +281,30 @@ impl BackupManager {
             .iter()
             .map(|record| record.destination_uuid.clone())
             .collect()
+    }
+
+    /// Update progress for a backup
+    pub fn update_progress(&self, event: BackupProgressEvent) {
+        let mut progress = self.progress.lock().unwrap();
+        let key = (event.snapshot_id.clone(), event.destination_uuid.clone());
+
+        // Remove completed backups from progress tracking
+        if event.stage == "complete" {
+            progress.remove(&key);
+        } else {
+            progress.insert(key, LiveBackupProgress {
+                stage: event.stage,
+                bytes_transferred: event.bytes_transferred,
+                total_bytes: event.total_bytes,
+                speed_bytes_per_sec: event.speed_bytes_per_sec,
+            });
+        }
+    }
+
+    /// Get progress for a specific backup
+    pub fn get_progress(&self, snapshot_id: &str, destination_uuid: &str) -> Option<LiveBackupProgress> {
+        let progress = self.progress.lock().unwrap();
+        let key = (snapshot_id.to_string(), destination_uuid.to_string());
+        progress.get(&key).cloned()
     }
 }

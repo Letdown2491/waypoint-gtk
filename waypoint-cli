@@ -8,50 +8,86 @@ DBUS_SERVICE="tech.geektoshi.waypoint"
 DBUS_PATH="/tech/geektoshi/waypoint"
 DBUS_INTERFACE="tech.geektoshi.waypoint.Helper"
 
+get_snapshot_dir() {
+    local dir="${WAYPOINT_SNAPSHOT_DIR:-/.snapshots}"
+    [[ "$dir" != "/" ]] && dir="${dir%/}"
+    echo "$dir"
+}
+
+snapshot_path_from_name() {
+    local name="$1"
+    printf "%s/%s" "$(get_snapshot_dir)" "$name"
+}
+
 usage() {
     cat << EOF
 Waypoint CLI - Btrfs snapshot management for Void Linux
 
-Usage:
-    waypoint-cli create <name> [description] [subvolumes]
-    waypoint-cli list [--verbose]
-    waypoint-cli show <name>
-    waypoint-cli diff <snapshot1> <snapshot2>
-    waypoint-cli delete <name>
-    waypoint-cli restore <name>
-    waypoint-cli cleanup [--schedule-based]
-    waypoint-cli help
+Usage: waypoint-cli <command> [options]
 
-Commands:
-    create      Create a new snapshot
-    list        List all snapshots
-    show        Display detailed information about a snapshot
-    diff        Compare two snapshots
-    delete      Delete a snapshot
-    restore     Restore a snapshot (rollback system)
-    cleanup     Apply retention policy to delete old snapshots
-    help        Show this help message
+SNAPSHOT OPERATIONS:
+    create <name> [description] [subvolumes]
+                        Create a new snapshot
+    list [--verbose]    List all snapshots
+    show <name>         Display detailed information about a snapshot
+    diff <snapshot1> <snapshot2>
+                        Compare two snapshots
+    delete <name>       Delete a snapshot
+    restore <name>      Restore a snapshot (rollback system)
+    cleanup [--schedule-based] [--dry-run]
+                        Apply retention policy to delete old snapshots
+    verify <name> [--json]
+                        Verify snapshot integrity
+    preview-restore <name> [--json]
+                        Preview restore changes without applying them
 
-Arguments for create:
-    name        Name for the snapshot (required)
-    description Human-readable description (optional)
-    subvolumes  Comma-separated list of mount points to snapshot (optional, defaults to /)
-                Example: "/,/home" to snapshot both root and home
+BACKUP OPERATIONS:
+    backup <snapshot> <destination> [parent]
+                        Create backup to external drive
+    list-backups <destination>
+                        List backups on a destination
+    verify-backup <snapshot> <destination> <id>
+                        Verify backup integrity
+    restore-backup <backup-path> <snapshots-dir>
+                        Restore from external backup
+    scan-destinations [--json]
+                        List available backup drives
+    drive-stats <destination>
+                        Get drive space statistics
 
-Options for list:
-    --verbose   Show detailed information including subvolumes and package count
+FILE OPERATIONS:
+    restore-files <snapshot> <file1> [file2...] [--target DIR] [--overwrite]
+                        Restore individual files from snapshot
+
+QUOTA MANAGEMENT:
+    quota enable [--simple]
+                        Enable quotas
+    quota disable       Disable quotas
+    quota status [--json]
+                        Show quota usage
+    quota set-limit <size>
+                        Set quota limit (e.g., 50G, 1T)
+
+GENERAL:
+    help                Show this help message
+
+Options:
+    --json              Output in JSON format (where applicable)
+    --verbose           Show detailed information
+    --dry-run           Preview changes without applying them
+    --overwrite         Overwrite existing files when restoring
+    --simple            Use simple quota mode
+    --schedule-based    Use schedule-based retention (default for cleanup)
 
 Examples:
     waypoint-cli create "before-upgrade" "Snapshot before system upgrade"
-    waypoint-cli create "test-$(date +%Y%m%d)" "Daily backup" "/,/home"
-    waypoint-cli create "root-only" "Only root filesystem" "/"
-    waypoint-cli list
     waypoint-cli list --verbose
-    waypoint-cli show "before-upgrade"
-    waypoint-cli diff "before-upgrade" "after-upgrade"
-    waypoint-cli delete "old-snapshot"
-    waypoint-cli restore "before-upgrade"
-    waypoint-cli cleanup --schedule-based
+    waypoint-cli backup "my-snapshot" "/mnt/backup"
+    waypoint-cli restore-files "my-snapshot" /etc/fstab /etc/hosts --target /tmp
+    waypoint-cli quota set-limit 100G
+    waypoint-cli scan-destinations --json
+    waypoint-cli cleanup --dry-run
+    waypoint-cli verify "my-snapshot"
 
 Note: All operations require authentication via Polkit.
 EOF
@@ -188,6 +224,88 @@ format_timestamp() {
         fi
     else
         echo "$timestamp"
+    fi
+}
+
+parse_size() {
+    # Convert human-readable size (e.g., 50G, 1T) to bytes
+    local size="$1"
+    local number
+    local unit
+
+    # Extract number and unit
+    if [[ "$size" =~ ^([0-9]+)([KMGT])?$ ]]; then
+        number="${BASH_REMATCH[1]}"
+        unit="${BASH_REMATCH[2]}"
+    else
+        echo "Error: Invalid size format '$size'. Use format like: 50G, 1T, 500M" >&2
+        return 1
+    fi
+
+    # Convert to bytes based on unit
+    local bytes=$number
+    case "$unit" in
+        K) bytes=$((number * 1024)) ;;
+        M) bytes=$((number * 1024 * 1024)) ;;
+        G) bytes=$((number * 1024 * 1024 * 1024)) ;;
+        T) bytes=$((number * 1024 * 1024 * 1024 * 1024)) ;;
+        "") bytes=$number ;;
+    esac
+
+    echo "$bytes"
+}
+
+format_size() {
+    # Convert bytes to human-readable format
+    local bytes="$1"
+
+    if [[ -z "$bytes" || "$bytes" == "null" ]]; then
+        echo "0 B"
+        return
+    fi
+
+    local units=("B" "KiB" "MiB" "GiB" "TiB")
+    local unit_index=0
+    local size=$bytes
+
+    # Use bc if available, otherwise fall back to integer division
+    if command -v bc >/dev/null 2>&1; then
+        while (( $(echo "$size >= 1024" | bc 2>/dev/null || echo 0) == 1 && unit_index < 4 )); do
+            size=$(echo "scale=2; $size / 1024" | bc)
+            ((unit_index++))
+        done
+        printf "%.2f %s" "$size" "${units[$unit_index]}"
+    else
+        # Fallback to integer division for systems without bc
+        while (( size >= 1024 && unit_index < 4 )); do
+            size=$((size / 1024))
+            ((unit_index++))
+        done
+        printf "%d %s" "$size" "${units[$unit_index]}"
+    fi
+}
+
+format_json() {
+    # Pretty print JSON if --json not specified, otherwise pass through
+    local json="$1"
+    local use_json="${2:-false}"
+
+    if [[ "$use_json" == "true" ]]; then
+        echo "$json"
+    else
+        if command -v jq >/dev/null 2>&1; then
+            echo "$json" | jq '.'
+        else
+            echo "$json"
+        fi
+    fi
+}
+
+check_jq() {
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required for this command" >&2
+        echo "Install with: sudo xbps-install -S jq" >&2
+        exit 1
     fi
 }
 
@@ -547,26 +665,122 @@ cmd_restore() {
 }
 
 cmd_cleanup() {
-    local schedule_based=false
-    local target="${1:-}"
+    local schedule_based=true
+    local dry_run=false
 
-    if [[ -n "$target" && "$target" != "--schedule-based" ]]; then
-        if ! validate_snapshot_name "$target"; then
-            echo "Error: Invalid snapshot name for cleanup target" >&2
-            exit 1
-        fi
+    # Parse all arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --schedule-based)
+                schedule_based=true
+                shift
+                ;;
+            --legacy)
+                schedule_based=false
+                shift
+                ;;
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
+            *)
+                echo "Error: Unknown cleanup option '$1'. Use --schedule-based (default), --legacy, or --dry-run." >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    if [[ "$dry_run" == true ]]; then
+        echo "Running snapshot cleanup in dry-run mode (preview only)..."
+    else
+        echo "Running snapshot cleanup..."
     fi
 
-    # Parse flags
-    if [[ "${1:-}" == "--schedule-based" ]]; then
-        schedule_based=true
-    fi
-
-    echo "Running snapshot cleanup..."
     if [[ "$schedule_based" == true ]]; then
         echo "Using per-schedule retention policies from schedules.toml"
     else
         echo "Using legacy global retention policy"
+    fi
+    echo
+
+    # For dry-run, we need to call a different method or use a flag
+    # Since the D-Bus API doesn't explicitly support dry-run, we'll simulate it
+    # by fetching snapshots and showing which would be deleted
+    if [[ "$dry_run" == true ]]; then
+        check_jq
+        local result
+        result=$(busctl call --system \
+            "$DBUS_SERVICE" \
+            "$DBUS_PATH" \
+            "$DBUS_INTERFACE" \
+            ListSnapshots 2>&1)
+
+        local json
+        json=$(echo "$result" | sed 's/^s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+        echo "Dry-run mode: The following snapshots would be evaluated for cleanup:"
+        echo "$json" | jq -r '.[] | "  • \(.name) - \(.timestamp)"'
+        echo
+        echo "Note: Actual deletion depends on retention policy. Run without --dry-run to apply."
+    else
+        local result
+        result=$(busctl call --system \
+            "$DBUS_SERVICE" \
+            "$DBUS_PATH" \
+            "$DBUS_INTERFACE" \
+            CleanupSnapshots \
+            'b' \
+            "$schedule_based" 2>&1)
+
+        if echo "$result" | grep -q "true"; then
+            echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+        else
+            echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+            exit 1
+        fi
+    fi
+}
+
+# HIGH PRIORITY: Backup Operations
+
+cmd_backup() {
+    local snapshot="${1:-}"
+    local destination="${2:-}"
+    local parent="${3:-}"
+
+    if [[ -z "$snapshot" || -z "$destination" ]]; then
+        echo "Error: Snapshot name and destination are required" >&2
+        echo "Usage: waypoint-cli backup <snapshot> <destination> [parent]" >&2
+        exit 1
+    fi
+
+    if ! validate_snapshot_name "$snapshot"; then
+        exit 1
+    fi
+
+    local snapshot_path
+    snapshot_path=$(snapshot_path_from_name "$snapshot")
+    if [[ ! -e "$snapshot_path" ]]; then
+        echo "Error: Snapshot '$snapshot' not found at $snapshot_path" >&2
+        exit 1
+    fi
+
+    local parent_path=""
+    if [[ -n "$parent" ]]; then
+        if ! validate_snapshot_name "$parent"; then
+            exit 1
+        fi
+        parent_path=$(snapshot_path_from_name "$parent")
+        if [[ ! -e "$parent_path" ]]; then
+            echo "Error: Parent snapshot '$parent' not found at $parent_path" >&2
+            exit 1
+        fi
+    fi
+
+    echo "Creating backup of snapshot: $snapshot ($snapshot_path)"
+    echo "Destination: $destination"
+    if [[ -n "$parent" ]]; then
+        echo "Parent snapshot: $parent ($parent_path)"
     fi
 
     local result
@@ -574,11 +788,565 @@ cmd_cleanup() {
         "$DBUS_SERVICE" \
         "$DBUS_PATH" \
         "$DBUS_INTERFACE" \
-        CleanupSnapshots \
-        'b' \
-        "$schedule_based" 2>&1)
+        BackupSnapshot \
+        'sss' \
+        "$snapshot_path" \
+        "$destination" \
+        "$parent_path" 2>&1)
 
-    if echo "$result" | grep -q "true"; then
+    if echo "$result" | grep -q "bs true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_list_backups() {
+    local destination="${1:-}"
+
+    if [[ -z "$destination" ]]; then
+        echo "Error: Destination is required" >&2
+        echo "Usage: waypoint-cli list-backups <destination>" >&2
+        exit 1
+    fi
+
+    echo "Listing backups on: $destination"
+    echo
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        ListBackups \
+        's' \
+        "$destination" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        local json
+        json=$(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+        check_jq
+        local count
+        count=$(echo "$json" | jq '. | length')
+        echo "Found $count backup(s):"
+        echo
+        if (( count == 0 )); then
+            echo "  (none)"
+        else
+            echo "$json" | jq -r '.[] | "  • " + .'
+        fi
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_verify_backup() {
+    local snapshot="${1:-}"
+    local destination="${2:-}"
+    local snapshot_id="${3:-}"
+
+    if [[ -z "$snapshot" || -z "$destination" || -z "$snapshot_id" ]]; then
+        echo "Error: Snapshot path, destination, and snapshot ID are required" >&2
+        echo "Usage: waypoint-cli verify-backup <snapshot> <destination> <id>" >&2
+        exit 1
+    fi
+
+    local snapshot_path
+    snapshot_path=$(snapshot_path_from_name "$snapshot")
+    if [[ ! -e "$snapshot_path" ]]; then
+        echo "Error: Snapshot '$snapshot' not found at $snapshot_path" >&2
+        exit 1
+    fi
+
+    echo "Verifying backup integrity..."
+    echo "Snapshot: $snapshot ($snapshot_path)"
+    echo "Destination: $destination"
+    echo "ID: $snapshot_id"
+    echo
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        VerifyBackup \
+        'sss' \
+        "$snapshot_path" \
+        "$destination" \
+        "$snapshot_id" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_restore_backup() {
+    local backup_path="${1:-}"
+    local snapshots_dir="${2:-}"
+
+    if [[ -z "$backup_path" || -z "$snapshots_dir" ]]; then
+        echo "Error: Backup path and snapshots directory are required" >&2
+        echo "Usage: waypoint-cli restore-backup <backup-path> <snapshots-dir>" >&2
+        exit 1
+    fi
+
+    echo "WARNING: This will restore from external backup"
+    echo "Backup path: $backup_path"
+    echo "Target directory: $snapshots_dir"
+    echo
+    read -p "Are you sure? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        RestoreFromBackup \
+        'ss' \
+        "$backup_path" \
+        "$snapshots_dir" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_scan_destinations() {
+    local use_json=false
+    if [[ "${1:-}" == "--json" ]]; then
+        use_json=true
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        ScanBackupDestinations 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        local json
+        json=$(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+        if [[ "$use_json" == true ]]; then
+            echo "$json"
+        else
+            check_jq
+            local count
+            count=$(echo "$json" | jq '. | length')
+            echo "Found $count available backup destination(s):"
+            echo
+            echo "$json" | jq -r '.[] | "  • \(.mount_point) [label: \(.label // "n/a"), type: \(.drive_type), fs: \(.fstype), uuid: \(.uuid // "unknown")]"'
+        fi
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_drive_stats() {
+    local destination="${1:-}"
+
+    if [[ -z "$destination" ]]; then
+        echo "Error: Destination is required" >&2
+        echo "Usage: waypoint-cli drive-stats <destination>" >&2
+        exit 1
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        GetDriveStats \
+        's' \
+        "$destination" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        local json
+        json=$(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+        check_jq
+        local total used available backups last oldest
+        total=$(echo "$json" | jq -r '.total_bytes // 0')
+        used=$(echo "$json" | jq -r '.used_bytes // 0')
+        available=$(echo "$json" | jq -r '.available_bytes // 0')
+        backups=$(echo "$json" | jq -r '.backup_count // 0')
+        last=$(echo "$json" | jq -r '.last_backup_timestamp // "N/A"')
+        oldest=$(echo "$json" | jq -r '.oldest_backup_timestamp // "N/A"')
+
+        echo "Drive Statistics for: $destination"
+        echo "=================================="
+        echo
+        printf "Total Space:     %s (%s bytes)\n" "$(format_size "$total")" "$total"
+        printf "Used Space:      %s (%s bytes)\n" "$(format_size "$used")" "$used"
+        printf "Available Space: %s (%s bytes)\n" "$(format_size "$available")" "$available"
+        printf "Backups Stored:  %s\n" "$backups"
+        printf "Newest Backup:   %s\n" "$last"
+        printf "Oldest Backup:   %s\n" "$oldest"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+# HIGH PRIORITY: File Operations
+
+cmd_restore_files() {
+    local snapshot="${1:-}"
+    shift
+
+    if [[ -z "$snapshot" ]]; then
+        echo "Error: Snapshot name is required" >&2
+        echo "Usage: waypoint-cli restore-files <snapshot> <file1> [file2...] [--target DIR] [--overwrite]" >&2
+        exit 1
+    fi
+
+    if ! validate_snapshot_name "$snapshot"; then
+        exit 1
+    fi
+
+    local files=()
+    local target_dir=""
+    local overwrite=false
+
+    # Parse remaining arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target)
+                target_dir="${2:-}"
+                if [[ -z "$target_dir" ]]; then
+                    echo "Error: --target requires a directory argument" >&2
+                    exit 1
+                fi
+                shift 2
+                ;;
+            --overwrite)
+                overwrite=true
+                shift
+                ;;
+            *)
+                files+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        echo "Error: At least one file path is required" >&2
+        echo "Usage: waypoint-cli restore-files <snapshot> <file1> [file2...] [--target DIR] [--overwrite]" >&2
+        exit 1
+    fi
+
+    # Use absolute directory for target (default to current working directory)
+    if [[ -z "$target_dir" ]]; then
+        target_dir="$(pwd -P)"
+    else
+        target_dir="$(cd "$target_dir" && pwd -P)"
+    fi
+
+    echo "Restoring files from snapshot: $snapshot"
+    echo "Target directory: $target_dir"
+    echo "Files to restore: ${files[*]}"
+    if [[ "$overwrite" == true ]]; then
+        echo "Overwrite: enabled"
+    fi
+    echo
+
+    # Prepare array for D-Bus call
+    local file_count=${#files[@]}
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        RestoreFiles \
+        'sasb' \
+        "$snapshot" \
+        "$file_count" \
+        "${files[@]}" \
+        "$target_dir" \
+        "$overwrite" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+# MEDIUM PRIORITY: Snapshot Information
+
+cmd_verify() {
+    local name="${1:-}"
+    local use_json=false
+
+    if [[ "${2:-}" == "--json" ]]; then
+        use_json=true
+    fi
+
+    if [[ -z "$name" ]]; then
+        echo "Error: Snapshot name is required" >&2
+        echo "Usage: waypoint-cli verify <name> [--json]" >&2
+        exit 1
+    fi
+
+    if ! validate_snapshot_name "$name"; then
+        exit 1
+    fi
+
+    if [[ "$use_json" == false ]]; then
+        echo "Verifying snapshot: $name"
+        echo
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        VerifySnapshot \
+        's' \
+        "$name" 2>&1)
+
+    # Result is just "s" with JSON data
+    local json
+    json=$(echo "$result" | sed 's/^s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+    if [[ "$use_json" == true ]]; then
+        echo "$json"
+    else
+        check_jq
+        echo "$json" | jq -r '
+            if .valid then
+                "✓ Snapshot is valid\n" +
+                "Subvolumes verified: \(.subvolumes_verified)\n" +
+                "Issues found: \(.issues // 0)"
+            else
+                "✗ Snapshot verification failed\n" +
+                "Error: \(.error // "Unknown error")"
+            end
+        '
+    fi
+}
+
+cmd_preview_restore() {
+    local name="${1:-}"
+    local use_json=false
+
+    if [[ "${2:-}" == "--json" ]]; then
+        use_json=true
+    fi
+
+    if [[ -z "$name" ]]; then
+        echo "Error: Snapshot name is required" >&2
+        echo "Usage: waypoint-cli preview-restore <name> [--json]" >&2
+        exit 1
+    fi
+
+    if ! validate_snapshot_name "$name"; then
+        exit 1
+    fi
+
+    if [[ "$use_json" == false ]]; then
+        echo "Previewing restore for snapshot: $name"
+        echo
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        PreviewRestore \
+        's' \
+        "$name" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        local json
+        json=$(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+        if [[ "$use_json" == true ]]; then
+            echo "$json"
+        else
+            check_jq
+            echo "$json" | jq -r '
+                "Restore Preview\n" +
+                "===============\n\n" +
+                "Files that will be restored: \(.files_to_restore)\n" +
+                "Files that will be removed: \(.files_to_remove)\n" +
+                "Disk space required: \(.space_required)\n\n" +
+                if (.warnings | length) > 0 then
+                    "Warnings:\n" +
+                    (.warnings | map("  ⚠ " + .) | join("\n"))
+                else
+                    "No warnings"
+                end
+            '
+        fi
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+# MEDIUM PRIORITY: Quota Commands
+
+cmd_quota() {
+    local subcmd="${1:-}"
+    shift
+
+    case "$subcmd" in
+        enable)
+            cmd_quota_enable "$@"
+            ;;
+        disable)
+            cmd_quota_disable "$@"
+            ;;
+        status)
+            cmd_quota_status "$@"
+            ;;
+        set-limit)
+            cmd_quota_set_limit "$@"
+            ;;
+        *)
+            echo "Error: Unknown quota command: $subcmd" >&2
+            echo "Usage: waypoint-cli quota {enable|disable|status|set-limit}" >&2
+            exit 1
+            ;;
+    esac
+}
+
+cmd_quota_enable() {
+    local use_simple=false
+
+    if [[ "${1:-}" == "--simple" ]]; then
+        use_simple=true
+    fi
+
+    echo "Enabling quotas..."
+    if [[ "$use_simple" == true ]]; then
+        echo "Using simple quota mode"
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        EnableQuotas \
+        'b' \
+        "$use_simple" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_quota_disable() {
+    echo "Disabling quotas..."
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        DisableQuotas 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_quota_status() {
+    local use_json=false
+
+    if [[ "${1:-}" == "--json" ]]; then
+        use_json=true
+    fi
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        GetQuotaUsage 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
+        local json
+        json=$(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//' | sed 's/\\"/"/g')
+
+        if [[ "$use_json" == true ]]; then
+            echo "$json"
+        else
+            check_jq
+            echo "Quota Status"
+            echo "============"
+            echo
+            echo "$json" | jq -r '
+                "Enabled:     \(.enabled)\n" +
+                "Usage:       \(.current_usage)\n" +
+                "Limit:       \(.limit)\n" +
+                "Percentage:  \(.percentage)%"
+            '
+        fi
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
+cmd_quota_set_limit() {
+    local size="${1:-}"
+
+    if [[ -z "$size" ]]; then
+        echo "Error: Size is required" >&2
+        echo "Usage: waypoint-cli quota set-limit <size>" >&2
+        echo "Example: waypoint-cli quota set-limit 100G" >&2
+        exit 1
+    fi
+
+    # Parse size to bytes
+    local bytes
+    bytes=$(parse_size "$size")
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+
+    echo "Setting quota limit to: $size ($bytes bytes)"
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        SetQuotaLimit \
+        't' \
+        "$bytes" 2>&1)
+
+    if echo "$result" | grep -q "bs true"; then
         echo "✓ Success: $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//')"
     else
         echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
@@ -595,6 +1363,7 @@ COMMAND="$1"
 shift
 
 case "$COMMAND" in
+    # Snapshot Operations
     create)
         check_dbus_service
         cmd_create "$@"
@@ -623,6 +1392,50 @@ case "$COMMAND" in
         check_dbus_service
         cmd_cleanup "$@"
         ;;
+    verify)
+        check_dbus_service
+        cmd_verify "$@"
+        ;;
+    preview-restore)
+        check_dbus_service
+        cmd_preview_restore "$@"
+        ;;
+    # Backup Operations
+    backup)
+        check_dbus_service
+        cmd_backup "$@"
+        ;;
+    list-backups)
+        check_dbus_service
+        cmd_list_backups "$@"
+        ;;
+    verify-backup)
+        check_dbus_service
+        cmd_verify_backup "$@"
+        ;;
+    restore-backup)
+        check_dbus_service
+        cmd_restore_backup "$@"
+        ;;
+    scan-destinations)
+        check_dbus_service
+        cmd_scan_destinations "$@"
+        ;;
+    drive-stats)
+        check_dbus_service
+        cmd_drive_stats "$@"
+        ;;
+    # File Operations
+    restore-files)
+        check_dbus_service
+        cmd_restore_files "$@"
+        ;;
+    # Quota Management
+    quota)
+        check_dbus_service
+        cmd_quota "$@"
+        ;;
+    # Help
     help|--help|-h)
         usage
         ;;

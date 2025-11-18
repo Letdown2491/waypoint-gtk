@@ -500,14 +500,42 @@ fn get_snapshot_size_impl(path: &Path) -> Result<u64> {
         .output()
         .context("Failed to execute du command")?;
 
+    // Check command success first
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("du command failed: {}", stderr);
+    }
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parts: Vec<&str> = stdout.split_whitespace().collect();
 
+    // Validate output format
     if parts.is_empty() {
-        bail!("Failed to get snapshot size");
+        bail!(
+            "du command returned empty output for path: {}. \
+             This may indicate a btrfs or du version incompatibility",
+            path.display()
+        );
     }
 
-    let size: u64 = parts[0].parse().context("Failed to parse snapshot size")?;
+    // du -sb output format: "<size_bytes> <path>"
+    // We expect at least 2 parts
+    if parts.len() < 2 {
+        bail!(
+            "Unexpected du output format: '{}'. Expected format: '<size> <path>'",
+            stdout.trim()
+        );
+    }
+
+    let size: u64 = parts[0].parse().with_context(|| {
+        format!(
+            "Failed to parse size from du output: '{}'. \
+             First field should be a number but got: '{}'",
+            stdout.trim(),
+            parts[0]
+        )
+    })?;
+
     Ok(size)
 }
 
@@ -887,14 +915,61 @@ pub fn ensure_snapshot_name(name: &str) -> Result<()> {
 
 fn ensure_within_snapshot_dir(path: &Path) -> Result<()> {
     let base = snapshot_dir();
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if !canonical.starts_with(base) {
-        bail!(
-            "Snapshot path {} is outside of snapshot directory {}",
-            canonical.display(),
-            base.display()
-        );
+
+    // Try to canonicalize the path
+    match path.canonicalize() {
+        Ok(canonical) => {
+            // Path exists and can be resolved - verify it's within base
+            if !canonical.starts_with(base) {
+                bail!(
+                    "Security: Snapshot path {} resolves outside of snapshot directory {}",
+                    canonical.display(),
+                    base.display()
+                );
+            }
+        }
+        Err(_) => {
+            // Path doesn't exist or can't be accessed
+            // Manually validate it's a safe subpath without resolving symlinks
+            // This handles the case where we're validating before creation
+
+            // First check: path must be a subpath of base using lexical comparison
+            if !path.starts_with(base) {
+                bail!(
+                    "Security: Snapshot path {} is outside of snapshot directory {}",
+                    path.display(),
+                    base.display()
+                );
+            }
+
+            // Second check: verify no path traversal in components
+            if let Ok(relative) = path.strip_prefix(base) {
+                for component in relative.components() {
+                    match component {
+                        std::path::Component::Normal(_) => {
+                            // Safe component
+                        }
+                        std::path::Component::ParentDir => {
+                            bail!(
+                                "Security: Path contains '..' component: {}",
+                                path.display()
+                            );
+                        }
+                        std::path::Component::CurDir => {
+                            // '.' is safe but unusual
+                        }
+                        _ => {
+                            bail!(
+                                "Security: Path contains unexpected component: {}",
+                                path.display()
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
+
     Ok(())
 }
 
@@ -973,7 +1048,7 @@ fn remove_snapshot_metadata(name: &str) -> Result<()> {
 }
 
 /// Get snapshot metadata by name
-fn get_snapshot_metadata(name: &str) -> Result<Snapshot> {
+pub fn get_snapshot_metadata(name: &str) -> Result<Snapshot> {
     ensure_snapshot_name(name)?;
     let snapshots = load_snapshot_metadata()?;
     snapshots

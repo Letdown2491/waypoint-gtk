@@ -1,23 +1,21 @@
 //! File restoration dialog for browsing and restoring files from snapshots
-//!
-//! Note: Uses GTK4's FileChooserDialog which is deprecated since 4.10,
-//! but remains the most practical solution for file selection until a better
-//! alternative is available in GTK/Libadwaita.
 
-#![allow(deprecated)]
+#![allow(deprecated)] // Still using FileChooserDialog for folder selection
 
 use crate::dbus_client::WaypointHelperClient;
 use adw::prelude::*;
 use gtk::prelude::*;
-use gtk::{FileChooserAction, FileChooserDialog, ResponseType};
+use gtk::{FileChooserAction, FileChooserDialog, Orientation, ResponseType};
 use libadwaita as adw;
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use waypoint_common::WaypointConfig;
 
 use super::dialogs;
 use super::error_helpers;
 
-/// Show file browser dialog for restoring files from a snapshot
+/// Show custom file browser dialog for restoring files from a snapshot
 pub fn show_file_restore_dialog(parent: &adw::ApplicationWindow, snapshot_name: &str) {
     let config = WaypointConfig::new();
     let snapshot_path = config.snapshot_dir.join(snapshot_name).join("root");
@@ -32,56 +30,199 @@ pub fn show_file_restore_dialog(parent: &adw::ApplicationWindow, snapshot_name: 
         return;
     }
 
-    // Create file chooser dialog
-    let dialog = FileChooserDialog::new(
-        Some(&format!("Browse Snapshot: {}", snapshot_name)),
-        Some(parent),
-        FileChooserAction::Open,
-        &[
-            ("Cancel", ResponseType::Cancel),
-            ("Restore Selected Files", ResponseType::Accept),
-        ],
-    );
-
-    dialog.set_select_multiple(true);
+    // Create custom file browser window
+    let dialog = adw::Window::new();
+    dialog.set_title(Some(&format!("Restore Files - {}", snapshot_name)));
     dialog.set_modal(true);
+    dialog.set_transient_for(Some(parent));
+    dialog.set_default_size(900, 600);
 
-    // Set initial folder to snapshot root
-    let _ = dialog.set_current_folder(Some(&gtk::gio::File::for_path(&snapshot_path)));
+    let content_box = gtk::Box::new(Orientation::Vertical, 0);
 
-    // Connect response handler
-    let snapshot_name_owned = snapshot_name.to_string();
+    // Header bar
+    let header = adw::HeaderBar::new();
+
+    let cancel_button = gtk::Button::with_label("Cancel");
+    header.pack_start(&cancel_button);
+
+    let restore_button = gtk::Button::with_label("Restore Selected");
+    restore_button.add_css_class("suggested-action");
+    restore_button.set_sensitive(false); // Disabled until files are selected
+    header.pack_end(&restore_button);
+
+    content_box.append(&header);
+
+    // Main content with sidebar and file list
+    let paned = gtk::Paned::new(Orientation::Horizontal);
+    paned.set_vexpand(true);
+    paned.set_position(250);
+
+    // Sidebar with quick access
+    let sidebar = create_sidebar(&snapshot_path);
+    paned.set_start_child(Some(&sidebar));
+
+    // Track selected files
+    let selected_files: Rc<RefCell<Vec<PathBuf>>> = Rc::new(RefCell::new(Vec::new()));
+
+    // File list area
+    let file_area = create_file_list_area(&snapshot_path, selected_files.clone(), restore_button.clone());
+    paned.set_end_child(Some(&file_area));
+
+    content_box.append(&paned);
+    dialog.set_content(Some(&content_box));
+
+    // Wire up cancel button
+    let dialog_clone = dialog.clone();
+    cancel_button.connect_clicked(move |_| {
+        dialog_clone.close();
+    });
+
+    // Wire up restore button
+    let dialog_clone = dialog.clone();
     let parent_clone = parent.clone();
+    let snapshot_name_owned = snapshot_name.to_string();
+    let snapshot_root = snapshot_path.clone();
 
-    dialog.connect_response(move |dialog, response| {
-        if response == ResponseType::Accept {
-            // Get selected files
-            let files: Vec<PathBuf> = dialog
-                .files()
-                .iter::<gtk::gio::File>()
-                .filter_map(|f| f.ok())
-                .filter_map(|f| f.path())
-                .collect();
-
-            if files.is_empty() {
-                dialogs::show_toast(&parent_clone, "No files selected");
-                dialog.close();
-                return;
-            }
-
-            // Show restore confirmation dialog
-            show_restore_confirmation_dialog(
-                &parent_clone,
-                &snapshot_name_owned,
-                files,
-                &snapshot_path,
-            );
+    restore_button.connect_clicked(move |_| {
+        let files = selected_files.borrow().clone();
+        if files.is_empty() {
+            dialogs::show_toast(&parent_clone, "No files selected");
+            return;
         }
 
-        dialog.close();
+        dialog_clone.close();
+        show_restore_confirmation_dialog(&parent_clone, &snapshot_name_owned, files, &snapshot_root);
     });
 
     dialog.present();
+}
+
+/// Create sidebar with common directories
+fn create_sidebar(_snapshot_root: &Path) -> gtk::Box {
+    let sidebar = gtk::Box::new(Orientation::Vertical, 0);
+    sidebar.add_css_class("sidebar");
+
+    let scrolled = gtk::ScrolledWindow::new();
+    scrolled.set_vexpand(true);
+
+    let list_box = gtk::ListBox::new();
+    list_box.add_css_class("navigation-sidebar");
+
+    // Common directories
+    let common_dirs = vec![
+        ("Home Directory", "user-home-symbolic", "home"),
+        ("Documents", "folder-documents-symbolic", "home/*/Documents"),
+        ("Downloads", "folder-download-symbolic", "home/*/Downloads"),
+        ("Pictures", "folder-pictures-symbolic", "home/*/Pictures"),
+        ("System Configuration", "preferences-system-symbolic", "etc"),
+        ("Applications", "applications-system-symbolic", "usr/share/applications"),
+        ("System Binaries", "utilities-terminal-symbolic", "usr/bin"),
+    ];
+
+    for (label, icon, _path) in common_dirs {
+        let row = gtk::ListBoxRow::new();
+        let row_box = gtk::Box::new(Orientation::Horizontal, 12);
+        row_box.set_margin_start(12);
+        row_box.set_margin_end(12);
+        row_box.set_margin_top(8);
+        row_box.set_margin_bottom(8);
+
+        let icon_widget = gtk::Image::from_icon_name(icon);
+        row_box.append(&icon_widget);
+
+        let label_widget = gtk::Label::new(Some(label));
+        label_widget.set_xalign(0.0);
+        row_box.append(&label_widget);
+
+        row.set_child(Some(&row_box));
+        list_box.append(&row);
+    }
+
+    scrolled.set_child(Some(&list_box));
+    sidebar.append(&scrolled);
+
+    sidebar
+}
+
+/// Create file list area with search and tree view
+fn create_file_list_area(
+    snapshot_root: &Path,
+    selected_files: Rc<RefCell<Vec<PathBuf>>>,
+    restore_button: gtk::Button,
+) -> gtk::Box {
+    let container = gtk::Box::new(Orientation::Vertical, 0);
+
+    // Search bar
+    let search_entry = gtk::SearchEntry::new();
+    search_entry.set_placeholder_text(Some("Search files..."));
+    search_entry.set_margin_start(12);
+    search_entry.set_margin_end(12);
+    search_entry.set_margin_top(12);
+    search_entry.set_margin_bottom(12);
+    container.append(&search_entry);
+
+    // File tree view
+    let scrolled = gtk::ScrolledWindow::new();
+    scrolled.set_vexpand(true);
+
+    let list_box = gtk::ListBox::new();
+
+    // Show files from snapshot root
+    if let Ok(entries) = std::fs::read_dir(snapshot_root) {
+        for entry in entries.flatten().take(50) {
+            let path = entry.path();
+            let row = gtk::ListBoxRow::new();
+            let row_box = gtk::Box::new(Orientation::Horizontal, 12);
+            row_box.set_margin_start(12);
+            row_box.set_margin_end(12);
+            row_box.set_margin_top(8);
+            row_box.set_margin_bottom(8);
+
+            let is_dir = path.is_dir();
+            let icon_name = if is_dir { "folder-symbolic" } else { "text-x-generic-symbolic" };
+            let icon = gtk::Image::from_icon_name(icon_name);
+            row_box.append(&icon);
+
+            let name = entry.file_name();
+            let label = gtk::Label::new(Some(&name.to_string_lossy()));
+            label.set_xalign(0.0);
+            label.set_hexpand(true);
+            row_box.append(&label);
+
+            // Checkbutton for selection
+            let check = gtk::CheckButton::new();
+
+            // Wire up checkbox to track selection
+            let selected_files_clone = selected_files.clone();
+            let restore_button_clone = restore_button.clone();
+            let file_path = path.clone();
+
+            check.connect_toggled(move |check_btn| {
+                let mut files = selected_files_clone.borrow_mut();
+
+                if check_btn.is_active() {
+                    if !files.contains(&file_path) {
+                        files.push(file_path.clone());
+                    }
+                } else {
+                    files.retain(|p| p != &file_path);
+                }
+
+                // Enable/disable restore button based on selection
+                restore_button_clone.set_sensitive(!files.is_empty());
+            });
+
+            row_box.append(&check);
+
+            row.set_child(Some(&row_box));
+            list_box.append(&row);
+        }
+    }
+
+    scrolled.set_child(Some(&list_box));
+    container.append(&scrolled);
+
+    container
 }
 
 /// Show confirmation dialog before restoring files

@@ -173,15 +173,31 @@ impl QuotaUsage {
     pub fn usage_percent(&self) -> Option<f64> {
         self.limit.map(|limit| {
             if limit == 0 {
+                // No limit set, return 0% usage
                 0.0
             } else {
-                self.referenced as f64 / limit as f64
+                // Convert to f64 for division
+                // Note: u64::MAX fits in f64 with some precision loss at extreme values
+                // but this is acceptable for percentage calculations
+                let usage = self.referenced as f64;
+                let total = limit as f64;
+                let percentage = usage / total;
+
+                // Clamp to [0.0, 1.0] range to handle any edge cases
+                // (e.g., if usage somehow exceeds limit due to race conditions)
+                percentage.clamp(0.0, 1.0)
             }
         })
     }
 
     /// Check if usage exceeds threshold
     pub fn exceeds_threshold(&self, threshold: f64) -> bool {
+        // Validate threshold is in valid range
+        if !threshold.is_finite() || threshold < 0.0 || threshold > 1.0 {
+            // Invalid threshold, default to false (don't trigger cleanup)
+            return false;
+        }
+
         self.usage_percent()
             .map(|pct| pct >= threshold)
             .unwrap_or(false)
@@ -239,5 +255,50 @@ mod tests {
         assert_eq!(config.total_limit_bytes, None);
         assert_eq!(config.cleanup_threshold, 0.9);
         assert_eq!(config.auto_cleanup, true);
+    }
+
+    #[test]
+    fn test_quota_overflow_protection() {
+        // Test extreme values near u64::MAX
+        let usage = QuotaUsage {
+            referenced: u64::MAX - 1000,
+            exclusive: u64::MAX - 1000,
+            limit: Some(u64::MAX),
+        };
+
+        // Should not panic and should return a valid percentage
+        let pct = usage.usage_percent();
+        assert!(pct.is_some());
+        assert!(pct.unwrap() > 0.99); // Very close to 100%
+        assert!(pct.unwrap() <= 1.0); // Clamped to max 100%
+    }
+
+    #[test]
+    fn test_exceeds_threshold_with_extreme_usage() {
+        // Test when usage exceeds limit (shouldn't happen in practice but handle gracefully)
+        let usage = QuotaUsage {
+            referenced: 150 * 1024 * 1024 * 1024, // 150 GB
+            exclusive: 10 * 1024 * 1024 * 1024,
+            limit: Some(100 * 1024 * 1024 * 1024), // 100 GB limit
+        };
+
+        // Should clamp to 100% and detect threshold exceeded
+        assert_eq!(usage.usage_percent(), Some(1.0)); // Clamped to 100%
+        assert_eq!(usage.exceeds_threshold(0.9), true);
+    }
+
+    #[test]
+    fn test_exceeds_threshold_with_invalid_threshold() {
+        let usage = QuotaUsage {
+            referenced: 50 * 1024 * 1024 * 1024,
+            exclusive: 10 * 1024 * 1024 * 1024,
+            limit: Some(100 * 1024 * 1024 * 1024),
+        };
+
+        // Invalid thresholds should return false (safe default)
+        assert_eq!(usage.exceeds_threshold(f64::NAN), false);
+        assert_eq!(usage.exceeds_threshold(f64::INFINITY), false);
+        assert_eq!(usage.exceeds_threshold(-0.5), false);
+        assert_eq!(usage.exceeds_threshold(1.5), false);
     }
 }

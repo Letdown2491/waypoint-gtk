@@ -2,9 +2,16 @@
 //!
 //! Handles automatic backup configuration, pending backup queue, and backup history
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Sanitize a UUID for use as a TOML table key
+/// Replaces characters that are problematic in TOML table names
+fn sanitize_uuid_for_toml(uuid: &str) -> String {
+    uuid.replace('/', "_").replace('\\', "_").replace('.', "_")
+}
 
 /// Filter for which snapshots to backup
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -30,6 +37,10 @@ pub struct BackupDestinationConfig {
 
     /// Human-readable label
     pub label: String,
+
+    /// Optional user-defined nickname for this drive
+    #[serde(default)]
+    pub nickname: Option<String>,
 
     /// Last known mount point (for reference)
     #[serde(default)]
@@ -62,6 +73,26 @@ pub struct BackupDestinationConfig {
 
 fn default_true() -> bool {
     true
+}
+
+impl BackupDestinationConfig {
+    /// Get the display name for this destination
+    /// Priority: nickname → label → last_mount_point
+    pub fn display_name(&self) -> &str {
+        if let Some(ref nickname) = self.nickname {
+            if !nickname.is_empty() {
+                return nickname;
+            }
+        }
+
+        if !self.label.is_empty() {
+            &self.label
+        } else if !self.last_mount_point.is_empty() {
+            &self.last_mount_point
+        } else {
+            "Unnamed Drive"
+        }
+    }
 }
 
 /// Status of a pending backup
@@ -203,19 +234,29 @@ impl BackupConfig {
             std::fs::create_dir_all(parent)?;
         }
 
-        let contents = toml::to_string_pretty(self)?;
-        std::fs::write(path, contents)?;
+        let contents = toml::to_string_pretty(self)
+            .with_context(|| format!("Failed to serialize config to TOML. Destinations: {:?}", self.destinations.keys().collect::<Vec<_>>()))?;
+        std::fs::write(path, contents)
+            .with_context(|| format!("Failed to write config file to {:?}", path))?;
         Ok(())
     }
 
     /// Add or update a destination configuration
     pub fn add_destination(&mut self, uuid: String, config: BackupDestinationConfig) {
-        self.destinations.insert(uuid, config);
+        let sanitized_key = sanitize_uuid_for_toml(&uuid);
+        self.destinations.insert(sanitized_key, config);
     }
 
     /// Remove a destination configuration
     pub fn remove_destination(&mut self, uuid: &str) {
-        self.destinations.remove(uuid);
+        let sanitized_key = sanitize_uuid_for_toml(uuid);
+        self.destinations.remove(&sanitized_key);
+    }
+
+    /// Get a destination by UUID (handles sanitization internally)
+    pub fn get_destination(&self, uuid: &str) -> Option<&BackupDestinationConfig> {
+        let sanitized_key = sanitize_uuid_for_toml(uuid);
+        self.destinations.get(&sanitized_key)
     }
 
     /// Get enabled destinations
