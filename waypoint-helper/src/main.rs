@@ -432,15 +432,26 @@ impl WaypointHelper {
         #[zbus(connection)] connection: &Connection,
         name: String,
     ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_DELETE).await {
+            audit::log_auth_failure(uid, pid, POLKIT_ACTION_DELETE, &e.to_string());
             return (false, format!("Authorization failed: {}", e));
         }
 
         // Delete the snapshot
         match btrfs::delete_snapshot(&name) {
-            Ok(_) => (true, format!("Snapshot '{}' deleted successfully", name)),
-            Err(e) => (false, format!("Failed to delete snapshot: {}", e)),
+            Ok(_) => {
+                audit::log_snapshot_delete(uid, pid, &name, true, None);
+                (true, format!("Snapshot '{}' deleted successfully", name))
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                audit::log_snapshot_delete(uid, pid, &name, false, Some(&error_msg));
+                (false, format!("Failed to delete snapshot: {}", e))
+            }
         }
     }
 
@@ -451,16 +462,27 @@ impl WaypointHelper {
         #[zbus(connection)] connection: &Connection,
         name: String,
     ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
+            audit::log_auth_failure(uid, pid, POLKIT_ACTION_RESTORE, &e.to_string());
             return (false, format!("Authorization failed: {}", e));
         }
 
         // Perform rollback
-        result_to_dbus_response(
-            Self::restore_snapshot_impl(&name),
-            "Failed to restore snapshot"
-        )
+        match Self::restore_snapshot_impl(&name) {
+            Ok(_) => {
+                audit::log_snapshot_restore(uid, pid, &name, true, None);
+                (true, format!("Snapshot '{}' restored successfully. Reboot to apply changes.", name))
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                audit::log_snapshot_restore(uid, pid, &name, false, Some(&error_msg));
+                (false, format!("Failed to restore snapshot: {}", e))
+            }
+        }
     }
 
     /// List all snapshots
@@ -578,8 +600,12 @@ impl WaypointHelper {
         #[zbus(connection)] connection: &Connection,
         toml_content: String,
     ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
+            audit::log_auth_failure(uid.clone(), pid, POLKIT_ACTION_CONFIGURE, &e.to_string());
             return (false, format!("Authorization failed: {}", e));
         }
 
@@ -590,6 +616,8 @@ impl WaypointHelper {
                 // TOML is valid, proceed to save
             }
             Err(e) => {
+                let error_msg = e.to_string();
+                audit::log_config_change(uid, pid, "schedules", false, Some(&error_msg));
                 return (false, format!("Invalid TOML configuration: {}", e));
             }
         }
@@ -600,14 +628,24 @@ impl WaypointHelper {
         // Create parent directory if it doesn't exist
         if let Some(parent) = schedules_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
+                let error_msg = e.to_string();
+                audit::log_config_change(uid, pid, "schedules", false, Some(&error_msg));
                 return (false, format!("Failed to create config directory: {}", e));
             }
         }
 
         // Write configuration file
-        std::fs::write(&schedules_path, toml_content)
-            .map(|_| (true, "Schedules configuration saved".to_string()))
-            .unwrap_or_else(|e| (false, format!("Failed to save configuration: {}", e)))
+        match std::fs::write(&schedules_path, toml_content) {
+            Ok(_) => {
+                audit::log_config_change(uid, pid, "schedules", true, None);
+                (true, "Schedules configuration saved".to_string())
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                audit::log_config_change(uid, pid, "schedules", false, Some(&error_msg));
+                (false, format!("Failed to save configuration: {}", e))
+            }
+        }
     }
 
     /// Restart scheduler service
@@ -808,15 +846,26 @@ impl WaypointHelper {
         #[zbus(connection)] connection: &Connection,
         config_toml: String,
     ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
+            audit::log_auth_failure(uid, pid, POLKIT_ACTION_CONFIGURE, &e.to_string());
             return (false, format!("Authorization failed: {}", e));
         }
 
-        result_to_dbus_response(
-            Self::save_quota_config_impl(&config_toml),
-            "Failed to save quota configuration"
-        )
+        match Self::save_quota_config_impl(&config_toml) {
+            Ok(msg) => {
+                audit::log_config_change(uid, pid, "quota", true, None);
+                (true, msg)
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                audit::log_config_change(uid, pid, "quota", false, Some(&error_msg));
+                (false, format!("Failed to save quota configuration: {}", e))
+            }
+        }
     }
 
     /// Scan for available backup destinations

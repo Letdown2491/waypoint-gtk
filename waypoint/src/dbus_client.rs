@@ -44,6 +44,7 @@ pub struct VerificationResult {
 pub struct BackupVerificationResult {
     pub success: bool,
     pub message: String,
+    #[allow(dead_code)]
     pub details: Vec<String>,
 }
 

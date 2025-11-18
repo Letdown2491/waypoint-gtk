@@ -68,23 +68,6 @@ pub fn create_backups_content(
     dest_group.set_description(Some("Available external drives for backups"));
     dest_group.set_margin_top(18);
 
-    // Bulk actions row
-    let bulk_actions_row = adw::ActionRow::new();
-    bulk_actions_row.set_title("Bulk Actions");
-    bulk_actions_row.set_subtitle("Quickly enable or disable all destinations");
-
-    let enable_all_btn = Button::with_label("Enable All");
-    enable_all_btn.set_valign(gtk::Align::Center);
-    enable_all_btn.add_css_class("flat");
-
-    let disable_all_btn = Button::with_label("Disable All");
-    disable_all_btn.set_valign(gtk::Align::Center);
-    disable_all_btn.add_css_class("flat");
-
-    bulk_actions_row.add_suffix(&enable_all_btn);
-    bulk_actions_row.add_suffix(&disable_all_btn);
-    dest_group.add(&bulk_actions_row);
-
     // Destinations list container
     let destinations_list = adw::PreferencesGroup::new();
     destinations_list.set_visible(true); // Show by default
@@ -324,61 +307,6 @@ pub fn create_backups_content(
             backup_manager_clone.clone(),
             rows_clone.clone(),
         );
-    });
-
-    // Wire up bulk action buttons
-    let bm_enable_all = backup_manager.clone();
-    let parent_enable = parent.clone();
-    let dest_list_enable = destinations_list.clone();
-    let rows_enable = destination_rows.clone();
-    enable_all_btn.connect_clicked(move |_| {
-        let config = match bm_enable_all.borrow().get_config() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        for (uuid, mut dest_config) in config.destinations {
-            dest_config.enabled = true;
-            let _ = bm_enable_all.borrow().add_destination(uuid, dest_config);
-        }
-
-        // Refresh the list
-        perform_scan(
-            None,
-            dest_list_enable.clone(),
-            parent_enable.clone(),
-            bm_enable_all.clone(),
-            rows_enable.clone(),
-        );
-
-        dialogs::show_toast(&parent_enable, "All destinations enabled");
-    });
-
-    let bm_disable_all = backup_manager.clone();
-    let parent_disable = parent.clone();
-    let dest_list_disable = destinations_list.clone();
-    let rows_disable = destination_rows.clone();
-    disable_all_btn.connect_clicked(move |_| {
-        let config = match bm_disable_all.borrow().get_config() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        for (uuid, mut dest_config) in config.destinations {
-            dest_config.enabled = false;
-            let _ = bm_disable_all.borrow().add_destination(uuid, dest_config);
-        }
-
-        // Refresh the list
-        perform_scan(
-            None,
-            dest_list_disable.clone(),
-            parent_disable.clone(),
-            bm_disable_all.clone(),
-            rows_disable.clone(),
-        );
-
-        dialogs::show_toast(&parent_disable, "All destinations disabled");
     });
 
     content_box.append(&dest_group);
