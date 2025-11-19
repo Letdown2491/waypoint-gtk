@@ -2,7 +2,7 @@
 # https://embarkstudios.github.io/cargo-deny/
 
 [licenses]
-# Waypoint is MIT licensed, so we accept other permissive open-source licenses
+# Accept common permissive open-source licenses
 allow = [
     "MIT",
     "Apache-2.0",
@@ -14,64 +14,27 @@ allow = [
     "Zlib",
 ]
 
-# Accept dual-licensed crates like "MIT OR Apache-2.0" as long as one option is allowed
+# Accept dual-licensed crates
 confidence-threshold = 0.8
 
-# Clarifications for specific crates (if needed)
-[[licenses.clarify]]
-name = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [
-    { path = "LICENSE", hash = 0xbd0eed23 }
-]
-
 [advisories]
-# The advisories section is for security vulnerabilities
+# Deny security vulnerabilities
 vulnerability = "deny"
-# These fields determine which advisories to include/exclude
-# Valid values: "all", "workspace", "transitive", "none"
-# "all" - check all crates including transitive dependencies
-unmaintained = "all"
-unsound = "all"
-yanked = "all"
-notice = "all"
+
+# Warn about yanked crates
+yanked = "warn"
+
+# Ignore specific advisories if needed
 ignore = []
 
-# Severity to consider
-# Valid values: "low", "medium", "high", "critical"
-severity-threshold = "low"
-
 [bans]
-# Warn about multiple versions of the same crate (can indicate supply chain issues)
+# Warn about multiple versions of same crate
 multiple-versions = "warn"
 
-# Warn about wildcards in version requirements
+# Allow wildcards in dependencies
 wildcards = "allow"
 
-# Deny specific crates (add problematic crates here if needed)
-deny = [
-    # Example: { name = "bad-crate" },
-]
-
-# Allow specific crates to have multiple versions (if needed)
-skip = [
-    # Example for crates that commonly have version conflicts
-    # { name = "windows-sys", version = "*" },
-]
-
-# Skip trees of crates (useful for build dependencies)
-skip-tree = [
-    # Example: { name = "some-build-dep", version = "*" },
-]
-
 [sources]
-# Only allow crates from crates.io official registry
+# Only allow crates.io
 unknown-registry = "deny"
-
-# Deny git sources (supply chain risk - prefer versioned releases)
 unknown-git = "deny"
-
-# Allow specific git sources (if needed for unreleased patches)
-allow-git = [
-    # Example: "https://github.com/yourorg/forked-crate",
-]
