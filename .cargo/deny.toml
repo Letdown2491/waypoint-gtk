@@ -26,16 +26,20 @@ license-files = [
 ]
 
 [advisories]
-# Deny crates with security vulnerabilities
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
+# The advisories section is for security vulnerabilities
 vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
-ignore = [
-    # Example: "RUSTSEC-2020-0001",
-]
+# These fields determine which advisories to include/exclude
+# Valid values: "all", "workspace", "transitive", "none"
+# "all" - check all crates including transitive dependencies
+unmaintained = "all"
+unsound = "all"
+yanked = "all"
+notice = "all"
+ignore = []
+
+# Severity to consider
+# Valid values: "low", "medium", "high", "critical"
+severity-threshold = "low"
 
 [bans]
 # Warn about multiple versions of the same crate (can indicate supply chain issues)
