@@ -27,18 +27,12 @@ license-files = [
 
 [advisories]
 # Deny crates with security vulnerabilities
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
 vulnerability = "deny"
-
-# Warn about unmaintained crates
 unmaintained = "warn"
-
-# Warn about crates with unsound code
-unsound = "warn"
-
-# Warn about yanked crates
 yanked = "warn"
-
-# Ignore specific advisories (if needed - add RUSTSEC IDs here)
+notice = "warn"
 ignore = [
     # Example: "RUSTSEC-2020-0001",
 ]
