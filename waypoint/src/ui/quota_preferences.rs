@@ -59,12 +59,12 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
                     if let Some(limit) = usage.limit {
                         let limit_str = QuotaConfig::format_size(limit);
                         let pct = usage.usage_percent().unwrap_or(0.0) * 100.0;
-                        format!("{} / {} ({:.1}%)", used, limit_str, pct)
+                        format!("{used} / {limit_str} ({pct:.1}%)")
                     } else {
-                        format!("{} (no limit set)", used)
+                        format!("{used} (no limit set)")
                     }
                 }
-                Err(e) => format!("Error: {}", e),
+                Err(e) => format!("Error: {e}"),
             },
             Err(_) => "Cannot connect to helper service".to_string(),
         }
@@ -172,65 +172,73 @@ pub fn create_quota_page(parent: &adw::ApplicationWindow) -> adw::PreferencesPag
         let threshold_spin_save = threshold_spin_for_save.clone();
 
         if enabled {
+            // Clone for confirm callback
+            let parent_confirm = parent.clone();
+            let enable_switch_confirm = enable_switch.clone();
+            let type_row_confirm = type_row_save.clone();
+            let cleanup_row_confirm = cleanup_row_save.clone();
+            let limit_spin_confirm = limit_spin_save.clone();
+            let threshold_spin_confirm = threshold_spin_save.clone();
+
+            // Clone for cancel callback
+            let enable_switch_cancel = enable_switch.clone();
+
             // Confirm enable
-            let dialog = adw::MessageDialog::new(
-                Some(&parent),
-                Some("Enable Quotas?"),
-                Some("This will enable btrfs quota tracking on your snapshot filesystem. This operation may take a moment."),
-            );
-            dialog.add_response("cancel", "Cancel");
-            dialog.add_response("enable", "Enable");
-            dialog.set_response_appearance("enable", adw::ResponseAppearance::Suggested);
-            dialog.set_default_response(Some("enable"));
-            dialog.set_close_response("cancel");
-
-            dialog.connect_response(None, move |_, response| {
-                if response == "enable" {
+            super::dialogs::show_confirmation_with_cancel(
+                &parent,
+                "Enable Quotas?",
+                "This will enable btrfs quota tracking on your snapshot filesystem. This operation may take a moment.",
+                "Enable",
+                false,
+                move || {
                     save_quota_config(
-                        &parent,
-                        &enable_switch,
-                        &type_row_save,
-                        &cleanup_row_save,
-                        &limit_spin_save,
-                        &threshold_spin_save,
+                        &parent_confirm,
+                        &enable_switch_confirm,
+                        &type_row_confirm,
+                        &cleanup_row_confirm,
+                        &limit_spin_confirm,
+                        &threshold_spin_confirm,
                     );
-                } else {
+                },
+                move || {
                     // User cancelled, revert the switch
-                    enable_switch.set_active(false);
-                }
-            });
-
-            dialog.present();
+                    enable_switch_cancel.set_active(false);
+                },
+            );
         } else {
+            // Clone for confirm callback
+            let parent_confirm = parent.clone();
+            let enable_switch_confirm = enable_switch.clone();
+            let type_row_confirm = type_row_save.clone();
+            let cleanup_row_confirm = cleanup_row_save.clone();
+            let limit_spin_confirm = limit_spin_save.clone();
+            let threshold_spin_confirm = threshold_spin_save.clone();
+
+            // Clone for cancel callback
+            let enable_switch_cancel = enable_switch.clone();
+
             // Confirm disable
-            let dialog = adw::MessageDialog::new(
-                Some(&parent),
-                Some("Disable Quotas?"),
-                Some("This will disable quota tracking. Usage information will no longer be available."),
-            );
-            dialog.add_response("cancel", "Cancel");
-            dialog.add_response("disable", "Disable");
-            dialog.set_response_appearance("disable", adw::ResponseAppearance::Destructive);
-            dialog.set_default_response(Some("disable"));
-            dialog.set_close_response("cancel");
-
-            dialog.connect_response(None, move |_, response| {
-                if response == "disable" {
+            super::dialogs::show_confirmation_with_cancel(
+                &parent,
+                "Disable Quotas?",
+                "This will disable quota tracking. Usage information will no longer be available.",
+                "Disable",
+                true,
+                move || {
                     save_quota_config(
-                        &parent,
-                        &enable_switch,
-                        &type_row_save,
-                        &cleanup_row_save,
-                        &limit_spin_save,
-                        &threshold_spin_save,
+                        &parent_confirm,
+                        &enable_switch_confirm,
+                        &type_row_confirm,
+                        &cleanup_row_confirm,
+                        &limit_spin_confirm,
+                        &threshold_spin_confirm,
                     );
-                } else {
+                },
+                move || {
                     // User cancelled, revert the switch
-                    enable_switch.set_active(true);
-                }
-            });
-
-            dialog.present();
+                    enable_switch_cancel.set_active(true);
+                },
+            );
         }
     });
 
@@ -368,7 +376,7 @@ fn save_quota_config(
         dialogs::show_error(
             parent,
             "Save Failed",
-            &format!("Failed to save quota settings: {}", e),
+            &format!("Failed to save quota settings: {e}"),
         );
         return;
     }
@@ -386,23 +394,23 @@ fn apply_quota_settings(
     // First, save the configuration via D-Bus
     let config_toml = toml::to_string_pretty(config)?;
     let msg = client.save_quota_config(config_toml)?;
-    log::info!("{}", msg);
+    log::info!("{msg}");
 
     if config.enabled {
         // Enable quotas
         let use_simple = matches!(config.quota_type, QuotaType::Simple);
         let msg = client.enable_quotas(use_simple)?;
-        log::info!("{}", msg);
+        log::info!("{msg}");
 
         // Set limit if specified
         if let Some(limit_bytes) = config.total_limit_bytes {
             let msg = client.set_quota_limit(limit_bytes)?;
-            log::info!("{}", msg);
+            log::info!("{msg}");
         }
     } else {
         // Disable quotas
         let msg = client.disable_quotas()?;
-        log::info!("{}", msg);
+        log::info!("{msg}");
     }
 
     Ok(())

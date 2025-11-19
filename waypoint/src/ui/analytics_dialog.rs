@@ -250,7 +250,7 @@ fn create_overview_section(stats: &SnapshotStats) -> adw::PreferencesGroup {
         } else if days == 1 {
             "1 day ago".to_string()
         } else if days < 30 {
-            format!("{} days ago", days)
+            format!("{days} days ago")
         } else if days < 365 {
             format!("{} months ago", days / 30)
         } else {
@@ -286,7 +286,7 @@ fn create_overview_section(stats: &SnapshotStats) -> adw::PreferencesGroup {
             freq_row.set_title("Snapshot Frequency");
             let per_day = stats.total_count as f64 / oldest_days as f64;
             let freq_text = if per_day >= 1.0 {
-                format!("{:.1} per day", per_day)
+                format!("{per_day:.1} per day")
             } else {
                 format!("1 per {:.0} days", 1.0 / per_day)
             };
@@ -375,7 +375,7 @@ fn create_largest_snapshots_section(
         } else {
             0
         };
-        let pct_label = Label::new(Some(&format!("{}%", percentage)));
+        let pct_label = Label::new(Some(&format!("{percentage}%")));
         pct_label.add_css_class("caption");
         pct_label.add_css_class("dim-label");
         pct_label.set_halign(gtk::Align::End);
@@ -515,7 +515,7 @@ fn create_insights_section(
             } else if per_day > 3.0 {
                 insights.push((
                     "Frequent snapshots",
-                    format!("Creating snapshots {:.1}x per day. Ensure this frequency aligns with your backup strategy.", per_day),
+                    format!("Creating snapshots {per_day:.1}x per day. Ensure this frequency aligns with your backup strategy."),
                     "info"
                 ));
             }

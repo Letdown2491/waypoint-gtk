@@ -47,7 +47,7 @@ pub fn show_file_diff_dialog(
 
     // Title
     let title_box = gtk::Box::new(Orientation::Vertical, 6);
-    let title = Label::new(Some(&format!("{} → {}", old_snapshot, new_snapshot)));
+    let title = Label::new(Some(&format!("{old_snapshot} → {new_snapshot}")));
     title.add_css_class("title-2");
     title.set_halign(gtk::Align::Start);
     title_box.append(&title);
@@ -149,7 +149,7 @@ pub fn show_file_diff_dialog(
                                 dialogs::show_error(
                                     &parent_clone,
                                     "Comparison Failed",
-                                    &format!("Failed to compare snapshots: {}", e),
+                                    &format!("Failed to compare snapshots: {e}"),
                                 );
                             }
                             dialog_clone.close();
@@ -197,7 +197,7 @@ fn display_changes(
 
     // Title
     let title_box = gtk::Box::new(Orientation::Vertical, 6);
-    let title = Label::new(Some(&format!("{} → {}", old_snapshot, new_snapshot)));
+    let title = Label::new(Some(&format!("{old_snapshot} → {new_snapshot}")));
     title.add_css_class("title-2");
     title.set_halign(gtk::Align::Start);
     title_box.append(&title);

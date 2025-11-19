@@ -164,7 +164,7 @@ impl WaypointHelperClient {
     /// * `name` - Snapshot name (must be filesystem-safe, validated for security)
     /// * `description` - Human-readable description (can be empty string)
     /// * `subvolumes` - Mount points to snapshot (e.g., `vec!["/".to_string()]`)
-    ///                  Empty vec defaults to root filesystem only
+    ///   Empty vec defaults to root filesystem only
     ///
     /// # Returns
     /// * `Ok((true, msg))` - Snapshot created successfully, `msg` contains confirmation
@@ -549,7 +549,7 @@ impl WaypointHelperClient {
     ///
     /// # Arguments
     /// * `schedule_based` - If true, use per-schedule retention from schedules.toml.
-    ///                      If false, use legacy global retention policy.
+    ///   If false, use legacy global retention policy.
     ///
     /// # Returns
     /// * `Ok((true, msg))` - Cleanup completed successfully

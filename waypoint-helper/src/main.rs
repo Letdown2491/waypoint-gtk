@@ -6,212 +6,18 @@ use serde::Deserialize;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::signal::unix::{SignalKind, signal};
 use waypoint_common::*;
 use zbus::{Connection, ConnectionBuilder, interface};
 
+mod audit;
 mod backup;
 mod btrfs;
 mod packages;
 
-/// Structured audit logging for security events
-mod audit {
-    use chrono::Utc;
-
-    /// Audit log entry for security-relevant events
-    #[derive(Debug, serde::Serialize)]
-    struct AuditEvent {
-        timestamp: String,
-        user_id: String,
-        user_name: Option<String>,
-        process_id: u32,
-        operation: String,
-        resource: String,
-        result: String,
-        details: Option<String>,
-    }
-
-    impl AuditEvent {
-        fn new(
-            user_id: String,
-            process_id: u32,
-            operation: &str,
-            resource: &str,
-            result: &str,
-        ) -> Self {
-            // Try to get username from UID
-            let user_name = get_username_from_uid(&user_id);
-
-            Self {
-                timestamp: Utc::now().to_rfc3339(),
-                user_id,
-                user_name,
-                process_id,
-                operation: operation.to_string(),
-                resource: resource.to_string(),
-                result: result.to_string(),
-                details: None,
-            }
-        }
-
-        fn with_details(mut self, details: String) -> Self {
-            self.details = Some(details);
-            self
-        }
-
-        /// Log the audit event as structured JSON
-        fn log(&self) {
-            // Log as JSON for easy parsing by audit tools
-            if let Ok(json) = serde_json::to_string(self) {
-                log::info!(target: "audit", "{}", json);
-            } else {
-                // Fallback to unstructured if serialization fails
-                log::info!(
-                    target: "audit",
-                    "user={} pid={} operation={} resource={} result={}",
-                    self.user_id,
-                    self.process_id,
-                    self.operation,
-                    self.resource,
-                    self.result
-                );
-            }
-        }
-    }
-
-    /// Get username from UID (best effort)
-    fn get_username_from_uid(uid_str: &str) -> Option<String> {
-        use std::process::Command;
-
-        let output = Command::new("id")
-            .arg("-un")
-            .arg(uid_str)
-            .output()
-            .ok()?;
-
-        if output.status.success() {
-            String::from_utf8(output.stdout)
-                .ok()
-                .map(|s| s.trim().to_string())
-        } else {
-            None
-        }
-    }
-
-    /// Log a snapshot creation event
-    pub fn log_snapshot_create(
-        user_id: String,
-        process_id: u32,
-        snapshot_name: &str,
-        success: bool,
-        error: Option<&str>,
-    ) {
-        let result = if success { "success" } else { "failure" };
-        let mut event = AuditEvent::new(
-            user_id,
-            process_id,
-            "create_snapshot",
-            snapshot_name,
-            result,
-        );
-
-        if let Some(err) = error {
-            event = event.with_details(format!("error: {}", err));
-        }
-
-        event.log();
-    }
-
-    /// Log a snapshot deletion event
-    pub fn log_snapshot_delete(
-        user_id: String,
-        process_id: u32,
-        snapshot_name: &str,
-        success: bool,
-        error: Option<&str>,
-    ) {
-        let result = if success { "success" } else { "failure" };
-        let mut event = AuditEvent::new(
-            user_id,
-            process_id,
-            "delete_snapshot",
-            snapshot_name,
-            result,
-        );
-
-        if let Some(err) = error {
-            event = event.with_details(format!("error: {}", err));
-        }
-
-        event.log();
-    }
-
-    /// Log a snapshot restore/rollback event
-    pub fn log_snapshot_restore(
-        user_id: String,
-        process_id: u32,
-        snapshot_name: &str,
-        success: bool,
-        error: Option<&str>,
-    ) {
-        let result = if success { "success" } else { "failure" };
-        let mut event = AuditEvent::new(
-            user_id,
-            process_id,
-            "restore_snapshot",
-            snapshot_name,
-            result,
-        );
-
-        if let Some(err) = error {
-            event = event.with_details(format!("error: {}", err));
-        }
-
-        event.log();
-    }
-
-    /// Log a configuration change event
-    pub fn log_config_change(
-        user_id: String,
-        process_id: u32,
-        config_type: &str,
-        success: bool,
-        error: Option<&str>,
-    ) {
-        let result = if success { "success" } else { "failure" };
-        let mut event = AuditEvent::new(
-            user_id,
-            process_id,
-            "modify_configuration",
-            config_type,
-            result,
-        );
-
-        if let Some(err) = error {
-            event = event.with_details(format!("error: {}", err));
-        }
-
-        event.log();
-    }
-
-    /// Log an authorization failure
-    pub fn log_auth_failure(
-        user_id: String,
-        process_id: u32,
-        operation: &str,
-        reason: &str,
-    ) {
-        let event = AuditEvent::new(
-            user_id,
-            process_id,
-            operation,
-            "authorization",
-            "denied",
-        ).with_details(format!("reason: {}", reason));
-
-        event.log();
-    }
-}
+/// Global counter for mutex poisoning events (for monitoring)
+static MUTEX_POISON_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Simple rate limiter to prevent DoS via expensive operations
 /// Implements a per-user, per-operation cooldown period
@@ -233,10 +39,20 @@ impl RateLimiter {
     /// Returns Ok(()) if allowed, Err with time to wait if rate limited
     fn check_rate_limit(&self, user_id: &str, operation: &str) -> Result<(), std::time::Duration> {
         let mut state = self.last_operation.lock().unwrap_or_else(|poisoned| {
-            log::error!("Rate limiter mutex poisoned, recovering");
+            let count = MUTEX_POISON_COUNT.fetch_add(1, Ordering::Relaxed);
+            log::error!("Rate limiter mutex poisoned (count: {}), recovering", count + 1);
+
+            // Alert if poisoning happens frequently (potential bug or attack)
+            if count > 10 {
+                log::error!(
+                    "CRITICAL: Rate limiter mutex poisoned {} times - potential issue requiring investigation",
+                    count + 1
+                );
+            }
+
             poisoned.into_inner()
         });
-        let key = format!("{}:{}", user_id, operation);
+        let key = format!("{user_id}:{operation}");
         let now = std::time::Instant::now();
 
         if let Some(last_time) = state.get(&key) {
@@ -376,12 +192,12 @@ impl WaypointHelper {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
             audit::log_auth_failure(uid, pid, "create_snapshot", &e.to_string());
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         // Rate limiting check
         if let Err(wait_time) = self.rate_limiter.check_rate_limit(&uid, "create_snapshot") {
-            log::warn!("Rate limit exceeded for user {} creating snapshot", uid);
+            log::warn!("Rate limit exceeded for user {uid} creating snapshot");
             audit::log_snapshot_create(uid, pid, &name, false, Some("rate limit exceeded"));
             return (
                 false,
@@ -411,7 +227,7 @@ impl WaypointHelper {
                 };
 
                 if let Err(e) = Self::snapshot_created(&ctxt, &name, created_by).await {
-                    log::error!("Failed to emit snapshot_created signal: {}", e);
+                    log::error!("Failed to emit snapshot_created signal: {e}");
                 }
 
                 (true, msg)
@@ -438,19 +254,19 @@ impl WaypointHelper {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_DELETE).await {
             audit::log_auth_failure(uid, pid, POLKIT_ACTION_DELETE, &e.to_string());
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         // Delete the snapshot
         match btrfs::delete_snapshot(&name) {
             Ok(_) => {
                 audit::log_snapshot_delete(uid, pid, &name, true, None);
-                (true, format!("Snapshot '{}' deleted successfully", name))
+                (true, format!("Snapshot '{name}' deleted successfully"))
             }
             Err(e) => {
                 let error_msg = e.to_string();
                 audit::log_snapshot_delete(uid, pid, &name, false, Some(&error_msg));
-                (false, format!("Failed to delete snapshot: {}", e))
+                (false, format!("Failed to delete snapshot: {e}"))
             }
         }
     }
@@ -468,19 +284,19 @@ impl WaypointHelper {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
             audit::log_auth_failure(uid, pid, POLKIT_ACTION_RESTORE, &e.to_string());
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         // Perform rollback
         match Self::restore_snapshot_impl(&name) {
             Ok(_) => {
                 audit::log_snapshot_restore(uid, pid, &name, true, None);
-                (true, format!("Snapshot '{}' restored successfully. Reboot to apply changes.", name))
+                (true, format!("Snapshot '{name}' restored successfully. Reboot to apply changes."))
             }
             Err(e) => {
                 let error_msg = e.to_string();
                 audit::log_snapshot_restore(uid, pid, &name, false, Some(&error_msg));
-                (false, format!("Failed to restore snapshot: {}", e))
+                (false, format!("Failed to restore snapshot: {e}"))
             }
         }
     }
@@ -496,7 +312,7 @@ impl WaypointHelper {
                 serde_json::to_string(&snapshot_infos).unwrap_or_else(|_| "[]".to_string())
             }
             Err(e) => {
-                log::error!("Failed to list snapshots: {}", e);
+                log::error!("Failed to list snapshots: {e}");
                 "[]".to_string()
             }
         }
@@ -510,7 +326,7 @@ impl WaypointHelper {
         match btrfs::get_snapshot_sizes(snapshot_names) {
             Ok(sizes) => serde_json::to_string(&sizes).unwrap_or_else(|_| "{}".to_string()),
             Err(e) => {
-                log::error!("Failed to get snapshot sizes: {}", e);
+                log::error!("Failed to get snapshot sizes: {e}");
                 "{}".to_string()
             }
         }
@@ -525,7 +341,7 @@ impl WaypointHelper {
                     .to_string()
             }),
             Err(e) => {
-                log::error!("Failed to verify snapshot: {}", e);
+                log::error!("Failed to verify snapshot: {e}");
                 serde_json::to_string(&btrfs::VerificationResult {
                     is_valid: false,
                     errors: vec![format!("Verification failed: {}", e)],
@@ -546,17 +362,17 @@ impl WaypointHelper {
         name: String,
     ) -> (bool, String) {
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         match btrfs::preview_restore(&name) {
             Ok(result) => match serde_json::to_string(&result) {
                 Ok(json) => (true, json),
-                Err(e) => (false, format!("Failed to serialize preview: {}", e)),
+                Err(e) => (false, format!("Failed to serialize preview: {e}")),
             },
             Err(e) => {
-                log::error!("Failed to preview restore: {}", e);
-                (false, format!("Failed to preview restore: {}", e))
+                log::error!("Failed to preview restore: {e}");
+                (false, format!("Failed to preview restore: {e}"))
             }
         }
     }
@@ -570,7 +386,7 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         log::warn!("update_scheduler_config is deprecated, use save_schedules_config instead");
@@ -589,7 +405,7 @@ impl WaypointHelper {
         // Write configuration file
         match std::fs::write(scheduler_config_path(), config_content) {
             Ok(_) => (true, "Scheduler configuration updated".to_string()),
-            Err(e) => (false, format!("Failed to update configuration: {}", e)),
+            Err(e) => (false, format!("Failed to update configuration: {e}")),
         }
     }
 
@@ -606,7 +422,7 @@ impl WaypointHelper {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
             audit::log_auth_failure(uid.clone(), pid, POLKIT_ACTION_CONFIGURE, &e.to_string());
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         // Validate TOML by parsing it first
@@ -618,7 +434,7 @@ impl WaypointHelper {
             Err(e) => {
                 let error_msg = e.to_string();
                 audit::log_config_change(uid, pid, "schedules", false, Some(&error_msg));
-                return (false, format!("Invalid TOML configuration: {}", e));
+                return (false, format!("Invalid TOML configuration: {e}"));
             }
         }
 
@@ -630,7 +446,7 @@ impl WaypointHelper {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 let error_msg = e.to_string();
                 audit::log_config_change(uid, pid, "schedules", false, Some(&error_msg));
-                return (false, format!("Failed to create config directory: {}", e));
+                return (false, format!("Failed to create config directory: {e}"));
             }
         }
 
@@ -643,7 +459,7 @@ impl WaypointHelper {
             Err(e) => {
                 let error_msg = e.to_string();
                 audit::log_config_change(uid, pid, "schedules", false, Some(&error_msg));
-                (false, format!("Failed to save configuration: {}", e))
+                (false, format!("Failed to save configuration: {e}"))
             }
         }
     }
@@ -656,12 +472,12 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         run_command("sv", &["restart", "waypoint-scheduler"])
             .map(|_| (true, "Scheduler service restarted".to_string()))
-            .unwrap_or_else(|e| (false, format!("Failed to restart scheduler service: {}", e)))
+            .unwrap_or_else(|e| (false, format!("Failed to restart scheduler service: {e}")))
     }
 
     /// Get scheduler service status
@@ -683,7 +499,7 @@ impl WaypointHelper {
                 }
             })
             .unwrap_or_else(|e| {
-                log::warn!("Failed to query scheduler status: {}", e);
+                log::warn!("Failed to query scheduler status: {e}");
                 "unknown".to_string()
             })
     }
@@ -697,7 +513,7 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_DELETE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         // Perform cleanup
@@ -728,7 +544,7 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization - file restoration requires restore permissions
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         // Perform file restoration
@@ -749,7 +565,7 @@ impl WaypointHelper {
         new_snapshot_name: String,
     ) -> (bool, String) {
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         result_to_dbus_response(
@@ -770,7 +586,7 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         result_to_dbus_response(
@@ -787,7 +603,7 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         result_to_dbus_response(
@@ -806,7 +622,7 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         result_to_dbus_response(
@@ -827,7 +643,7 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         result_to_dbus_response(
@@ -852,7 +668,7 @@ impl WaypointHelper {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
             audit::log_auth_failure(uid, pid, POLKIT_ACTION_CONFIGURE, &e.to_string());
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         match Self::save_quota_config_impl(&config_toml) {
@@ -863,7 +679,7 @@ impl WaypointHelper {
             Err(e) => {
                 let error_msg = e.to_string();
                 audit::log_config_change(uid, pid, "quota", false, Some(&error_msg));
-                (false, format!("Failed to save quota configuration: {}", e))
+                (false, format!("Failed to save quota configuration: {e}"))
             }
         }
     }
@@ -875,9 +691,9 @@ impl WaypointHelper {
         match backup::scan_backup_destinations() {
             Ok(destinations) => match serde_json::to_string(&destinations) {
                 Ok(json) => (true, json),
-                Err(e) => (false, format!("Failed to serialize destinations: {}", e)),
+                Err(e) => (false, format!("Failed to serialize destinations: {e}")),
             },
-            Err(e) => (false, format!("Failed to scan destinations: {}", e)),
+            Err(e) => (false, format!("Failed to scan destinations: {e}")),
         }
     }
 
@@ -901,7 +717,7 @@ impl WaypointHelper {
     ) -> (bool, String, u64) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
-            return (false, format!("Authorization failed: {}", e), 0);
+            return (false, format!("Authorization failed: {e}"), 0);
         }
 
         let parent = if parent_snapshot.is_empty() {
@@ -917,12 +733,12 @@ impl WaypointHelper {
                     .find(|d| d.mount_point == destination_mount)
                     .and_then(|d| d.uuid.clone())
                     .unwrap_or_else(|| {
-                        log::warn!("Could not find UUID for mount point {}", destination_mount);
+                        log::warn!("Could not find UUID for mount point {destination_mount}");
                         destination_mount.clone() // Fallback to mount point
                     })
             }
             Err(e) => {
-                log::error!("Failed to scan destinations for UUID lookup: {}", e);
+                log::error!("Failed to scan destinations for UUID lookup: {e}");
                 destination_mount.clone() // Fallback to mount point
             }
         };
@@ -956,24 +772,22 @@ impl WaypointHelper {
                     // Try to receive progress updates
                     let rx_clone = progress_rx.clone();
                     let dest_uuid_ref = destination_uuid.clone();
-                    if let Ok(progress) = tokio::task::spawn_blocking(move || {
+                    if let Ok(Ok(progress)) = tokio::task::spawn_blocking(move || {
                         rx_clone.lock().unwrap_or_else(|poisoned| {
                             log::error!("Progress receiver mutex poisoned, recovering");
                             poisoned.into_inner()
                         }).try_recv()
                     }).await {
-                        if let Ok(progress) = progress {
-                            if let Err(e) = Self::backup_progress(
-                                &ctxt,
-                                &progress.snapshot_id,
-                                &dest_uuid_ref, // Use looked-up UUID
-                                progress.bytes_transferred,
-                                progress.total_bytes,
-                                progress.speed_bytes_per_sec,
-                                &progress.stage,
-                            ).await {
-                                log::error!("Failed to emit backup_progress signal: {}", e);
-                            }
+                        if let Err(e) = Self::backup_progress(
+                            &ctxt,
+                            &progress.snapshot_id,
+                            &dest_uuid_ref, // Use looked-up UUID
+                            progress.bytes_transferred,
+                            progress.total_bytes,
+                            progress.speed_bytes_per_sec,
+                            &progress.stage,
+                        ).await {
+                            log::error!("Failed to emit backup_progress signal: {e}");
                         }
                     }
                 }
@@ -1008,8 +822,8 @@ impl WaypointHelper {
                     // Return backup result
                     return match result {
                         Ok(Ok((backup_path, size_bytes))) => (true, backup_path, size_bytes),
-                        Ok(Err(e)) => (false, format!("Failed to backup snapshot: {}", e), 0),
-                        Err(e) => (false, format!("Backup task failed: {}", e), 0),
+                        Ok(Err(e)) => (false, format!("Failed to backup snapshot: {e}"), 0),
+                        Err(e) => (false, format!("Backup task failed: {e}"), 0),
                     };
                 }
             }
@@ -1025,15 +839,15 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         match backup::list_backups(&destination_mount) {
             Ok(backups) => match serde_json::to_string(&backups) {
                 Ok(json) => (true, json),
-                Err(e) => (false, format!("Failed to serialize backups: {}", e)),
+                Err(e) => (false, format!("Failed to serialize backups: {e}")),
             },
-            Err(e) => (false, format!("Failed to list backups: {}", e)),
+            Err(e) => (false, format!("Failed to list backups: {e}")),
         }
     }
 
@@ -1045,9 +859,9 @@ impl WaypointHelper {
         match backup::get_drive_stats(&destination_mount) {
             Ok(stats) => match serde_json::to_string(&stats) {
                 Ok(json) => (true, json),
-                Err(e) => (false, format!("Failed to serialize stats: {}", e)),
+                Err(e) => (false, format!("Failed to serialize stats: {e}")),
             },
-            Err(e) => (false, format!("Failed to get drive stats: {}", e)),
+            Err(e) => (false, format!("Failed to get drive stats: {e}")),
         }
     }
 
@@ -1070,9 +884,9 @@ impl WaypointHelper {
         match backup::verify_backup(&snapshot_path, &destination_mount, &snapshot_id) {
             Ok(result) => match serde_json::to_string(&result) {
                 Ok(json) => (true, json),
-                Err(e) => (false, format!("Failed to serialize verification result: {}", e)),
+                Err(e) => (false, format!("Failed to serialize verification result: {e}")),
             },
-            Err(e) => (false, format!("Verification failed: {}", e)),
+            Err(e) => (false, format!("Verification failed: {e}")),
         }
     }
 
@@ -1086,12 +900,12 @@ impl WaypointHelper {
     ) -> (bool, String) {
         // Check authorization - use restore action since we're restoring a snapshot
         if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {}", e));
+            return (false, format!("Authorization failed: {e}"));
         }
 
         match backup::restore_from_backup(&backup_path, &snapshots_dir) {
             Ok(restored_path) => (true, restored_path),
-            Err(e) => (false, format!("Failed to restore from backup: {}", e)),
+            Err(e) => (false, format!("Failed to restore from backup: {e}")),
         }
     }
 }
@@ -1104,7 +918,7 @@ impl WaypointHelper {
     ) -> Result<String> {
         // Check quota and cleanup if needed
         if let Err(e) = Self::check_quota_and_cleanup() {
-            log::warn!("Failed to check quota before snapshot: {}", e);
+            log::warn!("Failed to check quota before snapshot: {e}");
             // Continue anyway - quota check is not critical
         }
 
@@ -1122,20 +936,20 @@ impl WaypointHelper {
         btrfs::create_snapshot(name, Some(description), packages, subvol_paths)
             .context("Failed to create btrfs snapshot")?;
 
-        Ok(format!("Snapshot '{}' created successfully", name))
+        Ok(format!("Snapshot '{name}' created successfully"))
     }
 
     fn restore_snapshot_impl(name: &str) -> Result<String> {
         // Create pre-rollback backup (only root filesystem for safety)
         // Use timestamp + counter to ensure uniqueness even if multiple rollbacks in same second
         let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
-        let mut backup_name = format!("waypoint-pre-rollback-{}", timestamp);
+        let mut backup_name = format!("waypoint-pre-rollback-{timestamp}");
 
         // Check if snapshot with this name already exists, add counter if needed
         let existing_snapshots = btrfs::list_snapshots().unwrap_or_default();
         let mut counter = 1;
         while existing_snapshots.iter().any(|s| s.name == backup_name) {
-            backup_name = format!("waypoint-pre-rollback-{}-{}", timestamp, counter);
+            backup_name = format!("waypoint-pre-rollback-{timestamp}-{counter}");
             counter += 1;
 
             // Sanity check to prevent infinite loop
@@ -1161,8 +975,7 @@ impl WaypointHelper {
         btrfs::restore_snapshot(name).context("Failed to restore snapshot")?;
 
         Ok(format!(
-            "Snapshot '{}' will be active after reboot. Backup created: '{}'",
-            name, backup_name
+            "Snapshot '{name}' will be active after reboot. Backup created: '{backup_name}'"
         ))
     }
 
@@ -1293,31 +1106,28 @@ impl WaypointHelper {
         for snapshot_name in &to_delete {
             if let Err(e) = btrfs::ensure_snapshot_name(snapshot_name) {
                 log::error!(
-                    "Skipping snapshot '{}' due to invalid name/path: {}",
-                    snapshot_name,
-                    e
+                    "Skipping snapshot '{snapshot_name}' due to invalid name/path: {e}"
                 );
                 failed.push(snapshot_name.clone());
                 continue;
             }
             match btrfs::delete_snapshot(snapshot_name) {
                 Ok(_) => {
-                    log::info!("Deleted old snapshot: {}", snapshot_name);
+                    log::info!("Deleted old snapshot: {snapshot_name}");
                     deleted += 1;
                 }
                 Err(e) => {
-                    log::error!("Failed to delete snapshot '{}': {}", snapshot_name, e);
+                    log::error!("Failed to delete snapshot '{snapshot_name}': {e}");
                     failed.push(snapshot_name.clone());
                 }
             }
         }
 
         if failed.is_empty() {
-            Ok(format!("Cleaned up {} snapshot(s)", deleted))
+            Ok(format!("Cleaned up {deleted} snapshot(s)"))
         } else {
             Ok(format!(
-                "Cleaned up {} snapshot(s), failed to delete: {:?}",
-                deleted, failed
+                "Cleaned up {deleted} snapshot(s), failed to delete: {failed:?}"
             ))
         }
     }
@@ -1332,7 +1142,7 @@ impl WaypointHelper {
         use std::path::{Component, Path, PathBuf};
 
         waypoint_common::validate_snapshot_name(snapshot_name)
-            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{}': {}", snapshot_name, e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{snapshot_name}': {e}"))?;
 
         let config = WaypointConfig::new();
         let snapshot_base_dir = config.snapshot_dir.join(snapshot_name);
@@ -1347,7 +1157,7 @@ impl WaypointHelper {
         };
 
         if subvolumes.is_empty() {
-            anyhow::bail!("Snapshot {} has no subvolumes recorded in metadata", snapshot_name);
+            anyhow::bail!("Snapshot {snapshot_name} has no subvolumes recorded in metadata");
         }
 
         // Helper function to map a file path to its subvolume directory name
@@ -1431,12 +1241,12 @@ impl WaypointHelper {
             let normalized_path = if file_path.starts_with('/') {
                 file_path.to_string()
             } else {
-                format!("/{}", file_path)
+                format!("/{file_path}")
             };
 
             // Validate path structure to prevent traversal outside the snapshot
             let path_buf = sanitize_absolute_path(&normalized_path).map_err(|e| {
-                anyhow::anyhow!("Invalid restore path '{}': {}", normalized_path, e)
+                anyhow::anyhow!("Invalid restore path '{normalized_path}': {e}")
             })?;
 
             // Find which subvolume contains this file
@@ -1476,7 +1286,7 @@ impl WaypointHelper {
             let source = snapshot_root.join(relative_path);
 
             if !source.exists() {
-                log::warn!("File not found in snapshot: {}", normalized_path);
+                log::warn!("File not found in snapshot: {normalized_path}");
                 failed_files.push(normalized_path.clone());
                 continue;
             }
@@ -1552,9 +1362,7 @@ impl WaypointHelper {
                                         }
                                         Err(e) => {
                                             log::error!(
-                                                "Failed to create symlink {}: {}",
-                                                normalized_path,
-                                                e
+                                                "Failed to create symlink {normalized_path}: {e}"
                                             );
                                             failed_files.push(normalized_path.clone());
                                         }
@@ -1562,9 +1370,7 @@ impl WaypointHelper {
                                 }
                                 Err(e) => {
                                     log::error!(
-                                        "Failed to read symlink {}: {}",
-                                        normalized_path,
-                                        e
+                                        "Failed to read symlink {normalized_path}: {e}"
                                     );
                                     failed_files.push(normalized_path.clone());
                                 }
@@ -1580,14 +1386,14 @@ impl WaypointHelper {
                         }
                     } else if metadata.is_dir() {
                         if let Err(e) = copy_dir_recursive(&snapshot_root, &source, &target) {
-                            log::error!("Failed to restore directory {}: {}", normalized_path, e);
+                            log::error!("Failed to restore directory {normalized_path}: {e}");
                             failed_files.push(normalized_path.clone());
                         } else {
                             restored_count += 1;
                         }
                     } else if metadata.is_file() {
                         if let Err(e) = fs::copy(&source, &target) {
-                            log::error!("Failed to restore file {}: {}", normalized_path, e);
+                            log::error!("Failed to restore file {normalized_path}: {e}");
                             failed_files.push(normalized_path.clone());
                         } else {
                             if let Err(e) = preserve_metadata(&source, &target) {
@@ -1600,12 +1406,12 @@ impl WaypointHelper {
                             restored_count += 1;
                         }
                     } else {
-                        log::warn!("Unsupported file type in snapshot: {}", normalized_path);
+                        log::warn!("Unsupported file type in snapshot: {normalized_path}");
                         failed_files.push(normalized_path.clone());
                     }
                 }
                 Err(e) => {
-                    log::error!("Failed to inspect {}: {}", normalized_path, e);
+                    log::error!("Failed to inspect {normalized_path}: {e}");
                     failed_files.push(normalized_path.clone());
                 }
             }
@@ -1613,8 +1419,7 @@ impl WaypointHelper {
 
         if failed_files.is_empty() {
             Ok(format!(
-                "Successfully restored {} file(s) from snapshot '{}'",
-                restored_count, snapshot_name
+                "Successfully restored {restored_count} file(s) from snapshot '{snapshot_name}'"
             ))
         } else {
             Ok(format!(
@@ -1633,9 +1438,9 @@ impl WaypointHelper {
         use std::process::{Command, Stdio};
 
         waypoint_common::validate_snapshot_name(old_snapshot_name)
-            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{}': {}", old_snapshot_name, e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{old_snapshot_name}': {e}"))?;
         waypoint_common::validate_snapshot_name(new_snapshot_name)
-            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{}': {}", new_snapshot_name, e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid snapshot name '{new_snapshot_name}': {e}"))?;
 
         let config = WaypointConfig::new();
         let old_path = config.snapshot_dir.join(old_snapshot_name).join("root");
@@ -1713,11 +1518,11 @@ impl WaypointHelper {
         };
         if !receive_status.success() {
             let detail = if receive_stderr.is_empty() {
-                format!("{}", receive_status)
+                format!("{receive_status}")
             } else {
                 format!("{} - {}", receive_status, receive_stderr.trim())
             };
-            anyhow::bail!("btrfs receive --dump failed: {}", detail);
+            anyhow::bail!("btrfs receive --dump failed: {detail}");
         }
 
         let output = reader_handle
@@ -1737,11 +1542,11 @@ impl WaypointHelper {
                 log::debug!("btrfs send exited with SIGPIPE after receive completed");
             } else {
                 let detail = if send_stderr.is_empty() {
-                    format!("{}", send_status)
+                    format!("{send_status}")
                 } else {
                     format!("{} - {}", send_status, send_stderr.trim())
                 };
-                anyhow::bail!("btrfs send failed: {}", detail);
+                anyhow::bail!("btrfs send failed: {detail}");
             }
         }
 
@@ -1778,7 +1583,7 @@ impl WaypointHelper {
         run_command("btrfs", &args)?;
 
         let quota_type = if use_simple { "simple" } else { "traditional" };
-        Ok(format!("Successfully enabled {} quotas", quota_type))
+        Ok(format!("Successfully enabled {quota_type} quotas"))
     }
 
     /// Disable quotas on the btrfs filesystem
@@ -1850,14 +1655,12 @@ impl WaypointHelper {
                         total_referenced = total_referenced.checked_add(rfer)
                             .ok_or_else(|| anyhow::anyhow!(
                                 "Quota calculation overflow: total referenced bytes exceed u64::MAX. \
-                                 Current total: {}, attempted to add: {}",
-                                total_referenced, rfer
+                                 Current total: {total_referenced}, attempted to add: {rfer}"
                             ))?;
                         total_exclusive = total_exclusive.checked_add(excl)
                             .ok_or_else(|| anyhow::anyhow!(
                                 "Quota calculation overflow: total exclusive bytes exceed u64::MAX. \
-                                 Current total: {}, attempted to add: {}",
-                                total_exclusive, excl
+                                 Current total: {total_exclusive}, attempted to add: {excl}"
                             ))?;
                     }
                     (Err(e1), Err(e2)) => {
@@ -1992,8 +1795,7 @@ impl WaypointHelper {
 
             if deleted_count > 0 {
                 log::info!(
-                    "Auto-cleanup: Deleted {} snapshot(s) to free quota space",
-                    deleted_count
+                    "Auto-cleanup: Deleted {deleted_count} snapshot(s) to free quota space"
                 );
             }
         }
@@ -2235,10 +2037,10 @@ fn preserve_metadata(source: &std::path::Path, target: &std::path::Path) -> Resu
 /// This function removes full paths from error messages that will be sent
 /// to unprivileged clients over D-Bus, logging the full error internally.
 fn sanitize_error_for_client(error: &anyhow::Error) -> String {
-    let full_error = format!("{:#}", error);
+    let full_error = format!("{error:#}");
 
     // Log the full error for administrators
-    log::error!("Operation failed: {}", full_error);
+    log::error!("Operation failed: {full_error}");
 
     // Return sanitized version to client
     // Remove common path prefixes that could expose system layout
@@ -2267,7 +2069,7 @@ fn result_to_dbus_response(result: Result<String>, error_prefix: &str) -> (bool,
         Ok(msg) => (true, msg),
         Err(e) => {
             let sanitized = sanitize_error_for_client(&e);
-            (false, format!("{}: {}", error_prefix, sanitized))
+            (false, format!("{error_prefix}: {sanitized}"))
         }
     }
 }
@@ -2329,10 +2131,10 @@ fn parse_btrfs_dump(dump_output: &str) -> Result<Vec<FileChange>> {
         };
 
         // Add absolute path prefix
-        let full_path = format!("/{}", path);
+        let full_path = format!("/{path}");
 
         // Avoid duplicates (e.g., mkfile + write for same file)
-        let key = format!("{}:{}", change_type, full_path);
+        let key = format!("{change_type}:{full_path}");
         if seen_paths.insert(key) {
             changes.push(FileChange {
                 change_type: change_type.to_string(),
@@ -2389,11 +2191,11 @@ fn decode_path(encoded: &str) -> String {
                             // Validate the byte is a safe character
                             // Only allow printable ASCII (32-126) and common whitespace (9-13)
                             // Reject null bytes and high bytes that could create invalid UTF-8
-                            if (code >= 32 && code <= 126) || (code >= 9 && code <= 13) {
+                            if (32..=126).contains(&code) || (9..=13).contains(&code) {
                                 result.push(code as char);
                             } else {
                                 // Replace unsafe bytes with Unicode replacement character
-                                log::warn!("Unsafe byte in path escape sequence: \\{} (value: {})", octal, code);
+                                log::warn!("Unsafe byte in path escape sequence: \\{octal} (value: {code})");
                                 result.push('\u{FFFD}');  // Unicode replacement character
                             }
                         } else {
@@ -2430,7 +2232,7 @@ async fn check_authorization(
     use std::collections::HashMap;
     use zbus::zvariant::{ObjectPath, Value};
 
-    log::debug!("Authorization requested for action: {}", action_id);
+    log::debug!("Authorization requested for action: {action_id}");
 
     // Get the caller's bus name from the message header
     let caller = hdr
@@ -2438,7 +2240,7 @@ async fn check_authorization(
         .context("No sender in message header")?
         .to_owned();
 
-    log::debug!("Caller bus name: {}", caller);
+    log::debug!("Caller bus name: {caller}");
 
     // Get the caller's PID from D-Bus
     let response = connection
@@ -2457,7 +2259,7 @@ async fn check_authorization(
         .deserialize()
         .context("Failed to deserialize caller PID")?;
 
-    log::debug!("Caller PID: {}", caller_pid);
+    log::debug!("Caller PID: {caller_pid}");
 
     // Get process start time from /proc
     let start_time = get_process_start_time(caller_pid)?;
@@ -2509,7 +2311,7 @@ async fn check_authorization(
         ),
     )
     .await
-    .with_context(|| format!("Polkit authorization timed out after {} seconds", timeout_secs))?;
+    .with_context(|| format!("Polkit authorization timed out after {timeout_secs} seconds"))?;
 
     let msg = result.context("Failed to call Polkit CheckAuthorization")?;
 
@@ -2520,16 +2322,13 @@ async fn check_authorization(
         .context("Failed to deserialize Polkit response")?;
 
     log::debug!(
-        "Authorization result: authorized={}, challenge={}, details={:?}",
-        is_authorized,
-        is_challenge,
-        auth_details
+        "Authorization result: authorized={is_authorized}, challenge={is_challenge}, details={auth_details:?}"
     );
 
     if is_authorized {
         Ok(())
     } else {
-        anyhow::bail!("Action '{}' not authorized", action_id);
+        anyhow::bail!("Action '{action_id}' not authorized");
     }
 }
 
@@ -2537,9 +2336,9 @@ async fn check_authorization(
 fn get_process_start_time(pid: u32) -> Result<u64> {
     use std::fs;
 
-    let stat_path = format!("/proc/{}/stat", pid);
+    let stat_path = format!("/proc/{pid}/stat");
     let stat_content =
-        fs::read_to_string(&stat_path).context(format!("Failed to read {}", stat_path))?;
+        fs::read_to_string(&stat_path).context(format!("Failed to read {stat_path}"))?;
 
     // The start time is the 22nd field in /proc/[pid]/stat
     // Fields are: pid (comm) state ppid ... starttime ...
@@ -2570,13 +2369,12 @@ fn get_process_start_time(pid: u32) -> Result<u64> {
     }
 
     let start_time_str = fields.get(19)
-        .ok_or_else(|| anyhow::anyhow!("Missing start_time field (index 19) in /proc/{}/stat", pid))?;
+        .ok_or_else(|| anyhow::anyhow!("Missing start_time field (index 19) in /proc/{pid}/stat"))?;
     let start_time: u64 = start_time_str.parse().context(format!(
-        "Failed to parse process start time from field '{}' (field 20)",
-        start_time_str
+        "Failed to parse process start time from field '{start_time_str}' (field 20)"
     ))?;
 
-    log::debug!("Process {} start time: {}", pid, start_time);
+    log::debug!("Process {pid} start time: {start_time}");
 
     Ok(start_time)
 }
@@ -2608,7 +2406,7 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    log::info!("Waypoint Helper is ready at {}", DBUS_OBJECT_PATH);
+    log::info!("Waypoint Helper is ready at {DBUS_OBJECT_PATH}");
 
     // Wait for termination signal
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -2625,7 +2423,7 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
     let output = Command::new(cmd)
         .args(args)
         .output()
-        .context(format!("Failed to run {}", cmd))?;
+        .context(format!("Failed to run {cmd}"))?;
     if output.status.success() {
         Ok(())
     } else {
@@ -2638,7 +2436,7 @@ fn run_command_with_output(cmd: &str, args: &[&str]) -> Result<(String, String)>
     let output = Command::new(cmd)
         .args(args)
         .output()
-        .context(format!("Failed to run {}", cmd))?;
+        .context(format!("Failed to run {cmd}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if output.status.success() {

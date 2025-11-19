@@ -77,7 +77,7 @@ pub fn detect_mounted_subvolumes() -> Result<Vec<SubvolumeInfo>> {
             id
         } else {
             // Skip this subvolume if we can't get its ID
-            log::warn!("Could not determine subvolume ID for {}", mount_point);
+            log::warn!("Could not determine subvolume ID for {mount_point}");
             continue;
         };
 

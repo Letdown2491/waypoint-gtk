@@ -105,9 +105,9 @@ pub fn show_preferences_window(
     window.connect_close_request(move |_| {
         let enabled = super::preferences::get_current_subvolume_selection();
         if let Err(e) = super::preferences::save_config(&enabled) {
-            log::error!("Failed to save subvolume preferences: {}", e);
+            log::error!("Failed to save subvolume preferences: {e}");
         } else {
-            log::info!("Saved subvolume preferences: {:?}", enabled);
+            log::info!("Saved subvolume preferences: {enabled:?}");
         }
         gtk::glib::Propagation::Proceed
     });

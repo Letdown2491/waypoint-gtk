@@ -6,18 +6,15 @@ use std::path::PathBuf;
 /// Type of quota to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum QuotaType {
     /// Simple quotas (kernel 6.7+) - better performance, less detailed tracking
+    #[default]
     Simple,
     /// Traditional qgroups - more detailed, but can impact performance
     Traditional,
 }
 
-impl Default for QuotaType {
-    fn default() -> Self {
-        QuotaType::Simple
-    }
-}
 
 /// Quota configuration for snapshot management
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,22 +133,7 @@ impl QuotaConfig {
 
     /// Format bytes as human-readable size
     pub fn format_size(bytes: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
-        const TB: u64 = GB * 1024;
-
-        if bytes >= TB {
-            format!("{:.2} TiB", bytes as f64 / TB as f64)
-        } else if bytes >= GB {
-            format!("{:.2} GiB", bytes as f64 / GB as f64)
-        } else if bytes >= MB {
-            format!("{:.2} MiB", bytes as f64 / MB as f64)
-        } else if bytes >= KB {
-            format!("{:.2} KiB", bytes as f64 / KB as f64)
-        } else {
-            format!("{} B", bytes)
-        }
+        crate::format::format_bytes(bytes)
     }
 }
 
@@ -193,7 +175,7 @@ impl QuotaUsage {
     /// Check if usage exceeds threshold
     pub fn exceeds_threshold(&self, threshold: f64) -> bool {
         // Validate threshold is in valid range
-        if !threshold.is_finite() || threshold < 0.0 || threshold > 1.0 {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
             // Invalid threshold, default to false (don't trigger cleanup)
             return false;
         }
@@ -220,7 +202,7 @@ mod tests {
             50 * 1024 * 1024 * 1024
         );
         assert_eq!(QuotaConfig::parse_size("1T").unwrap(), 1024u64.pow(4));
-        assert_eq!(QuotaConfig::parse_size("1.5").is_err(), true); // No decimals in number
+        assert!(QuotaConfig::parse_size("1.5").is_err()); // No decimals in number
     }
 
     #[test]
@@ -243,18 +225,18 @@ mod tests {
         };
 
         assert_eq!(usage.usage_percent(), Some(0.5));
-        assert_eq!(usage.exceeds_threshold(0.4), true);
-        assert_eq!(usage.exceeds_threshold(0.6), false);
+        assert!(usage.exceeds_threshold(0.4));
+        assert!(!usage.exceeds_threshold(0.6));
     }
 
     #[test]
     fn test_default_config() {
         let config = QuotaConfig::default();
-        assert_eq!(config.enabled, false);
+        assert!(!config.enabled);
         assert_eq!(config.quota_type, QuotaType::Simple);
         assert_eq!(config.total_limit_bytes, None);
         assert_eq!(config.cleanup_threshold, 0.9);
-        assert_eq!(config.auto_cleanup, true);
+        assert!(config.auto_cleanup);
     }
 
     #[test]
@@ -284,7 +266,7 @@ mod tests {
 
         // Should clamp to 100% and detect threshold exceeded
         assert_eq!(usage.usage_percent(), Some(1.0)); // Clamped to 100%
-        assert_eq!(usage.exceeds_threshold(0.9), true);
+        assert!(usage.exceeds_threshold(0.9));
     }
 
     #[test]
@@ -296,9 +278,9 @@ mod tests {
         };
 
         // Invalid thresholds should return false (safe default)
-        assert_eq!(usage.exceeds_threshold(f64::NAN), false);
-        assert_eq!(usage.exceeds_threshold(f64::INFINITY), false);
-        assert_eq!(usage.exceeds_threshold(-0.5), false);
-        assert_eq!(usage.exceeds_threshold(1.5), false);
+        assert!(!usage.exceeds_threshold(f64::NAN));
+        assert!(!usage.exceeds_threshold(f64::INFINITY));
+        assert!(!usage.exceeds_threshold(-0.5));
+        assert!(!usage.exceeds_threshold(1.5));
     }
 }

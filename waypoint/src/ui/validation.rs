@@ -16,7 +16,7 @@ pub fn validate_path_for_open(path: &std::path::Path) -> Result<(), String> {
     // Canonicalize the path to resolve symlinks and get absolute path
     let canonical = match path.canonicalize() {
         Ok(p) => p,
-        Err(e) => return Err(format!("Cannot resolve path: {}", e)),
+        Err(e) => return Err(format!("Cannot resolve path: {e}")),
     };
 
     // Define allowed base directories

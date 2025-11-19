@@ -3,7 +3,6 @@
 //! This module transforms technical error messages into helpful, actionable
 //! messages that guide users toward solutions.
 
-use adw::prelude::*;
 use libadwaita as adw;
 
 /// Error context for providing better user guidance
@@ -34,17 +33,15 @@ pub fn show_error_with_context(
 ) {
     let (title, message, details) = format_error_message(context, error);
 
-    let dialog = adw::MessageDialog::new(Some(window), Some(&title), Some(&message));
+    // Build full message with details
+    let full_message = if let Some(detail_text) = details {
+        format!("{message}\n\n{detail_text}")
+    } else {
+        message
+    };
 
-    // Add details as body if available
-    if let Some(detail_text) = details {
-        dialog.set_body(&detail_text);
-    }
-
-    dialog.add_response("ok", "OK");
-    dialog.set_default_response(Some("ok"));
-    dialog.set_close_response("ok");
-    dialog.present();
+    // Use common dialog helper
+    super::dialogs::show_error(window, &title, &full_message);
 }
 
 /// Format error message with helpful context and recovery suggestions
@@ -91,7 +88,7 @@ fn format_snapshot_create_error(error: &str) -> (String, String, Option<String>)
     } else {
         (
             "An error occurred while creating the snapshot.".to_string(),
-            Some(format!("Technical details: {}", error)),
+            Some(format!("Technical details: {error}")),
         )
     };
 
@@ -124,7 +121,7 @@ fn format_snapshot_delete_error(error: &str) -> (String, String, Option<String>)
     } else {
         (
             "An error occurred while deleting the snapshot.".to_string(),
-            Some(format!("Technical details: {}", error)),
+            Some(format!("Technical details: {error}")),
         )
     };
 
@@ -153,8 +150,7 @@ fn format_snapshot_restore_error(error: &str) -> (String, String, Option<String>
         (
             "An error occurred during snapshot restore.".to_string(),
             Some(format!(
-                "Technical details: {}\n\nNote: You must reboot for restore changes to take effect.",
-                error
+                "Technical details: {error}\n\nNote: You must reboot for restore changes to take effect."
             )),
         )
     };
@@ -178,7 +174,7 @@ fn format_snapshot_verify_error(error: &str) -> (String, String, Option<String>)
     } else {
         (
             "Unable to verify snapshot integrity.".to_string(),
-            Some(format!("Technical details: {}", error)),
+            Some(format!("Technical details: {error}")),
         )
     };
 
@@ -190,8 +186,7 @@ fn format_snapshot_list_error(error: &str) -> (String, String, Option<String>) {
         "Failed to Load Snapshots".to_string(),
         "Unable to retrieve the snapshot list.".to_string(),
         Some(format!(
-            "This could be a temporary issue. Try refreshing the list.\n\nTechnical details: {}",
-            error
+            "This could be a temporary issue. Try refreshing the list.\n\nTechnical details: {error}"
         )),
     )
 }
@@ -201,8 +196,7 @@ fn format_disk_space_error(error: &str) -> (String, String, Option<String>) {
         "Insufficient Disk Space".to_string(),
         "Not enough free space to create a snapshot.".to_string(),
         Some(format!(
-            "Delete old snapshots or free up disk space before proceeding.\n\nTechnical details: {}",
-            error
+            "Delete old snapshots or free up disk space before proceeding.\n\nTechnical details: {error}"
         )),
     )
 }
@@ -217,8 +211,7 @@ fn format_filesystem_error(error: &str) -> (String, String, Option<String>) {
         (
             "Filesystem check failed.".to_string(),
             Some(format!(
-                "Unable to verify filesystem type.\n\nTechnical details: {}",
-                error
+                "Unable to verify filesystem type.\n\nTechnical details: {error}"
             )),
         )
     };
@@ -231,8 +224,7 @@ fn format_dbus_error(error: &str) -> (String, String, Option<String>) {
         "Service Connection Error".to_string(),
         "Unable to connect to the Waypoint system service.".to_string(),
         Some(format!(
-            "The waypoint-helper service may not be running. Try restarting it or your system.\n\nTechnical details: {}",
-            error
+            "The waypoint-helper service may not be running. Try restarting it or your system.\n\nTechnical details: {error}"
         )),
     )
 }
@@ -242,8 +234,7 @@ fn format_authorization_error(error: &str) -> (String, String, Option<String>) {
         "Authorization Required".to_string(),
         "This operation requires administrator privileges.".to_string(),
         Some(format!(
-            "Enter your password when prompted to authorize this action.\n\nTechnical details: {}",
-            error
+            "Enter your password when prompted to authorize this action.\n\nTechnical details: {error}"
         )),
     )
 }
@@ -265,7 +256,7 @@ fn format_configuration_error(error: &str) -> (String, String, Option<String>) {
     } else {
         (
             "Configuration error occurred.".to_string(),
-            Some(format!("Technical details: {}", error)),
+            Some(format!("Technical details: {error}")),
         )
     };
 

@@ -15,7 +15,7 @@ pub fn show_compare_dialog(
     let snapshots = match manager.borrow().load_snapshots() {
         Ok(s) => s,
         Err(e) => {
-            dialogs::show_error(window, "Error", &format!("Failed to load snapshots: {}", e));
+            dialogs::show_error(window, "Error", &format!("Failed to load snapshots: {e}"));
             return;
         }
     };

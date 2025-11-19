@@ -151,19 +151,19 @@ impl MountMonitor {
                     match result {
                         Ok((new_mounts, unmounted)) => {
                             for (uuid, mount_point) in new_mounts {
-                                log::info!("Detected new backup drive: {} at {}", uuid, mount_point);
+                                log::info!("Detected new backup drive: {uuid} at {mount_point}");
                                 cb(uuid, mount_point);
                             }
 
                             for uuid in unmounted {
-                                log::info!("Backup drive unmounted: {}", uuid);
+                                log::info!("Backup drive unmounted: {uuid}");
                             }
 
                             monitor_for_future.clear_scan_error();
                         }
                         Err(e) => {
                             monitor_for_future
-                                .log_scan_error(&format!("Failed to scan for mounts: {}", e));
+                                .log_scan_error(&format!("Failed to scan for mounts: {e}"));
                         }
                     }
                 });
@@ -178,10 +178,10 @@ impl MountMonitor {
     fn log_scan_error(&self, message: &str) {
         let mut last = self.last_error_message.lock().unwrap();
         if last.as_deref() != Some(message) {
-            log::error!("{}", message);
+            log::error!("{message}");
             *last = Some(message.to_string());
         } else {
-            log::debug!("{}", message);
+            log::debug!("{message}");
         }
     }
 

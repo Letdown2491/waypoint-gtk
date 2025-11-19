@@ -164,7 +164,7 @@ pub fn apply_timeline_retention(
             &sorted,
             retention.hourly_limit,
             now,
-            |ts| TimeBucket::from_timestamp_hourly(ts),
+            TimeBucket::from_timestamp_hourly,
             |ts| now.signed_duration_since(ts) <= Duration::hours(retention.hourly_limit as i64),
             &mut to_keep,
         );
@@ -175,7 +175,7 @@ pub fn apply_timeline_retention(
             &sorted,
             retention.daily_limit,
             now,
-            |ts| TimeBucket::from_timestamp_daily(ts),
+            TimeBucket::from_timestamp_daily,
             |ts| now.signed_duration_since(ts) <= Duration::days(retention.daily_limit as i64),
             &mut to_keep,
         );
@@ -186,7 +186,7 @@ pub fn apply_timeline_retention(
             &sorted,
             retention.weekly_limit,
             now,
-            |ts| TimeBucket::from_timestamp_weekly(ts),
+            TimeBucket::from_timestamp_weekly,
             |ts| now.signed_duration_since(ts) <= Duration::weeks(retention.weekly_limit as i64),
             &mut to_keep,
         );
@@ -197,7 +197,7 @@ pub fn apply_timeline_retention(
             &sorted,
             retention.monthly_limit,
             now,
-            |ts| TimeBucket::from_timestamp_monthly(ts),
+            TimeBucket::from_timestamp_monthly,
             |ts| {
                 // Approximate: 30 days per month
                 now.signed_duration_since(ts) <= Duration::days(30 * retention.monthly_limit as i64)
@@ -211,7 +211,7 @@ pub fn apply_timeline_retention(
             &sorted,
             retention.yearly_limit,
             now,
-            |ts| TimeBucket::from_timestamp_yearly(ts),
+            TimeBucket::from_timestamp_yearly,
             |ts| {
                 // Approximate: 365 days per year
                 now.signed_duration_since(ts) <= Duration::days(365 * retention.yearly_limit as i64)

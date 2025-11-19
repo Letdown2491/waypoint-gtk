@@ -6,7 +6,9 @@ use gtk::prelude::*;
 use gtk::{Box, Button, ListBox, Orientation, ScrolledWindow};
 use libadwaita as adw;
 use serde::Deserialize;
-use std::sync::{mpsc, Arc, Mutex};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::mpsc;
 
 /// File change representation (matches waypoint-helper output)
 #[derive(Debug, Clone, Deserialize)]
@@ -145,11 +147,11 @@ impl ComparisonView {
         content.append(&button_box);
 
         // Store snapshots for comparison
-        let snapshots = Arc::new(snapshots);
-        let current_diff: Arc<Mutex<Option<PackageDiff>>> = Arc::new(Mutex::new(None));
+        let snapshots = Rc::new(snapshots);
+        let current_diff: Rc<RefCell<Option<PackageDiff>>> = Rc::new(RefCell::new(None));
 
         // Mapping from compare dropdown indices to actual snapshot indices
-        let compare_mapping: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(
+        let compare_mapping: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(
             (1..snapshots.len()).collect()
         ));
 
@@ -174,7 +176,7 @@ impl ComparisonView {
             }
 
             // Map compare dropdown index to actual snapshot index
-            let mapping = mapping_for_compare.lock().unwrap();
+            let mapping = mapping_for_compare.borrow();
             let compare_idx = match mapping.get(compare_dropdown_idx) {
                 Some(&idx) => idx,
                 None => {
@@ -206,7 +208,7 @@ impl ComparisonView {
             ));
 
             // Store diff for later use
-            *diff_for_base.lock().unwrap() = Some(diff);
+            *diff_for_base.borrow_mut() = Some(diff);
 
             summary_group_clone.set_visible(true);
             view_packages_clone.set_visible(true);
@@ -243,7 +245,7 @@ impl ComparisonView {
                 }
             }
 
-            *mapping_for_base.lock().unwrap() = new_mapping;
+            *mapping_for_base.borrow_mut() = new_mapping;
 
             // Select first item if available
             if compare_model_for_base.n_items() > 0 {
@@ -267,11 +269,11 @@ impl ComparisonView {
         let mapping_for_packages = compare_mapping.clone();
 
         view_packages_button.connect_clicked(move |_| {
-            if let Some(diff) = diff_for_packages.lock().unwrap().clone() {
+            if let Some(diff) = diff_for_packages.borrow().clone() {
                 let base_idx = base_row_for_btn.selected() as usize;
                 let compare_dropdown_idx = compare_row_for_btn.selected() as usize;
 
-                let mapping = mapping_for_packages.lock().unwrap();
+                let mapping = mapping_for_packages.borrow();
                 if let Some(&compare_idx) = mapping.get(compare_dropdown_idx) {
                     let snap1 = &snapshots_for_btn[base_idx];
                     let snap2 = &snapshots_for_btn[compare_idx];
@@ -294,7 +296,7 @@ impl ComparisonView {
             let base_idx = base_row_for_files.selected() as usize;
             let compare_dropdown_idx = compare_row_for_files.selected() as usize;
 
-            let mapping = mapping_for_files.lock().unwrap();
+            let mapping = mapping_for_files.borrow();
             if let Some(&compare_idx) = mapping.get(compare_dropdown_idx) {
                 let snap1 = &snapshots_for_files[base_idx];
                 let snap2 = &snapshots_for_files[compare_idx];
@@ -712,7 +714,7 @@ impl ComparisonView {
         // Create file chooser dialog
         let dialog = gtk::FileDialog::new();
         dialog.set_title("Export File Comparison");
-        dialog.set_initial_name(Some(&format!("file_changes_{}_{}.txt", snap1_name, snap2_name)));
+        dialog.set_initial_name(Some(&format!("file_changes_{snap1_name}_{snap2_name}.txt")));
 
         // Set default filter for text files
         let filter = gtk::FileFilter::new();
@@ -734,7 +736,7 @@ impl ComparisonView {
                             log::info!("Exported file comparison to {}", path.display());
                         }
                         Err(e) => {
-                            log::error!("Failed to export file comparison: {}", e);
+                            log::error!("Failed to export file comparison: {e}");
                         }
                     }
                 }
@@ -770,8 +772,8 @@ impl ComparisonView {
         writeln!(file, "File Changes Report")?;
         writeln!(file, "===================")?;
         writeln!(file)?;
-        writeln!(file, "Base Snapshot:    {}", snap1_name)?;
-        writeln!(file, "Compare Snapshot: {}", snap2_name)?;
+        writeln!(file, "Base Snapshot:    {snap1_name}")?;
+        writeln!(file, "Compare Snapshot: {snap2_name}")?;
         writeln!(file)?;
         writeln!(file, "Summary:")?;
         writeln!(file, "  {} files added", added.len())?;
@@ -821,7 +823,7 @@ impl ComparisonView {
         // Create file chooser dialog
         let dialog = gtk::FileDialog::new();
         dialog.set_title("Export Package Comparison");
-        dialog.set_initial_name(Some(&format!("comparison_{}_{}.txt", snap1_name, snap2_name)));
+        dialog.set_initial_name(Some(&format!("comparison_{snap1_name}_{snap2_name}.txt")));
 
         // Set default filter for text files
         let filter = gtk::FileFilter::new();
@@ -843,7 +845,7 @@ impl ComparisonView {
                             log::info!("Exported comparison to {}", path.display());
                         }
                         Err(e) => {
-                            log::error!("Failed to export comparison: {}", e);
+                            log::error!("Failed to export comparison: {e}");
                         }
                     }
                 }
@@ -865,8 +867,8 @@ impl ComparisonView {
         writeln!(file, "Package Comparison Report")?;
         writeln!(file, "=========================")?;
         writeln!(file)?;
-        writeln!(file, "Base Snapshot:    {}", snap1_name)?;
-        writeln!(file, "Compare Snapshot: {}", snap2_name)?;
+        writeln!(file, "Base Snapshot:    {snap1_name}")?;
+        writeln!(file, "Compare Snapshot: {snap2_name}")?;
         writeln!(file)?;
         writeln!(file, "Summary:")?;
         writeln!(file, "  {} packages added", diff.added.len())?;

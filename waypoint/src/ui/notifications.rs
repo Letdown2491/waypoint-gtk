@@ -12,7 +12,7 @@ pub enum NotificationPriority {
 }
 
 impl NotificationPriority {
-    fn to_gio_priority(&self) -> gio::NotificationPriority {
+    fn to_gio_priority(self) -> gio::NotificationPriority {
         match self {
             NotificationPriority::Low => gio::NotificationPriority::Low,
             NotificationPriority::Normal => gio::NotificationPriority::Normal,
@@ -51,7 +51,7 @@ pub fn notify_snapshot_created(app: &Application, snapshot_name: &str) {
     send_notification(
         app,
         "Snapshot Created",
-        &format!("Successfully created snapshot '{}'", snapshot_name),
+        &format!("Successfully created snapshot '{snapshot_name}'"),
         NotificationPriority::Normal,
     );
 }
@@ -61,7 +61,7 @@ pub fn notify_snapshot_deleted(app: &Application, snapshot_name: &str) {
     send_notification(
         app,
         "Snapshot Deleted",
-        &format!("Successfully deleted snapshot '{}'", snapshot_name),
+        &format!("Successfully deleted snapshot '{snapshot_name}'"),
         NotificationPriority::Normal,
     );
 }
@@ -72,8 +72,7 @@ pub fn notify_snapshot_restored(app: &Application, snapshot_name: &str) {
         app,
         "System Restored",
         &format!(
-            "Snapshot '{}' restored successfully. Reboot to complete the rollback.",
-            snapshot_name
+            "Snapshot '{snapshot_name}' restored successfully. Reboot to complete the rollback."
         ),
         NotificationPriority::Urgent,
     );
@@ -100,8 +99,7 @@ pub fn notify_scheduled_snapshot(app: &Application, snapshot_name: &str) {
         app,
         "Scheduled Snapshot Created",
         &format!(
-            "Automated snapshot '{}' created successfully",
-            snapshot_name
+            "Automated snapshot '{snapshot_name}' created successfully"
         ),
         NotificationPriority::Low,
     );
@@ -116,11 +114,10 @@ pub fn notify_backup_completed(
 ) {
     if failed_count == 0 {
         let message = if success_count == 1 {
-            format!("Backed up 1 snapshot to {}", destination_label)
+            format!("Backed up 1 snapshot to {destination_label}")
         } else {
             format!(
-                "Backed up {} snapshots to {}",
-                success_count, destination_label
+                "Backed up {success_count} snapshots to {destination_label}"
             )
         };
         send_notification(
@@ -134,8 +131,7 @@ pub fn notify_backup_completed(
             app,
             "Backup Partially Completed",
             &format!(
-                "{} succeeded, {} failed backing up to {}",
-                success_count, failed_count, destination_label
+                "{success_count} succeeded, {failed_count} failed backing up to {destination_label}"
             ),
             NotificationPriority::Normal,
         );

@@ -2,34 +2,23 @@
 //!
 //! Provides interface for backing up snapshots to external drives
 
+pub mod helpers;
+pub mod types;
+
 use adw::prelude::*;
 use gtk::prelude::*;
 use gtk::{Button, Label, Orientation, Widget};
 use libadwaita as adw;
-use serde::{Deserialize, Serialize};
 
 use super::dialogs;
-use crate::dbus_client::WaypointHelperClient;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-enum DriveType {
-    Removable,
-    Network,
-    Internal,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BackupDestination {
-    mount_point: String,
-    label: String,
-    drive_type: DriveType,
-    uuid: Option<String>,
-    fstype: String, // Filesystem type (btrfs, ntfs, exfat, etc.)
-}
-
 use crate::backup_manager::BackupManager;
+use crate::dbus_client::WaypointHelperClient;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+// Re-export and use types from submodules
+use types::{BackupDestination, DriveType, VerificationResults};
+use helpers::{format_bytes, format_elapsed_time};
 
 /// Create the backups content page
 pub fn create_backups_content(
@@ -75,7 +64,7 @@ pub fn create_backups_content(
             button.set_label("Scanning...");
         }
 
-        let btn_opt = btn.map(|b| b.clone());
+        let btn_opt = btn.cloned();
 
         // Use thread + channel pattern instead of tokio
         let (tx, rx) = std::sync::mpsc::channel();
@@ -211,7 +200,7 @@ pub fn create_backups_content(
                     dialogs::show_error(
                         &parent_ref,
                         "Scan Failed",
-                        &format!("Failed to scan for destinations: {}", e),
+                        &format!("Failed to scan for destinations: {e}"),
                     );
                 }
             }
@@ -337,11 +326,10 @@ pub fn create_backups_content(
     interval_spin.connect_value_changed(move |spin| {
         let new_value = spin.value() as u64;
         if let Err(e) = bm_interval.borrow().set_mount_check_interval(new_value) {
-            log::error!("Failed to save mount check interval: {}", e);
+            log::error!("Failed to save mount check interval: {e}");
         } else {
             log::info!(
-                "Updated mount check interval to {} seconds (requires restart to take effect)",
-                new_value
+                "Updated mount check interval to {new_value} seconds (requires restart to take effect)"
             );
         }
     });
@@ -466,7 +454,7 @@ fn create_destination_row(
     }
 
     // Drive type and filesystem
-    subtitle_parts.push(format!("{} • {}", type_badge, fs_badge));
+    subtitle_parts.push(format!("{type_badge} • {fs_badge}"));
 
     // Backup count (if available)
     if let Some(count) = backup_count {
@@ -477,7 +465,7 @@ fn create_destination_row(
     if let Some(ref uuid) = dest.uuid {
         let pending_count = backup_manager.borrow().get_pending_count(uuid);
         if pending_count > 0 {
-            subtitle_parts.push(format!("{} pending", pending_count));
+            subtitle_parts.push(format!("{pending_count} pending"));
         }
     }
 
@@ -733,9 +721,9 @@ fn create_destination_row(
                     true,
                     move || {
                         if let Err(e) = bm_clone.borrow().remove_destination(&uuid_clone) {
-                            log::error!("Failed to remove destination: {}", e);
+                            log::error!("Failed to remove destination: {e}");
                         } else {
-                            log::info!("Removed destination {}", uuid_clone);
+                            log::info!("Removed destination {uuid_clone}");
                         }
                     },
                 );
@@ -805,7 +793,7 @@ fn create_destination_row(
                     };
 
                     if let Err(e) = bm.borrow().add_destination(uuid.clone(), dest_config) {
-                        log::error!("Failed to save backup configuration: {}", e);
+                        log::error!("Failed to save backup configuration: {e}");
                         dialogs::show_toast(&parent_window, "Failed to save backup settings");
                     } else {
                         dialogs::show_toast(&parent_window, "Backup settings saved");
@@ -959,7 +947,7 @@ fn show_backups_list_dialog(parent: &adw::ApplicationWindow, destination_mount: 
                 dialogs::show_error(
                     &parent_clone,
                     "Load Failed",
-                    &format!("Failed to list backups: {}", e),
+                    &format!("Failed to list backups: {e}"),
                 );
             }
         }
@@ -1014,17 +1002,17 @@ fn update_backup_status_summary(row: &adw::ActionRow, backup_manager: Rc<RefCell
 
     let parts = vec![
         if in_progress_count > 0 {
-            Some(format!("{} in progress", in_progress_count))
+            Some(format!("{in_progress_count} in progress"))
         } else {
             None
         },
         if pending_count > 0 {
-            Some(format!("{} pending", pending_count))
+            Some(format!("{pending_count} pending"))
         } else {
             None
         },
         if failed_count > 0 {
-            Some(format!("{} failed", failed_count))
+            Some(format!("{failed_count} failed"))
         } else {
             None
         },
@@ -1044,8 +1032,8 @@ fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gt
     let config = match backup_manager.borrow().get_config() {
         Ok(c) => c,
         Err(e) => {
-            log::error!("Failed to load backup config: {}", e);
-            let error_label = Label::new(Some(&format!("Failed to load pending backups: {}", e)));
+            log::error!("Failed to load backup config: {e}");
+            let error_label = Label::new(Some(&format!("Failed to load pending backups: {e}")));
             error_label.add_css_class("dim-label");
             container.append(&error_label);
             return container;
@@ -1098,7 +1086,7 @@ fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gt
                 .map(|d| d.display_name().to_string())
                 .unwrap_or_else(|| pb.destination_uuid.clone());
 
-            row.set_subtitle(&format!("Backing up to {} • {}", dest_name, elapsed));
+            row.set_subtitle(&format!("Backing up to {dest_name} • {elapsed}"));
 
             let status_icon = gtk::Image::from_icon_name("emblem-synchronizing-symbolic");
             status_icon.set_pixel_size(16);
@@ -1174,9 +1162,9 @@ fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gt
             let bm_retry = backup_manager.clone();
             retry_btn.connect_clicked(move |_| {
                 if let Err(e) = bm_retry.borrow().retry_failed_backups(&dest_uuid) {
-                    log::error!("Failed to retry backups: {}", e);
+                    log::error!("Failed to retry backups: {e}");
                 } else {
-                    log::info!("Retrying failed backups for destination {}", dest_uuid);
+                    log::info!("Retrying failed backups for destination {dest_uuid}");
                 }
             });
 
@@ -1198,7 +1186,7 @@ fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gt
                 .map(|d| d.display_name().to_string())
                 .unwrap_or_else(|| pb.destination_uuid.clone());
 
-            row.set_subtitle(&format!("Waiting for: {}", dest_name));
+            row.set_subtitle(&format!("Waiting for: {dest_name}"));
 
             let status_icon = gtk::Image::from_icon_name("document-save-symbolic");
             status_icon.set_pixel_size(16);
@@ -1260,7 +1248,7 @@ fn create_backup_statistics(backup_manager: Rc<RefCell<BackupManager>>) -> Vec<a
         .iter()
         .filter(|r| r.is_incremental)
         .count();
-    if config.backup_history.len() > 0 {
+    if !config.backup_history.is_empty() {
         let ratio = (incremental_count as f64 / config.backup_history.len() as f64) * 100.0;
         let ratio_row = adw::ActionRow::new();
         ratio_row.set_title("Incremental Backups");
@@ -1337,36 +1325,6 @@ fn create_backup_history(backup_manager: Rc<RefCell<BackupManager>>) -> Vec<adw:
 
 /// Format elapsed time in human-readable format
 /// Examples: "2s", "1m 30s", "2h 15m", "3d 4h"
-fn format_elapsed_time(seconds: i64) -> String {
-    if seconds < 60 {
-        format!("{}s", seconds)
-    } else if seconds < 3600 {
-        let mins = seconds / 60;
-        let secs = seconds % 60;
-        if secs == 0 {
-            format!("{}m", mins)
-        } else {
-            format!("{}m {}s", mins, secs)
-        }
-    } else if seconds < 86400 {
-        let hours = seconds / 3600;
-        let mins = (seconds % 3600) / 60;
-        if mins == 0 {
-            format!("{}h", hours)
-        } else {
-            format!("{}h {}m", hours, mins)
-        }
-    } else {
-        let days = seconds / 86400;
-        let hours = (seconds % 86400) / 3600;
-        if hours == 0 {
-            format!("{}d", days)
-        } else {
-            format!("{}d {}h", days, hours)
-        }
-    }
-}
-
 /// Create drive health status section showing space usage, backup count, and timestamps
 fn create_drive_health_section(mount_point: &str) -> gtk::Box {
     use crate::dbus_client::{DriveStats, WaypointHelperClient};
@@ -1508,7 +1466,7 @@ fn create_drive_health_section(mount_point: &str) -> gtk::Box {
                 let age_secs = (now - oldest_time).max(0) as u64;
                 let age_text = format_elapsed_time(age_secs as i64);
 
-                let oldest_value = Label::new(Some(&format!("{} old", age_text)));
+                let oldest_value = Label::new(Some(&format!("{age_text} old")));
                 oldest_value.set_xalign(0.0);
                 oldest_value.add_css_class("caption");
                 stats_grid.attach(&oldest_label, 0, 2, 1, 1);
@@ -1518,7 +1476,7 @@ fn create_drive_health_section(mount_point: &str) -> gtk::Box {
             container.append(&stats_grid);
         }
         Ok(Err(e)) => {
-            let error_label = Label::new(Some(&format!("Failed to get drive stats: {}", e)));
+            let error_label = Label::new(Some(&format!("Failed to get drive stats: {e}")));
             error_label.set_xalign(0.0);
             error_label.add_css_class("dim-label");
             error_label.add_css_class("caption");
@@ -1537,34 +1495,6 @@ fn create_drive_health_section(mount_point: &str) -> gtk::Box {
 }
 
 /// Format bytes into human-readable string (e.g., "1.5 GB")
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    const TB: u64 = GB * 1024;
-
-    if bytes >= TB {
-        format!("{:.1} TB", bytes as f64 / TB as f64)
-    } else if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-/// Result of verifying all backups on a destination
-#[derive(Debug)]
-struct VerificationResults {
-    total: usize,
-    passed: usize,
-    failed: usize,
-    details: Vec<(String, bool, String)>, // (snapshot_id, success, message)
-}
-
 /// Verify all backups on a destination
 fn verify_all_backups(destination_mount: &str) -> VerificationResults {
     use waypoint_common::WaypointConfig;
@@ -1579,7 +1509,7 @@ fn verify_all_backups(destination_mount: &str) -> VerificationResults {
                 total: 0,
                 passed: 0,
                 failed: 1,
-                details: vec![("Error".to_string(), false, format!("Failed to connect to helper: {}", e))],
+                details: vec![("Error".to_string(), false, format!("Failed to connect to helper: {e}"))],
             };
         }
     };
@@ -1594,7 +1524,7 @@ fn verify_all_backups(destination_mount: &str) -> VerificationResults {
                         total: 0,
                         passed: 0,
                         failed: 1,
-                        details: vec![("Error".to_string(), false, format!("Failed to parse backups: {}", e))],
+                        details: vec![("Error".to_string(), false, format!("Failed to parse backups: {e}"))],
                     };
                 }
             }
@@ -1612,7 +1542,7 @@ fn verify_all_backups(destination_mount: &str) -> VerificationResults {
                 total: 0,
                 passed: 0,
                 failed: 1,
-                details: vec![("Error".to_string(), false, format!("Failed to list backups: {}", e))],
+                details: vec![("Error".to_string(), false, format!("Failed to list backups: {e}"))],
             };
         }
     };
@@ -1657,7 +1587,7 @@ fn verify_all_backups(destination_mount: &str) -> VerificationResults {
                     }
                     Err(e) => {
                         results.failed += 1;
-                        results.details.push((backup_id, false, format!("Failed to parse result: {}", e)));
+                        results.details.push((backup_id, false, format!("Failed to parse result: {e}")));
                     }
                 }
             }
@@ -1667,7 +1597,7 @@ fn verify_all_backups(destination_mount: &str) -> VerificationResults {
             }
             Err(e) => {
                 results.failed += 1;
-                results.details.push((backup_id, false, format!("Verification error: {}", e)));
+                results.details.push((backup_id, false, format!("Verification error: {e}")));
             }
         }
     }

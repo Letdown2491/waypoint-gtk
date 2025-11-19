@@ -216,7 +216,7 @@ impl BackupManager {
                     let mut config = self.config.lock().unwrap();
                     config.mark_failed(&snapshot_id, destination_uuid, error_msg.clone());
                     fail_count += 1;
-                    errors.push(format!("{}: {}", snapshot_id, error_msg));
+                    errors.push(format!("{snapshot_id}: {error_msg}"));
                 }
                 Err(e) => {
                     // D-Bus call failed
@@ -224,7 +224,7 @@ impl BackupManager {
                     let mut config = self.config.lock().unwrap();
                     config.mark_failed(&snapshot_id, destination_uuid, error.clone());
                     fail_count += 1;
-                    errors.push(format!("{}: {}", snapshot_id, error));
+                    errors.push(format!("{snapshot_id}: {error}"));
                 }
             }
         }

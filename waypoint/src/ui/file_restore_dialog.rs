@@ -32,7 +32,7 @@ pub fn show_file_restore_dialog(parent: &adw::ApplicationWindow, snapshot_name: 
 
     // Create custom file browser window
     let dialog = adw::Window::new();
-    dialog.set_title(Some(&format!("Restore Files - {}", snapshot_name)));
+    dialog.set_title(Some(&format!("Restore Files - {snapshot_name}")));
     dialog.set_modal(true);
     dialog.set_transient_for(Some(parent));
     dialog.set_default_size(900, 600);
@@ -240,7 +240,7 @@ fn show_restore_confirmation_dialog(
             p.strip_prefix(snapshot_root)
                 .ok()
                 .and_then(|rel| rel.to_str())
-                .map(|s| format!("/{}", s))
+                .map(|s| format!("/{s}"))
                 .unwrap_or_else(|| p.display().to_string())
         })
         .collect();
@@ -393,7 +393,7 @@ fn perform_file_restore(
                             error_helpers::show_error_with_context(
                                 &parent_clone,
                                 error_helpers::ErrorContext::SnapshotRestore,
-                                &format!("File restoration failed: {}", e),
+                                &format!("File restoration failed: {e}"),
                             );
                         }
                     }

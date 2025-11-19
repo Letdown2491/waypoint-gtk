@@ -153,8 +153,7 @@ impl Schedule {
         if let Some(ref time) = self.time {
             if !is_valid_time_format(time) {
                 return Err(format!(
-                    "Invalid time format '{}'. Expected HH:MM (24-hour)",
-                    time
+                    "Invalid time format '{time}'. Expected HH:MM (24-hour)"
                 ));
             }
         }
@@ -163,16 +162,15 @@ impl Schedule {
         if let Some(day) = self.day_of_week {
             if day > 6 {
                 return Err(format!(
-                    "Invalid day_of_week {}. Must be 0-6 (0=Sunday)",
-                    day
+                    "Invalid day_of_week {day}. Must be 0-6 (0=Sunday)"
                 ));
             }
         }
 
         // Validate day_of_month if present
         if let Some(day) = self.day_of_month {
-            if day < 1 || day > 31 {
-                return Err(format!("Invalid day_of_month {}. Must be 1-31", day));
+            if !(1..=31).contains(&day) {
+                return Err(format!("Invalid day_of_month {day}. Must be 1-31"));
             }
         }
 

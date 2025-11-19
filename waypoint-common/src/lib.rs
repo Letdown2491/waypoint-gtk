@@ -3,6 +3,7 @@
 pub mod backup_config;
 pub mod config;
 pub mod exclude;
+pub mod format;
 pub mod quota;
 pub mod retention;
 pub mod schedules;
@@ -17,6 +18,7 @@ pub use backup_config::{
 };
 pub use config::WaypointConfig;
 pub use exclude::{ExcludeConfig, ExcludePattern, PatternType};
+pub use format::{format_bytes, format_elapsed_time};
 pub use quota::{QuotaConfig, QuotaType, QuotaUsage};
 pub use retention::{SnapshotForRetention, TimelineRetention};
 pub use schedules::{Schedule, ScheduleType, SchedulesConfig};

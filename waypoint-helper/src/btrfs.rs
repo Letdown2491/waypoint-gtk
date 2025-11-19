@@ -14,13 +14,13 @@ static CONFIG: OnceLock<WaypointConfig> = OnceLock::new();
 
 /// Initialize the global configuration (called once at startup)
 pub fn init_config() {
-    CONFIG.get_or_init(|| WaypointConfig::new());
+    CONFIG.get_or_init(WaypointConfig::new);
 }
 
 /// Get the snapshot directory path
 fn snapshot_dir() -> &'static Path {
     CONFIG
-        .get_or_init(|| WaypointConfig::new())
+        .get_or_init(WaypointConfig::new)
         .snapshot_dir
         .as_path()
 }
@@ -28,7 +28,7 @@ fn snapshot_dir() -> &'static Path {
 /// Get the metadata file path
 fn metadata_file() -> &'static Path {
     CONFIG
-        .get_or_init(|| WaypointConfig::new())
+        .get_or_init(WaypointConfig::new)
         .metadata_file
         .as_path()
 }
@@ -118,7 +118,7 @@ pub fn create_snapshot(
         let output = Command::new("btrfs")
             .arg("subvolume")
             .arg("snapshot")
-            .arg(&source_path)
+            .arg(source_path)
             .arg(&snapshot_path)
             .output()
             .context(format!(
@@ -169,7 +169,7 @@ pub fn create_snapshot(
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            log::warn!("Failed to make snapshot read-only: {}", stderr);
+            log::warn!("Failed to make snapshot read-only: {stderr}");
             // Continue anyway - writable snapshots still work
         }
     }
@@ -179,7 +179,7 @@ pub fn create_snapshot(
         id: format!("snapshot-{}", Utc::now().format("%Y%m%d-%H%M%S")),
         name: name.to_string(),
         timestamp: Utc::now(),
-        path: snapshot_base_path,
+        path: snapshot_base_path.clone(),
         description: description.map(String::from),
         kernel_version: get_kernel_version(),
         package_count: Some(packages.len()),
@@ -187,7 +187,13 @@ pub fn create_snapshot(
         subvolumes: subvolumes_to_snapshot,
     };
 
-    add_snapshot_metadata(snapshot)?;
+    // RESOURCE CLEANUP: If metadata save fails, clean up the snapshots we just created
+    // This prevents orphaned snapshots that exist on disk but aren't tracked
+    if let Err(e) = add_snapshot_metadata(snapshot) {
+        log::error!("Failed to save snapshot metadata, cleaning up snapshots: {}", e);
+        let _ = cleanup_failed_snapshot(&snapshot_base_path);
+        return Err(e);
+    }
 
     Ok(())
 }
@@ -230,7 +236,7 @@ fn apply_exclusions(
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                log::warn!("Error walking directory: {}", e);
+                log::warn!("Error walking directory: {e}");
                 continue;
             }
         };
@@ -252,6 +258,18 @@ fn apply_exclusions(
             .any(|pattern| pattern.matches(&absolute_path));
 
         if matches {
+            // SECURITY: Skip symlinks to prevent deleting content outside snapshot
+            // Even though WalkDir has follow_links(false), we explicitly check here
+            // to avoid any potential issues with symlink targets
+            if path.is_symlink() {
+                log::warn!(
+                    "Skipping symlink in exclusion (security): {} -> {:?}",
+                    absolute_path.display(),
+                    fs::read_link(path).ok()
+                );
+                continue;
+            }
+
             // Delete this file or directory
             if path.is_dir() {
                 match fs::remove_dir_all(path) {
@@ -288,9 +306,7 @@ fn apply_exclusions(
     }
 
     log::info!(
-        "Exclusion complete: {} items excluded, {} failures",
-        deleted_count,
-        failed_count
+        "Exclusion complete: {deleted_count} items excluded, {failed_count} failures"
     );
 
     Ok(())
@@ -299,21 +315,44 @@ fn apply_exclusions(
 /// Clean up a failed snapshot creation
 fn cleanup_failed_snapshot(snapshot_path: &Path) -> Result<()> {
     if snapshot_path.exists() {
+        log::info!("Cleaning up failed snapshot: {}", snapshot_path.display());
+        let mut cleaned_count = 0;
+        let mut failed_count = 0;
+
         // Delete all subvolume snapshots in the directory
         if let Ok(entries) = fs::read_dir(snapshot_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    let _ = Command::new("btrfs")
+                    match Command::new("btrfs")
                         .arg("subvolume")
                         .arg("delete")
                         .arg(&path)
-                        .output();
+                        .output()
+                    {
+                        Ok(output) if output.status.success() => {
+                            log::debug!("Cleaned up subvolume: {}", path.display());
+                            cleaned_count += 1;
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            log::warn!("Failed to delete subvolume {}: {}", path.display(), stderr);
+                            failed_count += 1;
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to execute delete for {}: {}", path.display(), e);
+                            failed_count += 1;
+                        }
+                    }
                 }
             }
         }
+
         // Remove the directory
-        let _ = fs::remove_dir(snapshot_path);
+        match fs::remove_dir(snapshot_path) {
+            Ok(_) => log::info!("Cleanup complete: {} subvolumes deleted, {} failures", cleaned_count, failed_count),
+            Err(e) => log::warn!("Failed to remove snapshot directory {}: {}", snapshot_path.display(), e),
+        }
     }
     Ok(())
 }
@@ -325,7 +364,7 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
     ensure_within_snapshot_dir(&snapshot_path)?;
 
     if !snapshot_path.exists() {
-        bail!("Snapshot not found: {}", name);
+        bail!("Snapshot not found: {name}");
     }
 
     // Check if it's a directory (new multi-subvolume format) or a single subvolume (old format)
@@ -366,7 +405,7 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to delete snapshot: {}", stderr);
+            bail!("Failed to delete snapshot: {stderr}");
         }
     }
 
@@ -382,7 +421,7 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
     ensure_within_snapshot_dir(&snapshot_base_path)?;
 
     if !snapshot_base_path.exists() {
-        bail!("Snapshot not found: {}", name);
+        bail!("Snapshot not found: {name}");
     }
 
     // Load snapshot metadata to check which subvolumes were included
@@ -398,7 +437,7 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
     };
 
     if !root_snapshot_path.exists() {
-        bail!("Root snapshot not found in snapshot {}", name);
+        bail!("Root snapshot not found in snapshot {name}");
     }
 
     // Check if this is a multi-subvolume snapshot
@@ -452,7 +491,7 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Failed to set default subvolume: {}", stderr);
+        bail!("Failed to set default subvolume: {stderr}");
     }
 
     Ok(())
@@ -503,7 +542,7 @@ fn get_snapshot_size_impl(path: &Path) -> Result<u64> {
     // Check command success first
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("du command failed: {}", stderr);
+        bail!("du command failed: {stderr}");
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -579,8 +618,7 @@ pub fn verify_snapshot(name: &str) -> Result<VerificationResult> {
         Ok(meta) => Some(meta),
         Err(e) => {
             warnings.push(format!(
-                "Snapshot metadata not found (this is normal for older snapshots): {}",
-                e
+                "Snapshot metadata not found (this is normal for older snapshots): {e}"
             ));
             None
         }
@@ -882,7 +920,7 @@ fn get_subvolume_id(path: &Path) -> Result<u64> {
         .context("Failed to execute btrfs subvolume show")?;
 
     if !output.status.success() {
-        bail!("Failed to get subvolume info for {:?}", path);
+        bail!("Failed to get subvolume info for {path:?}");
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -910,7 +948,7 @@ fn get_kernel_version() -> Option<String> {
 
 pub fn ensure_snapshot_name(name: &str) -> Result<()> {
     waypoint_common::validate_snapshot_name(name)
-        .map_err(|e| anyhow!("Invalid snapshot name '{}': {}", name, e))
+        .map_err(|e| anyhow!("Invalid snapshot name '{name}': {e}"))
 }
 
 fn ensure_within_snapshot_dir(path: &Path) -> Result<()> {
@@ -1054,7 +1092,7 @@ pub fn get_snapshot_metadata(name: &str) -> Result<Snapshot> {
     snapshots
         .into_iter()
         .find(|s| s.name == name)
-        .context(format!("Snapshot metadata not found: {}", name))
+        .context(format!("Snapshot metadata not found: {name}"))
 }
 
 /// Get filesystem UUID for a mount point
@@ -1069,12 +1107,12 @@ fn get_filesystem_uuid(mount_point: &Path) -> Result<String> {
         .context("Failed to execute findmnt")?;
 
     if !output.status.success() {
-        bail!("Failed to get UUID for {:?}", mount_point);
+        bail!("Failed to get UUID for {mount_point:?}");
     }
 
     let uuid = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if uuid.is_empty() {
-        bail!("No UUID found for {:?}", mount_point);
+        bail!("No UUID found for {mount_point:?}");
     }
 
     Ok(uuid)
@@ -1103,7 +1141,7 @@ fn backup_fstab(fstab_path: &Path) -> Result<PathBuf> {
         backup_path = fstab_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
-            .join(format!("{}.bak.{}", base_name, timestamp));
+            .join(format!("{base_name}.bak.{timestamp}"));
     }
 
     // Copy fstab to backup
@@ -1202,7 +1240,7 @@ fn update_subvol_option(options: &str, snapshot_name: &str, mount_point: &Path) 
     let mut found_subvol = false;
 
     // Determine the subvolume name in the snapshot
-    let subvol_name = if mount_point == &PathBuf::from("/") {
+    let subvol_name = if mount_point == PathBuf::from("/") {
         "root".to_string()
     } else {
         mount_point
@@ -1212,12 +1250,12 @@ fn update_subvol_option(options: &str, snapshot_name: &str, mount_point: &Path) 
     };
 
     // The new subvol path in the snapshot
-    let new_subvol = format!("@snapshots/{}/{}", snapshot_name, subvol_name);
+    let new_subvol = format!("@snapshots/{snapshot_name}/{subvol_name}");
 
     for opt in opts {
         if opt.starts_with("subvol=") || opt.starts_with("subvolid=") {
             // Replace with new subvol path
-            new_opts.push(format!("subvol={}", new_subvol));
+            new_opts.push(format!("subvol={new_subvol}"));
             found_subvol = true;
         } else {
             new_opts.push(opt.to_string());
@@ -1226,7 +1264,7 @@ fn update_subvol_option(options: &str, snapshot_name: &str, mount_point: &Path) 
 
     // If no subvol option was found, add it
     if !found_subvol {
-        new_opts.push(format!("subvol={}", new_subvol));
+        new_opts.push(format!("subvol={new_subvol}"));
     }
 
     Ok(new_opts.join(","))
@@ -1245,7 +1283,7 @@ fn create_writable_snapshot(source: &Path, dest: &Path) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Failed to create writable snapshot: {}", stderr);
+        bail!("Failed to create writable snapshot: {stderr}");
     }
 
     Ok(())

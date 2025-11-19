@@ -10,7 +10,7 @@ use crate::subvolume::{SubvolumeInfo, detect_mounted_subvolumes, should_allow_sn
 
 // Global state for current subvolume selection (used across dialogs)
 thread_local! {
-    static CURRENT_SUBVOLUMES: RefCell<Option<Rc<RefCell<Vec<PathBuf>>>>> = RefCell::new(None);
+    static CURRENT_SUBVOLUMES: RefCell<Option<Rc<RefCell<Vec<PathBuf>>>>> = const { RefCell::new(None) };
 }
 
 /// Get the current subvolume selection
@@ -50,7 +50,7 @@ pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::Preferenc
     let subvolumes = match detect_mounted_subvolumes() {
         Ok(subvols) => subvols,
         Err(e) => {
-            log::error!("Failed to detect subvolumes: {}", e);
+            log::error!("Failed to detect subvolumes: {e}");
             Vec::new()
         }
     };
@@ -100,14 +100,14 @@ pub fn create_subvolumes_page(parent: &adw::ApplicationWindow) -> adw::Preferenc
 
                 // Auto-save configuration
                 if let Err(e) = save_config(&enabled) {
-                    log::error!("Failed to save subvolume preferences: {}", e);
+                    log::error!("Failed to save subvolume preferences: {e}");
                     super::dialogs::show_error(
                         &parent_clone,
                         "Save Failed",
-                        &format!("Failed to save snapshot target preferences: {}", e),
+                        &format!("Failed to save snapshot target preferences: {e}"),
                     );
                 } else {
-                    log::info!("Saved subvolume preferences: {:?}", enabled);
+                    log::info!("Saved subvolume preferences: {enabled:?}");
                     super::dialogs::show_toast(&parent_clone, "Manual snapshot settings updated");
                 }
             });
@@ -173,13 +173,13 @@ pub fn load_config() -> Vec<PathBuf> {
                     result
                 }
                 Err(e) => {
-                    log::error!("Failed to parse config: {}", e);
+                    log::error!("Failed to parse config: {e}");
                     vec![PathBuf::from("/")]
                 }
             }
         }
         Err(e) => {
-            log::error!("Failed to read config: {}", e);
+            log::error!("Failed to read config: {e}");
             vec![PathBuf::from("/")]
         }
     }

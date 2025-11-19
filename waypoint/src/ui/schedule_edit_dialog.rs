@@ -395,7 +395,7 @@ fn create_subvolume_selection(schedule: &Schedule) -> Vec<adw::ActionRow> {
     let subvolumes = match detect_mounted_subvolumes() {
         Ok(subs) => subs,
         Err(e) => {
-            log::warn!("Failed to detect subvolumes: {}", e);
+            log::warn!("Failed to detect subvolumes: {e}");
             return rows; // Return empty if detection fails
         }
     };
@@ -433,7 +433,7 @@ fn create_subvolume_selection(schedule: &Schedule) -> Vec<adw::ActionRow> {
 fn update_preview_label(label: &Label, prefix: &str) {
     let now = chrono::Local::now();
     let timestamp = now.format("%Y-%m-%d_%H%M").to_string();
-    let preview = format!("Preview: {}-{}", prefix, timestamp);
+    let preview = format!("Preview: {prefix}-{timestamp}");
     label.set_text(&preview);
 }
 
@@ -456,7 +456,7 @@ pub fn extract_schedule_from_dialog(dialog: &adw::PreferencesWindow) -> Option<S
             day_of_week: None,
             day_of_month: None,
             prefix: String::new(),
-            description: format!("{:?} snapshot", schedule_type),
+            description: format!("{schedule_type:?} snapshot"),
             keep_count: 0,
             keep_days: 0,
             timeline_retention: None, // Will be populated if using timeline retention
@@ -552,7 +552,7 @@ pub fn extract_schedule_from_dialog(dialog: &adw::PreferencesWindow) -> Option<S
                 if let Some(minute_spin) = time_row.as_ref().data::<SpinButton>("minute_spin") {
                     let hour = hour_spin.as_ref().value() as u32;
                     let minute = minute_spin.as_ref().value() as u32;
-                    schedule.time = Some(format!("{:02}:{:02}", hour, minute));
+                    schedule.time = Some(format!("{hour:02}:{minute:02}"));
                 }
             }
         }

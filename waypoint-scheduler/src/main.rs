@@ -23,7 +23,7 @@ fn main() {
     // Main service loop
     loop {
         if let Err(e) = run_scheduler_loop(&config) {
-            log::error!("Scheduler error: {}", e);
+            log::error!("Scheduler error: {e}");
             log::info!("Will retry in 60 seconds...");
             thread::sleep(Duration::from_secs(60));
         }
@@ -85,7 +85,7 @@ fn run_scheduler_loop(config: &WaypointConfig) -> Result<()> {
 
     // Apply retention cleanup after snapshot creation
     if let Err(e) = apply_retention_cleanup() {
-        log::warn!("Failed to apply retention cleanup: {}", e);
+        log::warn!("Failed to apply retention cleanup: {e}");
         // Don't fail the main loop if cleanup fails
     }
 
@@ -261,7 +261,7 @@ fn create_snapshot(schedule: &Schedule) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Invalid schedule prefix '{}': {}", schedule.prefix, e))?;
     let snapshot_name = format!("{}-{}", schedule.prefix, Local::now().format("%Y%m%d-%H%M"));
 
-    log::info!("Creating scheduled snapshot: {}", snapshot_name);
+    log::info!("Creating scheduled snapshot: {snapshot_name}");
 
     // Use schedule-specific subvolumes
     // If empty, default to root filesystem only
@@ -285,12 +285,12 @@ fn create_snapshot(schedule: &Schedule) -> Result<()> {
         .context("Failed to execute waypoint-cli")?;
 
     if output.status.success() {
-        log::info!("✓ Snapshot created successfully: {}", snapshot_name);
-        log::info!("  Subvolumes: {}", subvolumes_arg);
+        log::info!("✓ Snapshot created successfully: {snapshot_name}");
+        log::info!("  Subvolumes: {subvolumes_arg}");
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        log::error!("✗ Failed to create snapshot: {}", stderr);
-        return Err(anyhow::anyhow!("Snapshot creation failed: {}", stderr));
+        log::error!("✗ Failed to create snapshot: {stderr}");
+        return Err(anyhow::anyhow!("Snapshot creation failed: {stderr}"));
     }
 
     Ok(())
@@ -314,7 +314,7 @@ fn apply_retention_cleanup() -> Result<()> {
         }
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        log::warn!("Retention cleanup warning: {}", stderr);
+        log::warn!("Retention cleanup warning: {stderr}");
         // Don't fail the entire operation if cleanup fails - just log it
     }
 
@@ -326,7 +326,7 @@ fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
 
     if secs < 60 {
-        format!("{}s", secs)
+        format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else if secs < 86400 {

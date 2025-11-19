@@ -26,7 +26,7 @@ pub fn get_installed_packages() -> Result<Vec<Package>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("xbps-query failed: {}", stderr);
+        anyhow::bail!("xbps-query failed: {stderr}");
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

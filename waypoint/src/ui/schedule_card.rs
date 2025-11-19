@@ -262,7 +262,7 @@ impl ScheduleCard {
     /// Update the next run time display
     #[allow(dead_code)]
     pub fn set_next_run(&mut self, text: &str) {
-        self.next_run_label.set_text(&format!("Next run: {}", text));
+        self.next_run_label.set_text(&format!("Next run: {text}"));
     }
 
     /// Update the last run display
@@ -270,7 +270,7 @@ impl ScheduleCard {
     pub fn set_last_run(&mut self, text: &str, success: bool) {
         let icon = if success { "✓" } else { "✗" };
         self.last_run_label
-            .set_text(&format!("Last success: {} {}", text, icon));
+            .set_text(&format!("Last success: {text} {icon}"));
     }
 
     /// Add sparkline data point
@@ -283,7 +283,7 @@ impl ScheduleCard {
     /// Update retention display
     #[allow(dead_code)]
     pub fn set_retention(&mut self, keep_count: u32, prefix: &str) {
-        let text = format!("Retention: {} snapshots • Prefix: {}-", keep_count, prefix);
+        let text = format!("Retention: {keep_count} snapshots • Prefix: {prefix}-");
         self.retention_label.set_text(&text);
     }
 

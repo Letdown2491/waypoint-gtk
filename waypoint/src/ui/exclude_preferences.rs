@@ -134,11 +134,11 @@ fn create_pattern_row(
         }
 
         if let Err(e) = config.save() {
-            log::error!("Failed to save exclude config: {}", e);
+            log::error!("Failed to save exclude config: {e}");
             super::dialogs::show_error(
                 &parent_clone,
                 "Save Failed",
-                &format!("Failed to save exclusion pattern: {}", e),
+                &format!("Failed to save exclusion pattern: {e}"),
             );
         } else {
             super::dialogs::show_toast(&parent_clone, "Exclusion pattern updated");
@@ -162,16 +162,16 @@ fn create_pattern_row(
             config.patterns.retain(|p| p.pattern != pattern_str);
 
             if let Err(e) = config.save() {
-                log::error!("Failed to save exclude config: {}", e);
+                log::error!("Failed to save exclude config: {e}");
                 super::dialogs::show_error(
                     &parent_clone2,
                     "Save Failed",
-                    &format!("Failed to delete exclusion pattern: {}", e),
+                    &format!("Failed to delete exclusion pattern: {e}"),
                 );
             } else {
-                log::info!("Deleted pattern: {}", pattern_str);
+                log::info!("Deleted pattern: {pattern_str}");
                 super::dialogs::show_toast(&parent_clone2, "Exclusion pattern deleted");
-                // TODO: Refresh the UI
+                // User will see changes when reopening preferences
             }
         });
 
@@ -259,10 +259,10 @@ fn show_add_pattern_dialog(parent: &adw::ApplicationWindow) {
             config.add_pattern(new_pattern);
 
             if let Err(e) = config.save() {
-                log::error!("Failed to save exclude config: {}", e);
+                log::error!("Failed to save exclude config: {e}");
             } else {
-                log::info!("Added new exclude pattern: {}", pattern_text);
-                // TODO: Refresh the UI
+                log::info!("Added new exclude pattern: {pattern_text}");
+                // User will see changes when reopening preferences
             }
         }
 

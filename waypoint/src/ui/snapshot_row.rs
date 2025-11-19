@@ -83,8 +83,7 @@ impl SnapshotRow {
                 let backup_icon = gtk::Image::from_icon_name("emblem-important-symbolic");
                 backup_icon.set_pixel_size(12);
                 backup_icon.set_tooltip_text(Some(&format!(
-                    "Backed up to {} of {} destinations",
-                    count, total
+                    "Backed up to {count} of {total} destinations"
                 )));
                 backup_icon.add_css_class("warning");
                 prefix_box.append(&backup_icon);
@@ -119,13 +118,13 @@ impl SnapshotRow {
         }
 
         if let Some(count) = snapshot.package_count {
-            subtitle_parts.push(format!("{} packages", count));
+            subtitle_parts.push(format!("{count} packages"));
         }
 
         if let Some(kernel) = &snapshot.kernel_version {
             // Only show first part of kernel version (e.g., "6.6.54" instead of full version string)
             if let Some(short_version) = kernel.split_whitespace().next() {
-                subtitle_parts.push(format!("Kernel {}", short_version));
+                subtitle_parts.push(format!("Kernel {short_version}"));
             }
         }
 

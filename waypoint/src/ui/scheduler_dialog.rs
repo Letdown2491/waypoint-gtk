@@ -259,7 +259,7 @@ fn calculate_next_run(schedule: &Schedule) -> String {
 
                                 // If that time has passed, move to tomorrow
                                 if next <= now {
-                                    next = next + Duration::days(1);
+                                    next += Duration::days(1);
                                 }
                             }
                             ScheduleType::Weekly => {
@@ -372,7 +372,7 @@ fn find_last_snapshot(
 
     let matching: Vec<_> = snapshots
         .iter()
-        .filter(|s| s.name.starts_with(&format!("{}-", prefix)))
+        .filter(|s| s.name.starts_with(&format!("{prefix}-")))
         .collect();
 
     log::debug!(
@@ -410,7 +410,7 @@ fn build_sparkline_data(
     // Filter snapshots by prefix
     let mut schedule_snapshots: Vec<_> = snapshots
         .iter()
-        .filter(|s| s.name.starts_with(&format!("{}-", prefix)))
+        .filter(|s| s.name.starts_with(&format!("{prefix}-")))
         .collect();
 
     log::debug!(
@@ -457,12 +457,12 @@ fn update_schedule_cards_data(schedule_cards: &Rc<RefCell<Vec<Rc<RefCell<Schedul
             Ok(client) => match client.list_snapshots() {
                 Ok(snapshots) => snapshots,
                 Err(e) => {
-                    log::error!("Failed to list snapshots: {}", e);
+                    log::error!("Failed to list snapshots: {e}");
                     Vec::new()
                 }
             },
             Err(e) => {
-                log::error!("Failed to connect to helper: {}", e);
+                log::error!("Failed to connect to helper: {e}");
                 Vec::new()
             }
         };
@@ -587,10 +587,7 @@ fn load_schedules_config() -> SchedulesConfig {
     let config = WaypointConfig::new();
 
     if config.schedules_config.exists() {
-        match SchedulesConfig::load_from_file(&config.schedules_config) {
-            Ok(cfg) => cfg,
-            Err(_) => SchedulesConfig::default(),
-        }
+        SchedulesConfig::load_from_file(&config.schedules_config).unwrap_or_default()
     } else {
         SchedulesConfig::default()
     }
@@ -616,15 +613,14 @@ fn save_all_schedules_from_cards(
         Ok(content) => {
             // Add header comment
             format!(
-                "# Waypoint Snapshot Schedules Configuration\n# Multiple schedules can run concurrently with different retention policies\n\n{}",
-                content
+                "# Waypoint Snapshot Schedules Configuration\n# Multiple schedules can run concurrently with different retention policies\n\n{content}"
             )
         }
         Err(e) => {
             dialogs::show_error(
                 parent,
                 "Configuration Error",
-                &format!("Failed to serialize configuration: {}", e),
+                &format!("Failed to serialize configuration: {e}"),
             );
             return;
         }
@@ -661,7 +657,7 @@ fn save_all_schedules_from_cards(
                     dialogs::show_error(
                         &parent_clone,
                         "Save Failed",
-                        &format!("Failed to save scheduler configuration: {}", e),
+                        &format!("Failed to save scheduler configuration: {e}"),
                     );
                 }
             }
@@ -701,7 +697,7 @@ fn restart_scheduler_service(parent: &adw::ApplicationWindow) {
                     dialogs::show_error(
                         &parent_clone,
                         "Restart Failed",
-                        &format!("Failed to restart scheduler service: {}", e),
+                        &format!("Failed to restart scheduler service: {e}"),
                     );
                 }
             }
@@ -722,7 +718,7 @@ fn update_service_status(status_label: &Label, status_icon: &gtk::Image) {
         let status_text = match WaypointHelperClient::new() {
             Ok(client) => match client.get_scheduler_status() {
                 Ok(message) => message,
-                Err(e) => format!("Error: {}", e),
+                Err(e) => format!("Error: {e}"),
             },
             Err(_) => "Cannot connect to helper service".to_string(),
         };
@@ -811,7 +807,7 @@ fn update_last_snapshot(last_snapshot_label: &Label) {
                         "No automatic snapshots yet".to_string()
                     }
                 }
-                Err(e) => format!("Error: {}", e),
+                Err(e) => format!("Error: {e}"),
             },
             Err(_) => "Cannot connect to helper service".to_string(),
         };

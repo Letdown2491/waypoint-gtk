@@ -104,8 +104,7 @@ pub fn validate_scheduler_frequency(frequency: &str) -> Result<u32, String> {
         "weekly" | "2" => Ok(2),
         "monthly" | "3" => Ok(3),
         _ => Err(format!(
-            "Invalid frequency '{}'. Must be one of: hourly, daily, weekly, monthly",
-            frequency
+            "Invalid frequency '{frequency}'. Must be one of: hourly, daily, weekly, monthly"
         )),
     }
 }
@@ -206,8 +205,7 @@ pub fn validate_retention_policy(
         errors.push(ValidationError::new(
             "min_snapshots",
             format!(
-                "Minimum snapshots ({}) cannot be greater than maximum snapshots ({})",
-                min_snapshots, max_snapshots
+                "Minimum snapshots ({min_snapshots}) cannot be greater than maximum snapshots ({max_snapshots})"
             ),
         ));
     }
@@ -243,7 +241,7 @@ pub fn validate_config_path(path: &Path) -> Result<(), String> {
         }
 
         // Try to check permissions (simplified check)
-        let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot access path: {}", e))?;
+        let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot access path: {e}"))?;
 
         if metadata.permissions().readonly() {
             return Err("Configuration file is read-only".to_string());

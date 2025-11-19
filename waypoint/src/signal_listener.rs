@@ -48,7 +48,7 @@ pub fn start_signal_listener(app: Application) -> std::sync::mpsc::Receiver<Back
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
             if let Err(e) = listen_for_signals(event_sender).await {
-                log::error!("Signal listener error: {}", e);
+                log::error!("Signal listener error: {e}");
             }
         });
     });
@@ -60,7 +60,7 @@ pub fn start_signal_listener(app: Application) -> std::sync::mpsc::Receiver<Back
             if let Ok(event) = event_receiver.try_recv() {
                 match event {
                     WaypointEvent::SnapshotCreated(evt) => {
-                        println!("Main thread received SnapshotCreated: {:?}", evt);
+                        println!("Main thread received SnapshotCreated: {evt:?}");
 
                         // Only send notification if created by scheduler
                         if evt.created_by == "scheduler" {
@@ -68,11 +68,11 @@ pub fn start_signal_listener(app: Application) -> std::sync::mpsc::Receiver<Back
                         }
                     }
                     WaypointEvent::BackupProgress(evt) => {
-                        println!("Main thread received BackupProgress: {:?}", evt);
+                        println!("Main thread received BackupProgress: {evt:?}");
 
                         // Forward to progress channel
                         if let Err(e) = progress_sender_clone.send(evt) {
-                            log::error!("Failed to forward backup progress event: {}", e);
+                            log::error!("Failed to forward backup progress event: {e}");
                         }
                     }
                 }
@@ -127,8 +127,7 @@ async fn listen_for_signals(sender: std::sync::mpsc::Sender<WaypointEvent>) -> R
                                 msg.body().deserialize::<(String, String)>()
                             {
                                 println!(
-                                    "Received SnapshotCreated signal: {} (by {})",
-                                    snapshot_name, created_by
+                                    "Received SnapshotCreated signal: {snapshot_name} (by {created_by})"
                                 );
 
                                 // Send event to main thread
@@ -138,7 +137,7 @@ async fn listen_for_signals(sender: std::sync::mpsc::Sender<WaypointEvent>) -> R
                                 });
 
                                 if let Err(e) = sender.send(event) {
-                                    log::error!("Failed to send event to main thread: {}", e);
+                                    log::error!("Failed to send event to main thread: {e}");
                                 }
                             }
                         }
@@ -148,8 +147,7 @@ async fn listen_for_signals(sender: std::sync::mpsc::Sender<WaypointEvent>) -> R
                                 msg.body().deserialize::<(String, String, u64, u64, u64, String)>()
                             {
                                 println!(
-                                    "Received BackupProgress signal: {} -> {} (stage: {})",
-                                    snapshot_id, destination_uuid, stage
+                                    "Received BackupProgress signal: {snapshot_id} -> {destination_uuid} (stage: {stage})"
                                 );
 
                                 // Send event to main thread
@@ -163,7 +161,7 @@ async fn listen_for_signals(sender: std::sync::mpsc::Sender<WaypointEvent>) -> R
                                 });
 
                                 if let Err(e) = sender.send(event) {
-                                    log::error!("Failed to send event to main thread: {}", e);
+                                    log::error!("Failed to send event to main thread: {e}");
                                 }
                             }
                         }

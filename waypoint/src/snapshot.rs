@@ -96,19 +96,8 @@ impl Snapshot {
     }
 }
 
-/// Format bytes to human-readable string
-pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut size = bytes as f64;
-    let mut unit_idx = 0;
-
-    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_idx += 1;
-    }
-
-    format!("{:.2} {}", size, UNITS[unit_idx])
-}
+// Re-export format_bytes from waypoint_common
+pub use waypoint_common::format_bytes;
 
 /// Manage snapshot metadata persistence
 pub struct SnapshotManager {

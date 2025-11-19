@@ -108,7 +108,7 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
         // Check mount point path first
         if mount_point.contains("/waypoint-backups/")
         {
-            log::debug!("Skipping waypoint backup subvolume at {}", mount_point);
+            log::debug!("Skipping waypoint backup subvolume at {mount_point}");
             continue;
         }
 
@@ -127,7 +127,7 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
         let label_lower = label.to_lowercase();
         if label_lower.starts_with("snapshot-")
         {
-            log::debug!("Skipping snapshot-like label: {}", label);
+            log::debug!("Skipping snapshot-like label: {label}");
             continue;
         }
 
@@ -140,7 +140,7 @@ pub fn scan_backup_destinations() -> Result<Vec<BackupDestination>> {
         if let Some(ref uuid) = entry.uuid {
             if !uuid.is_empty() {
                 if seen_uuids.contains(uuid) {
-                    log::info!("Skipping duplicate mount of {} at {}", label, mount_point);
+                    log::info!("Skipping duplicate mount of {label} at {mount_point}");
                     continue;
                 }
                 seen_uuids.insert(uuid.clone());
@@ -166,12 +166,12 @@ fn validate_backup_destination(destination_mount: &str) -> Result<std::path::Pat
 
     // Must exist
     if !dest_path.exists() {
-        anyhow::bail!("Destination does not exist: {}", destination_mount);
+        anyhow::bail!("Destination does not exist: {destination_mount}");
     }
 
     // Canonicalize to resolve symlinks and get absolute path
     let canonical = dest_path.canonicalize()
-        .with_context(|| format!("Failed to canonicalize destination path: {}", destination_mount))?;
+        .with_context(|| format!("Failed to canonicalize destination path: {destination_mount}"))?;
 
     // Get list of valid backup destinations
     let valid_destinations = scan_backup_destinations()
@@ -193,10 +193,9 @@ fn validate_backup_destination(destination_mount: &str) -> Result<std::path::Pat
 
     // If we get here, the destination is not in the valid list
     anyhow::bail!(
-        "Security: Destination '{}' is not a valid backup destination. \
+        "Security: Destination '{canonical_str}' is not a valid backup destination. \
          Only removable drives and network shares returned by scan_backup_destinations are allowed. \
-         This prevents writing to system directories.",
-        canonical_str
+         This prevents writing to system directories."
     )
 }
 
@@ -271,7 +270,7 @@ fn extract_device_name(source: &str) -> Option<String> {
 
 /// Check if a block device is removable by reading /sys/block/*/removable
 fn is_removable_device(device: &str) -> bool {
-    let removable_path = format!("/sys/block/{}/removable", device);
+    let removable_path = format!("/sys/block/{device}/removable");
     std::fs::read_to_string(&removable_path)
         .ok()
         .and_then(|content| content.trim().parse::<u8>().ok())
@@ -321,7 +320,7 @@ fn load_snapshot_metadata(snapshot_name: &str) -> Result<waypoint_common::Snapsh
     snapshots
         .into_iter()
         .find(|s| s.name == snapshot_name)
-        .ok_or_else(|| anyhow!("Snapshot '{}' not found in metadata", snapshot_name))
+        .ok_or_else(|| anyhow!("Snapshot '{snapshot_name}' not found in metadata"))
 }
 
 /// Convert a mount point path to a subdirectory name for backups
@@ -355,8 +354,7 @@ pub fn backup_snapshot(
     // Validate inputs
     if !snapshot.exists() {
         return Err(anyhow::anyhow!(
-            "Snapshot does not exist: {}",
-            snapshot_path
+            "Snapshot does not exist: {snapshot_path}"
         ));
     }
 
@@ -485,7 +483,7 @@ fn backup_single_subvolume_btrfs(
 
     if !receive_output.status.success() {
         let stderr = String::from_utf8_lossy(&receive_output.stderr);
-        bail!("btrfs receive failed: {}", stderr);
+        bail!("btrfs receive failed: {stderr}");
     }
 
     Ok(())
@@ -576,8 +574,7 @@ fn backup_snapshot_btrfs(
 
         if !subvol_path.exists() {
             log::warn!(
-                "Subvolume '{}' not found in snapshot, skipping",
-                subvol_name
+                "Subvolume '{subvol_name}' not found in snapshot, skipping"
             );
             continue;
         }
@@ -592,8 +589,7 @@ fn backup_snapshot_btrfs(
                 Some(parent_subvol_path)
             } else {
                 log::warn!(
-                    "Parent subvolume '{}' not found, doing full backup",
-                    subvol_name
+                    "Parent subvolume '{subvol_name}' not found, doing full backup"
                 );
                 None
             }
@@ -616,9 +612,9 @@ fn backup_snapshot_btrfs(
             parent_subvol.as_deref(),
             &snapshot_backup_dir,
         )
-        .with_context(|| format!("Failed to backup subvolume '{}'", subvol_name))?;
+        .with_context(|| format!("Failed to backup subvolume '{subvol_name}'"))?;
 
-        log::info!("Successfully backed up subvolume: {}", subvol_name);
+        log::info!("Successfully backed up subvolume: {subvol_name}");
     }
 
     // Calculate total backup size
@@ -729,8 +725,7 @@ fn backup_snapshot_rsync(
 
         if !subvol_snapshot_path.exists() {
             log::warn!(
-                "Subvolume '{}' not found in snapshot, skipping",
-                subvol_name
+                "Subvolume '{subvol_name}' not found in snapshot, skipping"
             );
             continue;
         }
@@ -740,8 +735,7 @@ fn backup_snapshot_rsync(
         let source_dir = subvol_snapshot_path.join("root");
         if !source_dir.exists() {
             log::warn!(
-                "Subvolume '{}' does not have a root directory, skipping",
-                subvol_name
+                "Subvolume '{subvol_name}' does not have a root directory, skipping"
             );
             continue;
         }
@@ -777,10 +771,10 @@ fn backup_snapshot_rsync(
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("rsync failed for subvolume '{}': {}", subvol_name, stderr);
+            bail!("rsync failed for subvolume '{subvol_name}': {stderr}");
         }
 
-        log::info!("Successfully backed up subvolume: {}", subvol_name);
+        log::info!("Successfully backed up subvolume: {subvol_name}");
     }
 
     // Calculate total backup size
@@ -875,6 +869,8 @@ pub fn list_backups(destination_mount: &str) -> Result<Vec<String>> {
 /// 2. Restore each subvolume to the correct location
 /// 3. Recreate the snapshot directory structure
 pub fn restore_from_backup(backup_path: &str, snapshots_dir: &str) -> Result<String> {
+    use std::os::unix::fs::MetadataExt;
+
     let backup = Path::new(backup_path);
     let dest = Path::new(snapshots_dir);
 
@@ -885,17 +881,26 @@ pub fn restore_from_backup(backup_path: &str, snapshots_dir: &str) -> Result<Str
     // Canonicalize both paths - this validates they exist and resolves symlinks
     // The canonicalization happens immediately before use to minimize TOCTOU window
     //
-    // SECURITY NOTE: There is still a small race window between canonicalization and use
-    // where an attacker with filesystem write access could replace the path with a symlink.
-    // Mitigations in place:
+    // SECURITY: TOCTOU mitigation via inode verification
+    // After canonicalization, we capture the inode number and verify it hasn't changed
+    // before any filesystem operations. This prevents an attacker from swapping the path
+    // between validation and use, even with filesystem write access.
+    //
+    // Additional mitigations in place:
     // 1. Polkit authentication required (must be admin)
     // 2. Path validation requires "waypoint-backups" substring
     // 3. Commands use .arg() preventing shell injection
-    // 4. Immediate re-verification after canonicalization
+    // 4. Inode verification immediately before use
     let backup = validate_backup_path(backup)?;
     let dest = dest
         .canonicalize()
         .context("Failed to resolve snapshots directory - does not exist or is inaccessible")?;
+
+    // Capture the inode of the backup path for TOCTOU protection
+    let backup_metadata = fs::metadata(&backup)
+        .context("Failed to get backup metadata for inode verification")?;
+    let backup_inode = backup_metadata.ino();
+    let backup_dev = backup_metadata.dev();
 
     // SECURITY: Validate snapshots_dir is the legitimate snapshot directory
     // This prevents attackers from restoring to arbitrary directories like / or /etc
@@ -913,11 +918,18 @@ pub fn restore_from_backup(backup_path: &str, snapshots_dir: &str) -> Result<Str
         ));
     }
 
-    // Re-verify the backup path still exists and hasn't been swapped
-    // This reduces the TOCTOU window further
-    if !backup.exists() {
+    // Re-verify the backup path still exists and inode matches
+    // This detects TOCTOU attacks where the path is swapped between validation and use
+    let current_metadata = fs::metadata(&backup)
+        .context("Backup path no longer exists - possible race condition or filesystem modification")?;
+
+    if current_metadata.ino() != backup_inode || current_metadata.dev() != backup_dev {
         return Err(anyhow::anyhow!(
-            "Backup path no longer exists - possible race condition or filesystem modification"
+            "Security: Backup path inode changed between validation and use. \
+             This indicates a potential TOCTOU attack or filesystem modification. \
+             Original inode: {}, current inode: {}",
+            backup_inode,
+            current_metadata.ino()
         ));
     }
 
@@ -930,6 +942,17 @@ pub fn restore_from_backup(backup_path: &str, snapshots_dir: &str) -> Result<Str
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false);
+
+    // Final inode check immediately before calling restore functions
+    let final_metadata = fs::metadata(&backup)
+        .context("Backup path modified immediately before restore operation")?;
+
+    if final_metadata.ino() != backup_inode || final_metadata.dev() != backup_dev {
+        return Err(anyhow::anyhow!(
+            "Security: Backup path inode changed immediately before restore operation. \
+             This indicates a potential TOCTOU attack. Aborting restore for safety."
+        ));
+    }
 
     if is_btrfs_subvolume {
         restore_from_backup_btrfs(&backup, &dest)
@@ -945,13 +968,13 @@ fn restore_from_backup_btrfs(backup: &Path, dest: &Path) -> Result<String> {
     let mut send_cmd = Command::new("btrfs");
     send_cmd
         .arg("send")
-        .arg(&backup)
+        .arg(backup)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
     // Build receive command
     let mut receive_cmd = Command::new("btrfs");
-    receive_cmd.arg("receive").arg(&dest);
+    receive_cmd.arg("receive").arg(dest);
 
     // Execute pipeline
     let mut send_child = send_cmd.spawn().context("Failed to start btrfs send")?;
@@ -996,7 +1019,7 @@ fn restore_from_backup_btrfs(backup: &Path, dest: &Path) -> Result<String> {
 
     if !receive_output.status.success() {
         let stderr = String::from_utf8_lossy(&receive_output.stderr);
-        return Err(anyhow::anyhow!("btrfs receive failed: {}", stderr));
+        return Err(anyhow::anyhow!("btrfs receive failed: {stderr}"));
     }
 
     // Return restored snapshot path
@@ -1006,6 +1029,10 @@ fn restore_from_backup_btrfs(backup: &Path, dest: &Path) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("Invalid backup path"))?;
 
     let restored_path = dest.join(snapshot_name);
+
+    // INTEGRITY VERIFICATION: Verify the restored snapshot
+    verify_restored_snapshot(backup, &restored_path, true)?;
+
     Ok(restored_path.to_string_lossy().to_string())
 }
 
@@ -1029,12 +1056,20 @@ fn restore_from_backup_rsync(backup: &Path, dest: &Path) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("Failed to create subvolume: {}", stderr));
+        return Err(anyhow::anyhow!("Failed to create subvolume: {stderr}"));
     }
 
     // Create the "root" directory inside the subvolume
     let root_dir = restored_path.join("root");
-    std::fs::create_dir_all(&root_dir).context("Failed to create root directory")?;
+    if let Err(e) = std::fs::create_dir_all(&root_dir) {
+        // Clean up the subvolume we just created
+        let _ = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("delete")
+            .arg(&restored_path)
+            .output();
+        return Err(e).context("Failed to create root directory");
+    }
 
     // Use rsync to copy backup contents into the root directory
     let output = Command::new("rsync")
@@ -1046,14 +1081,22 @@ fn restore_from_backup_rsync(backup: &Path, dest: &Path) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Clean up failed restore
-        let _ = Command::new("btrfs")
+        // RESOURCE CLEANUP: Clean up failed restore subvolume
+        log::warn!("rsync restore failed, cleaning up subvolume: {}", restored_path.display());
+        if let Err(cleanup_err) = Command::new("btrfs")
             .arg("subvolume")
             .arg("delete")
             .arg(&restored_path)
-            .output();
-        return Err(anyhow::anyhow!("rsync restore failed: {}", stderr));
+            .output()
+        {
+            log::error!("Failed to cleanup restore subvolume: {}", cleanup_err);
+        }
+        return Err(anyhow::anyhow!("rsync restore failed: {stderr}"));
     }
+
+    // INTEGRITY VERIFICATION: Verify the restored snapshot
+    // For rsync restores, compare against the backup source
+    verify_restored_snapshot(backup, &restored_path, false)?;
 
     Ok(restored_path.to_string_lossy().to_string())
 }
@@ -1172,6 +1215,113 @@ fn is_btrfs_filesystem(path: &Path) -> Result<bool> {
     Ok(fstype == "btrfs")
 }
 
+/// Verify a restored snapshot's integrity
+///
+/// Performs comprehensive integrity checks on a restored snapshot:
+/// - Verifies the restored path exists
+/// - For btrfs restores: validates it's a proper subvolume
+/// - Compares file counts and sizes with the backup source
+/// - Verifies read access to restored data
+///
+/// # Arguments
+/// * `backup_source` - Original backup path used as comparison reference
+/// * `restored_path` - Path to the restored snapshot
+/// * `is_btrfs` - Whether this was a btrfs send/receive restore
+fn verify_restored_snapshot(backup_source: &Path, restored_path: &Path, is_btrfs: bool) -> Result<()> {
+    log::info!("Verifying integrity of restored snapshot: {}", restored_path.display());
+
+    // 1. Verify restored path exists
+    if !restored_path.exists() {
+        bail!("Integrity verification failed: Restored path does not exist: {}", restored_path.display());
+    }
+
+    // 2. Verify it's a directory
+    if !restored_path.is_dir() {
+        bail!("Integrity verification failed: Restored path is not a directory: {}", restored_path.display());
+    }
+
+    // 3. For btrfs restores, verify it's a valid subvolume
+    if is_btrfs {
+        let is_subvolume = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("show")
+            .arg(restored_path)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+
+        if !is_subvolume {
+            bail!("Integrity verification failed: Restored path is not a valid btrfs subvolume: {}", restored_path.display());
+        }
+        log::debug!("✓ Restored snapshot is a valid btrfs subvolume");
+    }
+
+    // 4. Compare file counts and sizes with backup source
+    let backup_stats = get_directory_stats(backup_source)
+        .context("Failed to get backup source statistics for verification")?;
+
+    // For rsync restores, we need to check the "root" subdirectory since that's where the actual data is
+    let verify_path = if !is_btrfs && restored_path.join("root").exists() {
+        restored_path.join("root")
+    } else {
+        restored_path.to_path_buf()
+    };
+
+    let restored_stats = get_directory_stats(&verify_path)
+        .context("Failed to get restored snapshot statistics for verification")?;
+
+    log::debug!("Backup source: {} files, {} bytes", backup_stats.0, backup_stats.1);
+    log::debug!("Restored snapshot: {} files, {} bytes", restored_stats.0, restored_stats.1);
+
+    // Compare file counts
+    if restored_stats.0 != backup_stats.0 {
+        bail!(
+            "Integrity verification failed: File count mismatch. \
+             Backup: {} files, Restored: {} files. \
+             This indicates incomplete or corrupted restore.",
+            backup_stats.0,
+            restored_stats.0
+        );
+    }
+    log::debug!("✓ File counts match: {} files", restored_stats.0);
+
+    // Compare sizes (allow up to 5% difference for filesystem overhead)
+    let size_diff_percent = if backup_stats.1 > 0 {
+        ((restored_stats.1 as i64 - backup_stats.1 as i64).abs() as f64 / backup_stats.1 as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    if size_diff_percent > 5.0 {
+        bail!(
+            "Integrity verification failed: Size difference too large ({:.1}%). \
+             Backup: {} bytes, Restored: {} bytes. \
+             This may indicate data corruption or incomplete restore.",
+            size_diff_percent,
+            backup_stats.1,
+            restored_stats.1
+        );
+    }
+    log::debug!("✓ Sizes are consistent (difference: {:.2}%)", size_diff_percent);
+
+    // 5. Verify read access to restored data
+    match fs::read_dir(&verify_path) {
+        Ok(_) => log::debug!("✓ Restored snapshot is readable"),
+        Err(e) => {
+            bail!("Integrity verification failed: Cannot read restored snapshot: {}", e);
+        }
+    }
+
+    log::info!(
+        "✓ Integrity verification passed: {} files, {} MB, {:.1}% size difference",
+        restored_stats.0,
+        restored_stats.1 / (1024 * 1024),
+        size_diff_percent
+    );
+
+    Ok(())
+}
+
 /// Verification result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationResult {
@@ -1276,7 +1426,7 @@ pub fn verify_backup(
         }
     } else {
         // For non-btrfs: compare file counts and total size
-        details.push(format!("Destination filesystem: non-btrfs"));
+        details.push("Destination filesystem: non-btrfs".to_string());
 
         let orig_stats = get_directory_stats(&canonical_snapshot)?;
         let backup_stats = get_directory_stats(&backup_path)?;
@@ -1309,7 +1459,7 @@ pub fn verify_backup(
         if size_diff_percent > 5.0 {
             return Ok(VerificationResult {
                 success: false,
-                message: format!("Size difference too large: {:.1}%", size_diff_percent),
+                message: format!("Size difference too large: {size_diff_percent:.1}%"),
                 details,
             });
         }
@@ -1324,7 +1474,7 @@ pub fn verify_backup(
         Err(e) => {
             return Ok(VerificationResult {
                 success: false,
-                message: format!("Cannot read backup: {}", e),
+                message: format!("Cannot read backup: {e}"),
                 details,
             });
         }

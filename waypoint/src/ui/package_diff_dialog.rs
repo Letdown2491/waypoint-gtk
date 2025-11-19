@@ -98,7 +98,7 @@ pub fn show_package_diff_dialog(
     filter_box.set_halign(gtk::Align::Start);
 
     let total_changes = diff_rc.added.len() + diff_rc.removed.len() + diff_rc.updated.len();
-    let btn_all = gtk::ToggleButton::with_label(&format!("All ({})", total_changes));
+    let btn_all = gtk::ToggleButton::with_label(&format!("All ({total_changes})"));
     btn_all.set_active(true);
     btn_all.add_css_class("pill");
     filter_box.append(&btn_all);
@@ -280,14 +280,13 @@ pub fn show_package_diff_dialog(
                 if total_items == 0 {
                     status_label.set_text("No package differences");
                 } else {
-                    status_label.set_text(&format!("Showing all {} package changes", total_items));
+                    status_label.set_text(&format!("Showing all {total_items} package changes"));
                 }
             } else if shown_items == 0 {
                 status_label.set_text("No packages match current filters");
             } else {
                 status_label.set_text(&format!(
-                    "Showing {} of {} package changes",
-                    shown_items, total_items
+                    "Showing {shown_items} of {total_items} package changes"
                 ));
             }
         })
@@ -441,15 +440,15 @@ fn create_enhanced_section(title: &str, items: &[PackageDisplayItem]) -> gtk::Bo
 fn export_comparison(parent: &adw::Window, snap1: &str, snap2: &str, diff: &PackageDiff) {
     use std::fs;
 
-    let filename = format!("waypoint_comparison_{}_{}.txt", snap1, snap2).replace('/', "_");
+    let filename = format!("waypoint_comparison_{snap1}_{snap2}.txt").replace('/', "_");
 
     let mut content = String::new();
-    content.push_str(&format!("Package Comparison: {} → {}\n", snap1, snap2));
+    content.push_str(&format!("Package Comparison: {snap1} → {snap2}\n"));
     content.push_str(&format!(
         "Generated: {}\n",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     ));
-    content.push_str(&format!("\nSummary:\n"));
+    content.push_str("\nSummary:\n");
     content.push_str(&format!("  Total Changes: {}\n", diff.total_changes()));
     content.push_str(&format!("  Added: {}\n", diff.added.len()));
     content.push_str(&format!("  Removed: {}\n", diff.removed.len()));
@@ -495,24 +494,18 @@ fn export_comparison(parent: &adw::Window, snap1: &str, snap2: &str, diff: &Pack
 
     match fs::write(&save_path, content) {
         Ok(_) => {
-            let success_dialog = adw::MessageDialog::new(
-                Some(parent),
-                Some("Export Successful"),
-                Some(&format!("Comparison exported to:\n{}", save_path.display())),
+            super::dialogs::show_info_window(
+                parent,
+                "Export Successful",
+                &format!("Comparison exported to:\n{}", save_path.display()),
             );
-            success_dialog.add_response("ok", "OK");
-            success_dialog.set_default_response(Some("ok"));
-            success_dialog.present();
         }
         Err(e) => {
-            let error_dialog = adw::MessageDialog::new(
-                Some(parent),
-                Some("Export Failed"),
-                Some(&format!("Failed to export comparison: {}", e)),
+            super::dialogs::show_error_window(
+                parent,
+                "Export Failed",
+                &format!("Failed to export comparison: {e}"),
             );
-            error_dialog.add_response("ok", "OK");
-            error_dialog.set_default_response(Some("ok"));
-            error_dialog.present();
         }
     }
 }

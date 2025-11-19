@@ -36,6 +36,44 @@ pub fn show_confirmation<F>(
     dialog.present();
 }
 
+/// Show a confirmation dialog with both confirm and cancel callbacks
+pub fn show_confirmation_with_cancel<F1, F2>(
+    window: &adw::ApplicationWindow,
+    title: &str,
+    message: &str,
+    confirm_label: &str,
+    destructive: bool,
+    on_confirm: F1,
+    on_cancel: F2,
+) where
+    F1: Fn() + 'static,
+    F2: Fn() + 'static,
+{
+    let dialog = adw::MessageDialog::new(Some(window), Some(title), Some(message));
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("confirm", confirm_label);
+
+    if destructive {
+        dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
+    } else {
+        dialog.set_response_appearance("confirm", adw::ResponseAppearance::Suggested);
+    }
+
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    dialog.connect_response(None, move |_, response| {
+        if response == "confirm" {
+            on_confirm();
+        } else {
+            on_cancel();
+        }
+    });
+
+    dialog.present();
+}
+
 /// Show an error dialog
 pub fn show_error(window: &adw::ApplicationWindow, title: &str, message: &str) {
     let dialog = adw::MessageDialog::new(Some(window), Some(title), Some(message));
@@ -45,10 +83,38 @@ pub fn show_error(window: &adw::ApplicationWindow, title: &str, message: &str) {
     dialog.present();
 }
 
-/// Show an info dialog
+/// Show an info dialog (ApplicationWindow version)
 #[allow(dead_code)]
 pub fn show_info(window: &adw::ApplicationWindow, title: &str, message: &str) {
     let dialog = adw::MessageDialog::new(Some(window), Some(title), Some(message));
+    dialog.add_response("ok", "OK");
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("ok");
+    dialog.present();
+}
+
+/// Show an info dialog (Window version)
+#[allow(dead_code)]
+pub fn show_info_window(window: &adw::Window, title: &str, message: &str) {
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(window)
+        .heading(title)
+        .body(message)
+        .build();
+    dialog.add_response("ok", "OK");
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("ok");
+    dialog.present();
+}
+
+/// Show an error dialog (Window version)
+#[allow(dead_code)]
+pub fn show_error_window(window: &adw::Window, title: &str, message: &str) {
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(window)
+        .heading(title)
+        .body(message)
+        .build();
     dialog.add_response("ok", "OK");
     dialog.set_default_response(Some("ok"));
     dialog.set_close_response("ok");
@@ -77,7 +143,7 @@ pub fn show_toast_with_timeout(
     }
 
     // Fallback: print to stdout
-    println!("✓ {}", message);
+    println!("✓ {message}");
 }
 
 /// Show a detailed error list dialog

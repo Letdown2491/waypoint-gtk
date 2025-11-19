@@ -9,6 +9,7 @@ mod error_helpers;
 mod exclude_preferences;
 mod file_diff_dialog;
 mod file_restore_dialog;
+mod main_window_helpers;
 pub mod notifications;
 mod package_diff_dialog;
 pub mod preferences;
@@ -17,6 +18,7 @@ mod quota_preferences;
 mod schedule_card;
 mod schedule_edit_dialog;
 mod scheduler_dialog;
+mod shortcuts_window;
 mod snapshot_list;
 mod snapshot_row;
 mod toolbar;
@@ -44,23 +46,10 @@ use std::sync::mpsc;
 
 use snapshot_list::DateFilter;
 
+// Import backup types from backup_dialog module
+use backup_dialog::types::{BackupDestination, DriveType};
+
 // Path validation moved to validation module
-
-#[derive(Debug, Clone, serde::Deserialize, PartialEq)]
-enum DriveType {
-    Removable,
-    Network,
-    Internal,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[allow(dead_code)]
-struct BackupDestination {
-    mount_point: String,
-    label: String,
-    drive_type: DriveType,
-    uuid: Option<String>,
-}
 
 pub struct MainWindow {
     window: adw::ApplicationWindow,
@@ -85,7 +74,7 @@ impl MainWindow {
         let snapshot_manager = match SnapshotManager::new() {
             Ok(sm) => Rc::new(RefCell::new(sm)),
             Err(e) => {
-                log::error!("Failed to initialize snapshot manager: {}", e);
+                log::error!("Failed to initialize snapshot manager: {e}");
 
                 // Create a temporary window to show the error dialog
                 let temp_window = adw::ApplicationWindow::builder().application(app).build();
@@ -95,12 +84,11 @@ impl MainWindow {
                     Some(&temp_window),
                     Some("Failed to Initialize Waypoint"),
                     Some(&format!(
-                        "Could not initialize the snapshot manager:\n\n{}\n\n\
+                        "Could not initialize the snapshot manager:\n\n{e}\n\n\
                         Please check that:\n\
                         • Btrfs filesystem is available\n\
                         • /.snapshots directory exists and is mounted\n\
-                        • D-Bus service is running",
-                        e
+                        • D-Bus service is running"
                     )),
                 );
 
@@ -123,7 +111,7 @@ impl MainWindow {
         let user_prefs_manager = match UserPreferencesManager::new() {
             Ok(pm) => Rc::new(RefCell::new(pm)),
             Err(e) => {
-                log::error!("Failed to initialize user preferences manager: {}", e);
+                log::error!("Failed to initialize user preferences manager: {e}");
                 log::warn!("User preferences (favorites, notes) will not be saved");
                 // Continue anyway with a fallback - create temp manager
                 Rc::new(RefCell::new(UserPreferencesManager::new().unwrap_or_else(
@@ -136,7 +124,7 @@ impl MainWindow {
         let backup_manager = match BackupManager::new() {
             Ok(bm) => Rc::new(RefCell::new(bm)),
             Err(e) => {
-                log::error!("Failed to initialize backup manager: {}", e);
+                log::error!("Failed to initialize backup manager: {e}");
                 log::warn!("Automatic backups will not be available");
                 // Continue anyway - backups are optional
                 Rc::new(RefCell::new(
@@ -287,7 +275,7 @@ impl MainWindow {
         header.pack_end(&menu_button);
 
         // Status banner - also returns whether Btrfs is available
-        let (banner, is_btrfs) = Self::create_status_banner();
+        let (banner, is_btrfs) = main_window_helpers::create_status_banner();
 
         // Toolbar with buttons
         let (toolbar, create_btn, compare_btn, search_btn) = toolbar::create_toolbar();
@@ -460,7 +448,7 @@ impl MainWindow {
                 key == gtk::gdk::Key::question && modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
 
             if is_ctrl_question {
-                Self::show_shortcuts_window(&win_for_prefs_shortcut);
+                shortcuts_window::show_shortcuts_window(&win_for_prefs_shortcut);
                 return glib::Propagation::Stop;
             }
 
@@ -807,7 +795,7 @@ impl MainWindow {
         let popover_clone_shortcuts = popover.clone();
         shortcuts_row.connect_activated(move |_| {
             popover_clone_shortcuts.popdown();
-            Self::show_shortcuts_window(&win_clone_menu_shortcuts);
+            shortcuts_window::show_shortcuts_window(&win_clone_menu_shortcuts);
         });
 
         let win_clone_menu_about = window.clone();
@@ -818,13 +806,13 @@ impl MainWindow {
         });
 
         // Initialize disk space monitoring
-        Self::update_disk_space_label(&disk_space_label, &disk_space_bar);
+        main_window_helpers::update_disk_space_label(&disk_space_label, &disk_space_bar);
 
         // Set up periodic disk space updates (every 30 seconds)
         let disk_space_label_clone = disk_space_label.clone();
         let disk_space_bar_clone = disk_space_bar.clone();
         glib::timeout_add_seconds_local(30, move || {
-            Self::update_disk_space_label(&disk_space_label_clone, &disk_space_bar_clone);
+            main_window_helpers::update_disk_space_label(&disk_space_label_clone, &disk_space_bar_clone);
             glib::ControlFlow::Continue
         });
 
@@ -856,7 +844,7 @@ impl MainWindow {
         use crate::mount_monitor::MountMonitor;
         let mount_monitor = MountMonitor::new();
         if let Err(e) = mount_monitor.initialize() {
-            log::warn!("Failed to initialize mount monitor: {}", e);
+            log::warn!("Failed to initialize mount monitor: {e}");
         } else {
             log::info!("Mount monitor initialized");
 
@@ -873,7 +861,7 @@ impl MainWindow {
                 .unwrap_or(60);
 
             mount_monitor.start_monitoring(check_interval, move |uuid, mount_point| {
-                log::info!("New backup drive detected: {} at {}", uuid, mount_point);
+                log::info!("New backup drive detected: {uuid} at {mount_point}");
 
                 // Get snapshot directory from config
                 let snapshot_dir = waypoint_common::WaypointConfig::new()
@@ -919,8 +907,7 @@ impl MainWindow {
                             }
                             Err(mpsc::TryRecvError::Disconnected) => {
                                 log::error!(
-                                    "Backup processing thread disconnected for {}",
-                                    dest_label_ref
+                                    "Backup processing thread disconnected for {dest_label_ref}"
                                 );
                                 dialogs::show_error(
                                     &window_ref,
@@ -936,9 +923,7 @@ impl MainWindow {
                         Ok((success_count, fail_count, errors)) => {
                             if success_count > 0 || fail_count > 0 {
                                 log::info!(
-                                    "Backup processing complete: {} successful, {} failed",
-                                    success_count,
-                                    fail_count
+                                    "Backup processing complete: {success_count} successful, {fail_count} failed"
                                 );
 
                                 // Send desktop notification
@@ -952,18 +937,15 @@ impl MainWindow {
                                 // Show toast notification to user
                                 let message = if fail_count == 0 {
                                     format!(
-                                        "Backup complete: {} snapshot(s) to {}",
-                                        success_count, dest_label_ref
+                                        "Backup complete: {success_count} snapshot(s) to {dest_label_ref}"
                                     )
                                 } else if success_count == 0 {
                                     format!(
-                                        "Backup failed: {} snapshot(s) to {}",
-                                        fail_count, dest_label_ref
+                                        "Backup failed: {fail_count} snapshot(s) to {dest_label_ref}"
                                     )
                                 } else {
                                     format!(
-                                        "Backup: {} successful, {} failed to {}",
-                                        success_count, fail_count, dest_label_ref
+                                        "Backup: {success_count} successful, {fail_count} failed to {dest_label_ref}"
                                     )
                                 };
 
@@ -980,13 +962,12 @@ impl MainWindow {
                             }
                         }
                         Err(e) => {
-                            log::error!("Failed to process pending backups: {}", e);
+                            log::error!("Failed to process pending backups: {e}");
                             dialogs::show_error(
                                 &window_ref,
                                 "Backup Failed",
                                 &format!(
-                                    "Failed to process pending backups for {}: {}",
-                                    dest_label_ref, e
+                                    "Failed to process pending backups for {dest_label_ref}: {e}"
                                 ),
                             );
                         }
@@ -998,140 +979,6 @@ impl MainWindow {
         window
     }
 
-    /// Update the disk space label with current usage
-    ///
-    /// Queries the available space for the root filesystem and updates the label and level bar
-    /// with color-coded visuals based on remaining space percentage.
-    fn update_disk_space_label(label: &Label, level_bar: &gtk::LevelBar) {
-        use std::path::PathBuf;
-
-        // Query disk space for root (where snapshots are stored)
-        let space_result = btrfs::get_available_space(&PathBuf::from("/"));
-
-        match space_result {
-            Ok(available_bytes) => {
-                // Get total filesystem size by reading from df
-                let total_result = std::process::Command::new("df")
-                    .arg("-B1")
-                    .arg("--output=size")
-                    .arg("/")
-                    .output();
-
-                let (available_gb, total_gb, percent_free) = match total_result {
-                    Ok(output) if output.status.success() => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let lines: Vec<&str> = stdout.lines().collect();
-
-                        if lines.len() >= 2 {
-                            if let Ok(total_bytes) = lines[1].trim().parse::<u64>() {
-                                let available_gb = available_bytes as f64 / 1_073_741_824.0; // Convert to GB
-                                let total_gb = total_bytes as f64 / 1_073_741_824.0;
-                                let percent = (available_bytes as f64 / total_bytes as f64) * 100.0;
-                                (available_gb, total_gb, percent)
-                            } else {
-                                // Fallback: just show available
-                                let available_gb = available_bytes as f64 / 1_073_741_824.0;
-                                (available_gb, 0.0, 0.0)
-                            }
-                        } else {
-                            let available_gb = available_bytes as f64 / 1_073_741_824.0;
-                            (available_gb, 0.0, 0.0)
-                        }
-                    }
-                    _ => {
-                        // Fallback: just show available
-                        let available_gb = available_bytes as f64 / 1_073_741_824.0;
-                        (available_gb, 0.0, 0.0)
-                    }
-                };
-
-                // Format the label text
-                let text = if total_gb > 0.0 {
-                    format!(
-                        "{:.1} GB free of {:.1} GB ({:.0}% free)",
-                        available_gb, total_gb, percent_free
-                    )
-                } else {
-                    format!("{:.1} GB free", available_gb)
-                };
-
-                label.set_text(&text);
-
-                // Update level bar to show percentage used (inverted from percent_free)
-                if total_gb > 0.0 {
-                    let percent_used = 100.0 - percent_free;
-                    level_bar.set_value(percent_used / 100.0);
-                } else {
-                    level_bar.set_value(0.0);
-                }
-
-                // Remove any existing warning/error classes
-                label.remove_css_class("warning");
-                label.remove_css_class("error");
-
-                // Color-code based on percentage (if we have total)
-                if total_gb > 0.0 {
-                    if percent_free < 10.0 {
-                        // Critical: < 10% free - red
-                        label.add_css_class("error");
-                        label.set_tooltip_text(Some(
-                            "Low disk space! Consider deleting old snapshots.",
-                        ));
-                    } else if percent_free < 20.0 {
-                        // Warning: < 20% free - yellow
-                        label.add_css_class("warning");
-                        label.set_tooltip_text(Some(
-                            "Disk space running low. Monitor snapshot usage.",
-                        ));
-                    } else {
-                        // OK: >= 20% free - normal
-                        label.set_tooltip_text(Some("Available disk space for snapshots"));
-                    }
-                } else {
-                    label.set_tooltip_text(Some("Available disk space"));
-                }
-            }
-            Err(e) => {
-                label.set_text("Space: Unknown");
-                label.set_tooltip_text(Some(&format!("Failed to query disk space: {}", e)));
-            }
-        }
-    }
-
-    fn create_status_banner() -> (adw::Banner, bool) {
-        let banner = adw::Banner::new("");
-
-        // Check if running on Btrfs
-        let is_btrfs = match btrfs::is_btrfs(&std::path::PathBuf::from("/")) {
-            Ok(true) => {
-                // Btrfs detected - don't show banner
-                banner.set_revealed(false);
-                true
-            }
-            Ok(false) => {
-                banner.set_title("Btrfs is required to create system restore points");
-                banner.set_button_label(Some("Learn More"));
-                banner.set_revealed(true);
-
-                // Connect "Learn More" button to open documentation
-                banner.connect_button_clicked(|_| {
-                    // Open Btrfs wiki page
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg("https://btrfs.readthedocs.io/")
-                        .spawn();
-                });
-
-                false
-            }
-            Err(e) => {
-                banner.set_title(&format!("Unable to detect filesystem type: {}", e));
-                banner.set_revealed(true);
-                false
-            }
-        };
-
-        (banner, is_btrfs)
-    }
 
     fn refresh_snapshot_list(&self) {
         let window = self.window.clone();
@@ -1294,15 +1141,14 @@ impl MainWindow {
                             &window_clone,
                             error_helpers::ErrorContext::DiskSpace,
                             &format!(
-                                "Only {:.2} GB available, need at least {} GB",
-                                available_gb, MIN_SPACE_GB
+                                "Only {available_gb:.2} GB available, need at least {MIN_SPACE_GB} GB"
                             ),
                         );
                         return;
                     }
                 }
                 Err(e) => {
-                    log::warn!("Could not check available disk space: {}", e);
+                    log::warn!("Could not check available disk space: {e}");
                     // Continue anyway - this is just a warning
                 }
             }
@@ -1384,8 +1230,7 @@ impl MainWindow {
                 Ok(c) => c,
                 Err(e) => {
                     let error = format!(
-                        "Failed to connect to snapshot service: {}\n\nTry: sudo sv reload dbus",
-                        e
+                        "Failed to connect to snapshot service: {e}\n\nTry: sudo sv reload dbus"
                     );
                     let _ =
                         sender.send((None, Some(("Connection Error".to_string(), error)), vec![]));
@@ -1417,11 +1262,10 @@ impl MainWindow {
                         Ok((true, message)) => {
                             // Verify snapshot actually exists before saving metadata
                             let snapshot_path = if PathBuf::from("/.snapshots").exists() {
-                                PathBuf::from(format!("/.snapshots/{}", snapshot_name))
+                                PathBuf::from(format!("/.snapshots/{snapshot_name}"))
                             } else {
                                 PathBuf::from(format!(
-                                    "/mnt/btrfs-root/@snapshots/{}",
-                                    snapshot_name
+                                    "/mnt/btrfs-root/@snapshots/{snapshot_name}"
                                 ))
                             };
 
@@ -1460,14 +1304,11 @@ impl MainWindow {
                                     .queue_snapshot_backup(snapshot_name.clone(), is_favorite)
                                 {
                                     log::warn!(
-                                        "Failed to queue automatic backup for {}: {}",
-                                        snapshot_name,
-                                        e
+                                        "Failed to queue automatic backup for {snapshot_name}: {e}"
                                     );
                                 } else {
                                     log::info!(
-                                        "Queued snapshot {} for automatic backup",
-                                        snapshot_name
+                                        "Queued snapshot {snapshot_name} for automatic backup"
                                     );
                                 }
                             } else {
@@ -1477,14 +1318,11 @@ impl MainWindow {
                                     .queue_snapshot_backup(snapshot_name.clone(), false)
                                 {
                                     log::warn!(
-                                        "Failed to queue automatic backup for {}: {}",
-                                        snapshot_name,
-                                        e
+                                        "Failed to queue automatic backup for {snapshot_name}: {e}"
                                     );
                                 } else {
                                     log::info!(
-                                        "Queued snapshot {} for automatic backup",
-                                        snapshot_name
+                                        "Queued snapshot {snapshot_name} for automatic backup"
                                     );
                                 }
                             }
@@ -1505,7 +1343,7 @@ impl MainWindow {
                             );
 
                             // Update disk space after creating snapshot
-                            Self::update_disk_space_label(&disk_space_clone, &disk_space_bar_clone);
+                            main_window_helpers::update_disk_space_label(&disk_space_clone, &disk_space_bar_clone);
                         }
                         Ok((false, message)) => {
                             error_helpers::show_error_with_context(
@@ -1536,9 +1374,9 @@ impl MainWindow {
         // Construct snapshot path
         // Use /.snapshots if mounted, otherwise fall back to /mnt/btrfs-root/@snapshots
         let snapshot_path = if PathBuf::from("/.snapshots").exists() {
-            PathBuf::from(format!("/.snapshots/{}", snapshot_name))
+            PathBuf::from(format!("/.snapshots/{snapshot_name}"))
         } else {
-            PathBuf::from(format!("/mnt/btrfs-root/@snapshots/{}", snapshot_name))
+            PathBuf::from(format!("/mnt/btrfs-root/@snapshots/{snapshot_name}"))
         };
 
         // Create snapshot metadata without size first (size calculation can be slow)
@@ -1557,7 +1395,7 @@ impl MainWindow {
 
         // Save metadata immediately
         if let Err(e) = manager.borrow().add_snapshot(snapshot) {
-            log::warn!("Failed to save snapshot metadata: {}", e);
+            log::warn!("Failed to save snapshot metadata: {e}");
         }
 
         // Calculate snapshot size in background thread (non-blocking)
@@ -1577,19 +1415,19 @@ impl MainWindow {
                     Ok((name, size_result)) => {
                         match size_result {
                             Ok(size) => {
-                                log::debug!("Calculated snapshot size: {} bytes", size);
+                                log::debug!("Calculated snapshot size: {size} bytes");
                                 // Update snapshot with size
                                 if let Ok(Some(mut snapshot)) =
                                     manager_clone.borrow().get_snapshot(&name)
                                 {
                                     snapshot.size_bytes = Some(size);
                                     if let Err(e) = manager_clone.borrow().add_snapshot(snapshot) {
-                                        log::warn!("Failed to update snapshot size: {}", e);
+                                        log::warn!("Failed to update snapshot size: {e}");
                                     }
                                 }
                             }
                             Err(e) => {
-                                log::warn!("Failed to calculate snapshot size: {}", e);
+                                log::warn!("Failed to calculate snapshot size: {e}");
                             }
                         }
                         break;
@@ -1801,43 +1639,6 @@ impl MainWindow {
         }
     }
 
-    /// Format elapsed time in human-readable format
-    /// Examples: "2s", "1m 30s", "2h 15m", "3d 4h"
-    fn format_elapsed_time(seconds: i64) -> String {
-        if seconds < 60 {
-            format!("{}s", seconds)
-        } else if seconds < 3600 {
-            let mins = seconds / 60;
-            let secs = seconds % 60;
-            if secs == 0 {
-                format!("{}m", mins)
-            } else {
-                format!("{}m {}s", mins, secs)
-            }
-        } else if seconds < 86400 {
-            let hours = seconds / 3600;
-            let mins = (seconds % 3600) / 60;
-            if mins == 0 {
-                format!("{}h", hours)
-            } else {
-                format!("{}h {}m", hours, mins)
-            }
-        } else {
-            let days = seconds / 86400;
-            let hours = (seconds % 86400) / 3600;
-            if hours == 0 {
-                format!("{}d", days)
-            } else {
-                format!("{}d {}h", days, hours)
-            }
-        }
-    }
-
-    fn stop_progress_pulse(handle: &Rc<RefCell<Option<glib::SourceId>>>) {
-        if let Some(source_id) = handle.borrow_mut().take() {
-            source_id.remove();
-        }
-    }
 
     // Helper function to perform backup
     fn perform_backup(snapshot_name: &str, destination_mount: &str) -> anyhow::Result<String> {
@@ -1876,7 +1677,7 @@ impl MainWindow {
                 Self::show_error_dialog(
                     window,
                     "Error",
-                    &format!("Failed to load snapshot: {}", e),
+                    &format!("Failed to load snapshot: {e}"),
                 );
                 return;
             }
@@ -2087,7 +1888,7 @@ impl MainWindow {
                                     DriveType::Network => " (Network)",
                                     DriveType::Internal => " (Internal)",
                                 };
-                                row.set_title(&format!("{}{}", display_name, type_badge));
+                                row.set_title(&format!("{display_name}{type_badge}"));
                                 row.set_subtitle(&dest.mount_point);
 
                                 // Add icon based on drive type
@@ -2156,14 +1957,14 @@ impl MainWindow {
                                                 Err(mpsc::TryRecvError::Empty) => {
                                                     // Update elapsed time
                                                     let elapsed = start_time.elapsed().as_secs() as i64;
-                                                    let elapsed_str = Self::format_elapsed_time(elapsed);
-                                                    progress_row_ref.set_subtitle(&format!("Elapsed: {}", elapsed_str));
+                                                    let elapsed_str = backup_dialog::helpers::format_elapsed_time(elapsed);
+                                                    progress_row_ref.set_subtitle(&format!("Elapsed: {elapsed_str}"));
 
                                                     glib::timeout_future(std::time::Duration::from_millis(50)).await;
                                                     continue;
                                                 }
                                                 Err(mpsc::TryRecvError::Disconnected) => {
-                                                    Self::stop_progress_pulse(&pulse_handle_async);
+                                                    main_window_helpers::stop_progress_pulse(&pulse_handle_async);
                                                     progress_group_ref3.set_visible(false);
                                                     dialog_ref3.close();
                                                     Self::show_error_dialog(
@@ -2178,7 +1979,7 @@ impl MainWindow {
 
                                         // Hide progress
                                         progress_group_ref3.set_visible(false);
-                                        Self::stop_progress_pulse(&pulse_handle_async);
+                                        main_window_helpers::stop_progress_pulse(&pulse_handle_async);
 
                                         match result {
                                             Ok(backup_path) => {
@@ -2207,8 +2008,8 @@ impl MainWindow {
                                                 dialog_ref3.close();
 
                                                 let message = match verify_result {
-                                                    Ok(()) => format!("✓ Backup completed and verified successfully\n\nLocation: {}", backup_path),
-                                                    Err(e) => format!("⚠ Backup completed but verification failed:\n{}\n\nLocation: {}", e, backup_path),
+                                                    Ok(()) => format!("✓ Backup completed and verified successfully\n\nLocation: {backup_path}"),
+                                                    Err(e) => format!("⚠ Backup completed but verification failed:\n{e}\n\nLocation: {backup_path}"),
                                                 };
 
                                                 let success_dialog = adw::MessageDialog::new(
@@ -2225,7 +2026,7 @@ impl MainWindow {
                                                 Self::show_error_dialog(
                                                     &window_ref3,
                                                     "Backup Failed",
-                                                    &format!("Failed to backup snapshot: {}", e),
+                                                    &format!("Failed to backup snapshot: {e}"),
                                                 );
                                             }
                                         }
@@ -2243,7 +2044,7 @@ impl MainWindow {
                             dest_group.set_visible(true);
                     }
                     Err(e) => {
-                        dialogs::show_error(&window_ref, "Scan Failed", &format!("Failed to scan for destinations: {}", e));
+                        dialogs::show_error(&window_ref, "Scan Failed", &format!("Failed to scan for destinations: {e}"));
                     }
                 }
             });
@@ -2266,7 +2067,7 @@ impl MainWindow {
                 Self::show_error_dialog(
                     window,
                     "Error",
-                    &format!("Failed to load snapshot: {}", e),
+                    &format!("Failed to load snapshot: {e}"),
                 );
                 return;
             }
@@ -2312,7 +2113,7 @@ impl MainWindow {
                         if !verification.warnings.is_empty() {
                             message.push_str("\n\nWarnings:\n");
                             for warning in &verification.warnings {
-                                message.push_str(&format!("• {}\n", warning));
+                                message.push_str(&format!("• {warning}\n"));
                             }
                         }
 
@@ -2328,13 +2129,13 @@ impl MainWindow {
                         let mut message =
                             "✗ Snapshot verification failed\n\nErrors found:\n".to_string();
                         for error in &verification.errors {
-                            message.push_str(&format!("• {}\n", error));
+                            message.push_str(&format!("• {error}\n"));
                         }
 
                         if !verification.warnings.is_empty() {
                             message.push_str("\nWarnings:\n");
                             for warning in &verification.warnings {
-                                message.push_str(&format!("• {}\n", warning));
+                                message.push_str(&format!("• {warning}\n"));
                             }
                         }
 
@@ -2345,7 +2146,7 @@ impl MainWindow {
                     Self::show_error_dialog(
                         &window_clone,
                         "Verification Error",
-                        &format!("Failed to verify snapshot: {}", e),
+                        &format!("Failed to verify snapshot: {e}"),
                     );
                 }
             }
@@ -2364,7 +2165,7 @@ impl MainWindow {
                 return;
             }
             Err(e) => {
-                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {}", e));
+                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {e}"));
                 return;
             }
         };
@@ -2398,7 +2199,7 @@ impl MainWindow {
                 dialogs::show_error(
                     &window_clone,
                     "Cannot Open File Manager",
-                    &format!("Failed to open file manager: {}", e),
+                    &format!("Failed to open file manager: {e}"),
                 );
             }
         });
@@ -2415,7 +2216,7 @@ impl MainWindow {
     ) {
         // Toggle favorite state in user preferences
         if let Err(e) = user_prefs_manager.borrow().toggle_favorite(snapshot_id) {
-            log::error!("Failed to toggle snapshot favorite state: {}", e);
+            log::error!("Failed to toggle snapshot favorite state: {e}");
             return;
         }
 
@@ -2488,7 +2289,7 @@ impl MainWindow {
                 return;
             }
             Err(e) => {
-                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {}", e));
+                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {e}"));
                 return;
             }
         };
@@ -2590,11 +2391,9 @@ impl MainWindow {
         // Show/hide placeholder based on text
         let placeholder_clone = placeholder_label.clone();
         buffer.connect_changed(move |buf| {
-            let has_text = buf
+            let has_text = !buf
                 .text(&buf.start_iter(), &buf.end_iter(), false)
-                .trim()
-                .len()
-                > 0;
+                .trim().is_empty();
             placeholder_clone.set_visible(!has_text);
         });
         placeholder_label.set_visible(current_prefs.note.is_none());
@@ -2686,7 +2485,7 @@ impl MainWindow {
 
                 // Save note to user preferences
                 if let Err(e) = user_prefs_clone.borrow().update_note(&snapshot_id, note) {
-                    log::error!("Failed to save snapshot note: {}", e);
+                    log::error!("Failed to save snapshot note: {e}");
                     return;
                 }
 
@@ -2792,7 +2591,7 @@ impl MainWindow {
                 return;
             }
             Err(e) => {
-                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {}", e));
+                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {e}"));
                 return;
             }
         };
@@ -2819,13 +2618,11 @@ impl MainWindow {
         let has_backups = backup_manager.borrow().is_snapshot_backed_up(&snapshot.id);
         let message = if has_backups {
             format!(
-                "Are you sure you want to delete '{}'?\n\nThis snapshot has backups on external drives. Deleting it here will NOT delete the backups.\n\nThis action cannot be undone.",
-                snapshot_name
+                "Are you sure you want to delete '{snapshot_name}'?\n\nThis snapshot has backups on external drives. Deleting it here will NOT delete the backups.\n\nThis action cannot be undone."
             )
         } else {
             format!(
-                "Are you sure you want to delete '{}'?\n\nThis action cannot be undone.",
-                snapshot_name
+                "Are you sure you want to delete '{snapshot_name}'?\n\nThis action cannot be undone."
             )
         };
 
@@ -2859,7 +2656,7 @@ impl MainWindow {
                     let client = match WaypointHelperClient::new() {
                         Ok(c) => c,
                         Err(e) => {
-                            let error = format!("Failed to connect to snapshot service: {}", e);
+                            let error = format!("Failed to connect to snapshot service: {e}");
                             let _ =
                                 sender.send((None, Some(("Connection Error".to_string(), error))));
                             return;
@@ -2910,7 +2707,7 @@ impl MainWindow {
                                         &disk_space_bar,
                                     );
                                     // Update disk space after deletion
-                                    Self::update_disk_space_label(&disk_space, &disk_space_bar);
+                                    main_window_helpers::update_disk_space_label(&disk_space, &disk_space_bar);
                                 }
                                 Ok((false, message)) => {
                                     error_helpers::show_error_with_context(
@@ -2947,7 +2744,7 @@ impl MainWindow {
                 return;
             }
             Err(e) => {
-                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {}", e));
+                dialogs::show_error(window, "Error", &format!("Failed to load snapshot: {e}"));
                 return;
             }
         };
@@ -3056,8 +2853,7 @@ impl MainWindow {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx.send(Err(anyhow::anyhow!(
-                        "Failed to connect to snapshot service: {}",
-                        e
+                        "Failed to connect to snapshot service: {e}"
                     )));
                     return;
                 }
@@ -3083,7 +2879,7 @@ impl MainWindow {
                     dialogs::show_error(
                         &window_clone,
                         "Preview Failed",
-                        &format!("Failed to generate restore preview: {}", e),
+                        &format!("Failed to generate restore preview: {e}"),
                     );
                     glib::ControlFlow::Break
                 }
@@ -3155,12 +2951,12 @@ impl MainWindow {
         kernel_row.set_title("Kernel Version");
 
         if kernel_current != kernel_snapshot {
-            kernel_row.set_subtitle(&format!("{} → {}", kernel_current, kernel_snapshot));
+            kernel_row.set_subtitle(&format!("{kernel_current} → {kernel_snapshot}"));
             let kernel_icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
             kernel_icon.add_css_class("warning");
             kernel_row.add_prefix(&kernel_icon);
         } else {
-            kernel_row.set_subtitle(&format!("{} (no change)", kernel_current));
+            kernel_row.set_subtitle(&format!("{kernel_current} (no change)"));
             let kernel_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
             kernel_icon.add_css_class("success");
             kernel_row.add_prefix(&kernel_icon);
@@ -3242,7 +3038,7 @@ impl MainWindow {
                 pkg_row.set_title(&pkg.name);
                 let curr = pkg.current_version.as_deref().unwrap_or("?");
                 let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
-                pkg_row.set_subtitle(&format!("{} → {}", curr, snap));
+                pkg_row.set_subtitle(&format!("{curr} → {snap}"));
                 upgrade_row.add_row(&pkg_row);
             }
 
@@ -3269,7 +3065,7 @@ impl MainWindow {
                 pkg_row.set_title(&pkg.name);
                 let curr = pkg.current_version.as_deref().unwrap_or("?");
                 let snap = pkg.snapshot_version.as_deref().unwrap_or("?");
-                pkg_row.set_subtitle(&format!("{} → {}", curr, snap));
+                pkg_row.set_subtitle(&format!("{curr} → {snap}"));
                 downgrade_row.add_row(&pkg_row);
             }
 
@@ -3365,7 +3161,7 @@ impl MainWindow {
                 let client = match WaypointHelperClient::new() {
                     Ok(c) => c,
                     Err(e) => {
-                        let error = format!("Failed to connect to snapshot service: {}", e);
+                        let error = format!("Failed to connect to snapshot service: {e}");
                         let _ = sender.send((None, Some(("Connection Error".to_string(), error))));
                         return;
                     }
@@ -3403,11 +3199,10 @@ impl MainWindow {
                                         Some(&window),
                                         Some("Rollback Successful"),
                                         Some(&format!(
-                                            "{}\n\n\
+                                            "{message}\n\n\
                                             You MUST reboot for the changes to take effect.\n\n\
                                             After reboot, your system will be restored to the snapshot state.\n\n\
-                                            Reboot now?",
-                                            message
+                                            Reboot now?"
                                         )),
                                     );
 
@@ -3475,117 +3270,13 @@ impl MainWindow {
         let snapshots = match snapshot_manager.borrow().load_snapshots() {
             Ok(s) => s,
             Err(e) => {
-                log::error!("Failed to load snapshots for analytics: {}", e);
+                log::error!("Failed to load snapshots for analytics: {e}");
                 Vec::new()
             }
         };
         analytics_dialog::show_analytics_dialog(window, &snapshots, snapshot_manager);
     }
 
-    fn show_shortcuts_window(window: &adw::ApplicationWindow) {
-        let dialog = adw::Window::builder()
-            .title("Keyboard Shortcuts")
-            .modal(true)
-            .transient_for(window)
-            .default_width(500)
-            .default_height(450)
-            .build();
-
-        let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-
-        let header = adw::HeaderBar::new();
-        main_box.append(&header);
-
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .build();
-
-        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 24);
-        content_box.set_margin_top(24);
-        content_box.set_margin_bottom(24);
-        content_box.set_margin_start(24);
-        content_box.set_margin_end(24);
-
-        // General shortcuts group
-        let general_group = adw::PreferencesGroup::builder()
-            .title("General")
-            .build();
-
-        Self::add_shortcut_row(&general_group, "Open search", "Ctrl+F");
-        Self::add_shortcut_row(&general_group, "Create new restore point", "Ctrl+N");
-        Self::add_shortcut_row(&general_group, "Refresh snapshot list", "Ctrl+R or F5");
-        Self::add_shortcut_row(&general_group, "Open preferences", "Ctrl+,");
-        Self::add_shortcut_row(&general_group, "Show keyboard shortcuts", "Ctrl+?");
-        Self::add_shortcut_row(&general_group, "Close search bar", "Escape");
-
-        content_box.append(&general_group);
-
-        // Editing shortcuts group
-        let editing_group = adw::PreferencesGroup::builder()
-            .title("Note Editing")
-            .build();
-
-        Self::add_shortcut_row(&editing_group, "Save note changes", "Ctrl+Enter");
-        Self::add_shortcut_row(&editing_group, "Cancel note editing", "Escape");
-
-        content_box.append(&editing_group);
-
-        scrolled.set_child(Some(&content_box));
-        main_box.append(&scrolled);
-
-        dialog.set_content(Some(&main_box));
-        dialog.present();
-    }
-
-    fn add_shortcut_row(group: &adw::PreferencesGroup, action: &str, shortcut: &str) {
-        let row = adw::ActionRow::builder()
-            .title(action)
-            .build();
-
-        // Create a box to hold the keyboard shortcut keys
-        let shortcut_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-
-        // Parse the shortcut string and create key buttons
-        // Handle special cases like "Ctrl+R or F5"
-        if shortcut.contains(" or ") {
-            let parts: Vec<&str> = shortcut.split(" or ").collect();
-            for (idx, part) in parts.iter().enumerate() {
-                if idx > 0 {
-                    let separator = gtk::Label::new(Some("/"));
-                    separator.set_css_classes(&["dim-label"]);
-                    separator.set_margin_start(6);
-                    separator.set_margin_end(6);
-                    shortcut_box.append(&separator);
-                }
-                Self::add_keys_to_box(&shortcut_box, part);
-            }
-        } else {
-            Self::add_keys_to_box(&shortcut_box, shortcut);
-        }
-
-        row.add_suffix(&shortcut_box);
-        group.add(&row);
-    }
-
-    fn add_keys_to_box(container: &gtk::Box, shortcut: &str) {
-        // Split by + to get individual keys
-        let keys: Vec<&str> = shortcut.split('+').collect();
-
-        for (idx, key) in keys.iter().enumerate() {
-            if idx > 0 {
-                let plus = gtk::Label::new(Some("+"));
-                plus.set_css_classes(&["dim-label"]);
-                plus.set_margin_start(3);
-                plus.set_margin_end(3);
-                container.append(&plus);
-            }
-
-            let key_label = gtk::Label::new(Some(key.trim()));
-            key_label.set_css_classes(&["keycap"]);
-            container.append(&key_label);
-        }
-    }
 
     fn show_about_dialog(window: &adw::ApplicationWindow) {
         about_preferences::show_about_dialog(window);

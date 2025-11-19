@@ -181,7 +181,7 @@ pub fn get_snapshot_size(path: &Path) -> Result<u64> {
 
     if parts.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Failed to get snapshot size: {}", stderr);
+        bail!("Failed to get snapshot size: {stderr}");
     }
 
     // Parse the size from the first column

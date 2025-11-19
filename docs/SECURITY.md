@@ -95,13 +95,14 @@ Waypoint performs extensive input validation:
 - Component-level validation for non-existent paths
 
 ### Symlink Security
-Waypoint implements comprehensive symlink validation during file restoration:
+Waypoint implements comprehensive symlink validation during file restoration and snapshot operations:
 
 - **Absolute symlinks**: Validated to point within snapshot directory boundaries
 - **Relative symlinks**: Resolved relative to symlink's parent directory, validated against escape attempts
 - **Non-existent targets**: Manual path resolution using component analysis to detect escape attempts
 - **Action on unsafe symlinks**: Logged and skipped during restoration operations
 - **Logging**: All rejected symlinks logged to audit trail with reason
+- **Exclusion protection**: Symlinks explicitly skipped during exclusion deletion to prevent deleting content outside snapshot boundaries.
 
 ### Configuration Files
 - TOML files parsed and validated before saving
@@ -228,6 +229,12 @@ journalctl -u waypoint-helper -t audit
 
 Waypoint implements per-user, per-operation rate limiting with a 5-second cooldown window to prevent DoS attacks via expensive snapshot operations.
 
+### Monitoring
+- **Mutex poisoning detection**: Global counter tracks mutex poisoning events in rate limiter
+- **Alert threshold**: Critical log entry after 10 poisoning events
+- **Purpose**: Detects potential bugs or malicious attacks causing mutex corruption
+- **Action**: Review logs if CRITICAL messages appear for mutex poisoning
+
 For additional production hardening with runit:
 
 1. **Use chpst for resource limits** in `/etc/sv/waypoint-helper/run`:
@@ -328,8 +335,7 @@ Waypoint does not make network connections. All communication is local via:
 
 If you discover a security vulnerability:
 
-1. **Do not** open a public issue
-2. Email security concerns to: [contact method needed]
+1. Open a public issue on Github
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// Sanitize a UUID for use as a TOML table key
 /// Replaces characters that are problematic in TOML table names
 fn sanitize_uuid_for_toml(uuid: &str) -> String {
-    uuid.replace('/', "_").replace('\\', "_").replace('.', "_")
+    uuid.replace(['/', '\\', '.'], "_")
 }
 
 /// Filter for which snapshots to backup
@@ -237,7 +237,7 @@ impl BackupConfig {
         let contents = toml::to_string_pretty(self)
             .with_context(|| format!("Failed to serialize config to TOML. Destinations: {:?}", self.destinations.keys().collect::<Vec<_>>()))?;
         std::fs::write(path, contents)
-            .with_context(|| format!("Failed to write config file to {:?}", path))?;
+            .with_context(|| format!("Failed to write config file to {path:?}"))?;
         Ok(())
     }
 
