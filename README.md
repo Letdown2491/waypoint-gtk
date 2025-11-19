@@ -51,7 +51,7 @@ Other Void Linux tools can talk to the privileged helper over D-Bus to trigger s
 ./setup.sh install
 ```
 
-The helper script builds the release binaries, installs them into `/usr/bin`, registers the desktop entry, D-Bus service, and Polkit policies. Use `sudo ./setup.sh uninstall` to remove those assets.
+The helper script installs all required dependencies via xbps-install, builds the release binaries, installs them into `/usr/bin`, registers the desktop entry, D-Bus service, and Polkit policies. Use `sudo ./setup.sh uninstall` to remove those assets.
 
 ## Quick Start
 
