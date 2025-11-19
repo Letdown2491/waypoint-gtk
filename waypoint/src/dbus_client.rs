@@ -566,6 +566,7 @@ impl WaypointHelperClient {
     ///
     /// # Recommended Usage
     /// Always use `schedule_based = true` for per-schedule retention policies.
+    #[allow(dead_code)]
     pub fn cleanup_snapshots(&self, schedule_based: bool) -> Result<(bool, String)> {
         let proxy = zbus::blocking::Proxy::new(
             &self.connection,

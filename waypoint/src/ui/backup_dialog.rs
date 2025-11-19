@@ -52,16 +52,6 @@ pub fn create_backups_content(
     content_box.set_margin_start(12);
     content_box.set_margin_end(12);
 
-    // Header section
-    let header_group = adw::PreferencesGroup::new();
-    header_group.set_title("Snapshot Backups");
-    header_group.set_description(Some(
-        "Create backups of your snapshots to external drives. Btrfs drives support efficient incremental backups. \
-         Other filesystems (NTFS, exFAT, etc.) are also supported using full copy backups.",
-    ));
-
-    content_box.append(&header_group);
-
     // Destinations section
     let dest_group = adw::PreferencesGroup::new();
     dest_group.set_title("Backup Destinations");
@@ -72,21 +62,6 @@ pub fn create_backups_content(
     let destinations_list = adw::PreferencesGroup::new();
     destinations_list.set_visible(true); // Show by default
     let destination_rows: Rc<RefCell<Vec<Widget>>> = Rc::new(RefCell::new(Vec::new()));
-
-    // Scan button section (separate group below destinations)
-    let scan_group = adw::PreferencesGroup::new();
-    scan_group.set_margin_top(12);
-
-    let scan_row = adw::ActionRow::new();
-    scan_row.set_title("Scan for Destinations");
-    scan_row.set_subtitle("Detect available external drives");
-
-    let scan_button = Button::with_label("Scan");
-    scan_button.set_valign(gtk::Align::Center);
-    scan_button.add_css_class("suggested-action");
-    scan_row.add_suffix(&scan_button);
-
-    scan_group.add(&scan_row);
 
     // Helper function to perform scan
     let perform_scan = |btn: Option<&Button>,
@@ -293,25 +268,8 @@ pub fn create_backups_content(
         gtk::glib::ControlFlow::Continue
     });
 
-    // Wire up manual scan button
-    let dest_list_clone = destinations_list.clone();
-    let parent_clone = parent.clone();
-    let backup_manager_clone = backup_manager.clone();
-    let rows_clone = destination_rows.clone();
-
-    scan_button.connect_clicked(move |btn| {
-        perform_scan(
-            Some(btn),
-            dest_list_clone.clone(),
-            parent_clone.clone(),
-            backup_manager_clone.clone(),
-            rows_clone.clone(),
-        );
-    });
-
     content_box.append(&dest_group);
     content_box.append(&destinations_list);
-    content_box.append(&scan_group);
 
     // Pending backups section
     let pending_group = adw::PreferencesGroup::new();
@@ -1097,9 +1055,7 @@ fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gt
     let pending_backups = &config.pending_backups;
 
     if pending_backups.is_empty() {
-        let empty_label = Label::new(Some("No pending backups"));
-        empty_label.add_css_class("dim-label");
-        container.append(&empty_label);
+        // Don't show redundant empty state - Queue Status already shows "No pending backups"
         return container;
     }
 

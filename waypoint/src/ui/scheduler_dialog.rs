@@ -28,11 +28,19 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
     // Service status group
     let status_group = adw::PreferencesGroup::new();
     status_group.set_title("Service Status");
-    status_group.set_description(Some("Automatic snapshot scheduler service"));
     content_box.append(&status_group);
 
     let status_row = adw::ActionRow::new();
     status_row.set_title("Scheduler Service");
+
+    // Create box to hold icon and text
+    let status_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+
+    let status_icon = gtk::Image::new();
+    status_icon.set_pixel_size(16);
+    status_icon.set_valign(gtk::Align::Center);
+    status_box.append(&status_icon);
+
     let status_label = Label::new(Some(if lazy_load {
         "Not loaded"
     } else {
@@ -40,7 +48,9 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
     }));
     status_label.add_css_class("dim-label");
     status_label.set_valign(gtk::Align::Center);
-    status_row.add_suffix(&status_label);
+    status_box.append(&status_label);
+
+    status_row.add_suffix(&status_box);
     status_group.add(&status_row);
 
     // Last snapshot row
@@ -171,6 +181,7 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
     let parent_for_restart = parent.clone();
     let info_bar_for_restart = info_bar.clone();
     let status_label_for_restart = status_label.clone();
+    let status_icon_for_restart = status_icon.clone();
 
     info_bar.connect_button_clicked(move |_| {
         // Restart the scheduler service
@@ -180,12 +191,12 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
         info_bar_for_restart.set_revealed(false);
 
         // Update status label
-        update_service_status(&status_label_for_restart);
+        update_service_status(&status_label_for_restart, &status_icon_for_restart);
     });
 
     // Update status in thread to avoid blocking UI (only if not lazy loading)
     if !lazy_load {
-        update_service_status(&status_label);
+        update_service_status(&status_label, &status_icon);
         update_last_snapshot(&last_snapshot_label);
 
         // Initial update of card data
@@ -198,9 +209,10 @@ fn create_scheduler_content_with_options(parent: &adw::ApplicationWindow, lazy_l
             gtk::glib::ControlFlow::Continue
         });
     } else {
-        // Store labels and cards in content_box data for later lazy loading
+        // Store labels, icon, and cards in content_box data for later lazy loading
         unsafe {
             content_box.set_data("status_label", status_label.clone());
+            content_box.set_data("status_icon", status_icon.clone());
             content_box.set_data("last_snapshot_label", last_snapshot_label.clone());
             content_box.set_data("schedule_cards", schedule_cards.clone());
         }
@@ -384,8 +396,6 @@ fn build_sparkline_data(
     schedule: &Schedule,
     max_runs: usize,
 ) -> Vec<bool> {
-    use chrono::{Duration, Utc};
-
     let prefix = if schedule.prefix.is_empty() {
         match schedule.schedule_type {
             ScheduleType::Hourly => "hourly",
@@ -396,8 +406,6 @@ fn build_sparkline_data(
     } else {
         &schedule.prefix
     };
-
-    let mut runs = Vec::new();
 
     // Filter snapshots by prefix
     let mut schedule_snapshots: Vec<_> = snapshots
@@ -412,35 +420,28 @@ fn build_sparkline_data(
         snapshots.len()
     );
 
-    if !schedule_snapshots.is_empty() {
-        log::debug!("Sample snapshot: {}", schedule_snapshots[0].name);
+    if schedule_snapshots.is_empty() {
+        // No snapshots yet, return empty
+        return Vec::new();
     }
 
     // Sort by timestamp (newest first)
     schedule_snapshots.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
-    // Calculate expected interval
-    let interval = match schedule.schedule_type {
-        ScheduleType::Hourly => Duration::hours(1),
-        ScheduleType::Daily => Duration::days(1),
-        ScheduleType::Weekly => Duration::weeks(1),
-        ScheduleType::Monthly => Duration::days(30), // Approximate
-    };
+    // Take the last N snapshots (actual history, not expected slots)
+    // All snapshots that exist are considered "successful" (green dots)
+    // We just show the most recent N snapshots
+    let runs: Vec<bool> = schedule_snapshots
+        .iter()
+        .take(max_runs)
+        .map(|_| true) // All existing snapshots are successes
+        .collect();
 
-    let now = Utc::now();
-
-    // Check each expected time slot
-    for i in 0..max_runs {
-        let expected_time = now - interval * (i as i32);
-
-        // Check if there's a snapshot near this time (within interval/2)
-        let found = schedule_snapshots.iter().any(|s| {
-            let diff = (s.timestamp - expected_time).num_seconds().abs();
-            diff < interval.num_seconds() / 2
-        });
-
-        runs.push(found);
-    }
+    log::debug!(
+        "Sparkline for '{}': showing {} recent snapshots",
+        prefix,
+        runs.len()
+    );
 
     runs
 }
@@ -542,9 +543,12 @@ fn update_schedule_cards_data(schedule_cards: &Rc<RefCell<Vec<Rc<RefCell<Schedul
 pub fn load_scheduler_status(content_box: &Box) {
     unsafe {
         if let Some(status_label) = content_box.data::<Label>("status_label") {
-            let status_label_ref = status_label.as_ref();
-            status_label_ref.set_text("Checking...");
-            update_service_status(status_label_ref);
+            if let Some(status_icon) = content_box.data::<gtk::Image>("status_icon") {
+                let status_label_ref = status_label.as_ref();
+                let status_icon_ref = status_icon.as_ref();
+                status_label_ref.set_text("Checking...");
+                update_service_status(status_label_ref, status_icon_ref);
+            }
         }
         if let Some(last_snapshot_label) = content_box.data::<Label>("last_snapshot_label") {
             let last_snapshot_label_ref = last_snapshot_label.as_ref();
@@ -708,9 +712,10 @@ fn restart_scheduler_service(parent: &adw::ApplicationWindow) {
     });
 }
 
-/// Update the service status label
-fn update_service_status(status_label: &Label) {
+/// Update the service status label and icon
+fn update_service_status(status_label: &Label, status_icon: &gtk::Image) {
     let status_label_clone = status_label.clone();
+    let status_icon_clone = status_icon.clone();
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
@@ -728,7 +733,43 @@ fn update_service_status(status_label: &Label) {
     // Update UI from main thread
     gtk::glib::idle_add_local_once(move || {
         if let Ok(status_text) = rx.recv() {
-            status_label_clone.set_text(&status_text);
+            // Capitalize the status text for display
+            let display_text = if !status_text.is_empty() {
+                let mut chars = status_text.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            } else {
+                status_text.clone()
+            };
+            status_label_clone.set_text(&display_text);
+
+            // Set icon based on status (case-insensitive matching)
+            let status_lower = status_text.to_lowercase();
+            if status_lower.contains("running") || status_lower.contains("active") {
+                status_icon_clone.set_icon_name(Some("media-record-symbolic"));
+                status_icon_clone.add_css_class("success");
+                status_icon_clone.remove_css_class("error");
+                status_icon_clone.remove_css_class("warning");
+            } else if status_lower.contains("stopped") || status_lower.contains("inactive")
+                || status_lower.contains("error") || status_lower.contains("cannot connect") {
+                status_icon_clone.set_icon_name(Some("media-record-symbolic"));
+                status_icon_clone.add_css_class("error");
+                status_icon_clone.remove_css_class("success");
+                status_icon_clone.remove_css_class("warning");
+            } else if status_lower.contains("disabled") {
+                status_icon_clone.set_icon_name(Some("media-record-symbolic"));
+                status_icon_clone.add_css_class("warning");
+                status_icon_clone.remove_css_class("success");
+                status_icon_clone.remove_css_class("error");
+            } else {
+                // For "Checking..." or other states, use a neutral icon
+                status_icon_clone.set_icon_name(Some("emblem-system-symbolic"));
+                status_icon_clone.remove_css_class("success");
+                status_icon_clone.remove_css_class("error");
+                status_icon_clone.remove_css_class("warning");
+            }
         }
     });
 }

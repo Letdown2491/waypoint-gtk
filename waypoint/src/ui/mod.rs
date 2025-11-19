@@ -262,17 +262,17 @@ impl MainWindow {
             .build();
         menu_list.append(&analytics_row);
 
-        let cleanup_row = adw::ActionRow::builder()
-            .title("Clean Up Old Snapshots")
-            .activatable(true)
-            .build();
-        menu_list.append(&cleanup_row);
-
         let preferences_row = adw::ActionRow::builder()
             .title("Preferences")
             .activatable(true)
             .build();
         menu_list.append(&preferences_row);
+
+        let shortcuts_row = adw::ActionRow::builder()
+            .title("Keyboard Shortcuts")
+            .activatable(true)
+            .build();
+        menu_list.append(&shortcuts_row);
 
         let about_row = adw::ActionRow::builder()
             .title("About Waypoint")
@@ -452,6 +452,15 @@ impl MainWindow {
 
             if is_ctrl_comma {
                 Self::show_preferences_dialog(&win_for_prefs_shortcut, &bm_for_prefs_shortcut);
+                return glib::Propagation::Stop;
+            }
+
+            // Ctrl+? (question mark): Show keyboard shortcuts
+            let is_ctrl_question =
+                key == gtk::gdk::Key::question && modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+
+            if is_ctrl_question {
+                Self::show_shortcuts_window(&win_for_prefs_shortcut);
                 return glib::Propagation::Stop;
             }
 
@@ -794,27 +803,11 @@ impl MainWindow {
             Self::show_preferences_dialog(&win_clone_menu_prefs, &bm_clone_menu_prefs);
         });
 
-        let win_clone_menu_cleanup = window.clone();
-        let list_clone_menu_cleanup = snapshot_list.clone();
-        let sm_clone_menu_cleanup = snapshot_manager.clone();
-        let up_clone_menu_cleanup = user_prefs_manager.clone();
-        let bm_clone_menu_cleanup = backup_manager.clone();
-        let compare_clone_menu_cleanup = compare_btn.clone();
-        let disk_clone_menu_cleanup = disk_space_label.clone();
-        let disk_bar_clone_menu_cleanup = disk_space_bar.clone();
-        let popover_clone_cleanup = popover.clone();
-        cleanup_row.connect_activated(move |_| {
-            popover_clone_cleanup.popdown();
-            Self::trigger_cleanup_snapshots(
-                &win_clone_menu_cleanup,
-                &sm_clone_menu_cleanup,
-                &up_clone_menu_cleanup,
-                &bm_clone_menu_cleanup,
-                &list_clone_menu_cleanup,
-                &compare_clone_menu_cleanup,
-                &disk_clone_menu_cleanup,
-                &disk_bar_clone_menu_cleanup,
-            );
+        let win_clone_menu_shortcuts = window.clone();
+        let popover_clone_shortcuts = popover.clone();
+        shortcuts_row.connect_activated(move |_| {
+            popover_clone_shortcuts.popdown();
+            Self::show_shortcuts_window(&win_clone_menu_shortcuts);
         });
 
         let win_clone_menu_about = window.clone();
@@ -1607,83 +1600,6 @@ impl MainWindow {
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
                         log::error!("Size calculation thread disconnected");
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    /// Trigger cleanup of old snapshots using per-schedule retention policies
-    fn trigger_cleanup_snapshots(
-        window: &adw::ApplicationWindow,
-        manager: &Rc<RefCell<SnapshotManager>>,
-        user_prefs_manager: &Rc<RefCell<UserPreferencesManager>>,
-        backup_manager: &Rc<RefCell<BackupManager>>,
-        list: &ListBox,
-        compare_btn: &Button,
-        disk_space_label: &Label,
-        disk_space_bar: &gtk::LevelBar,
-    ) {
-        let window_clone = window.clone();
-        let manager_clone = manager.clone();
-        let user_prefs_clone = user_prefs_manager.clone();
-        let backup_manager_clone = backup_manager.clone();
-        let list_clone = list.clone();
-        let compare_clone = compare_btn.clone();
-        let disk_clone = disk_space_label.clone();
-        let disk_bar_clone = disk_space_bar.clone();
-
-        // Run cleanup in background thread
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let result = (|| -> anyhow::Result<String> {
-                let client = WaypointHelperClient::new()?;
-                let (success, message) = client.cleanup_snapshots(true)?; // Use schedule-based retention
-                if !success {
-                    return Err(anyhow::anyhow!(message));
-                }
-                Ok(message)
-            })();
-            let _ = tx.send(result);
-        });
-
-        // Handle result on main thread
-        glib::spawn_future_local(async move {
-            loop {
-                match rx.try_recv() {
-                    Ok(result) => {
-                        match result {
-                            Ok(message) => {
-                                dialogs::show_toast(&window_clone, &message);
-                                // Refresh snapshot list after cleanup
-                                Self::refresh_list_static(
-                                    &window_clone,
-                                    &manager_clone,
-                                    &user_prefs_clone,
-                                    &backup_manager_clone,
-                                    &list_clone,
-                                    &compare_clone,
-                                    &disk_clone,
-                                    &disk_bar_clone,
-                                );
-                            }
-                            Err(e) => {
-                                error_helpers::show_error_with_context(
-                                    &window_clone,
-                                    error_helpers::ErrorContext::SnapshotDelete,
-                                    &format!("Cleanup failed: {}", e),
-                                );
-                            }
-                        }
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        glib::timeout_future(std::time::Duration::from_millis(50)).await;
-                        continue;
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        log::error!("Cleanup thread disconnected");
                         break;
                     }
                 }
@@ -3564,6 +3480,111 @@ impl MainWindow {
             }
         };
         analytics_dialog::show_analytics_dialog(window, &snapshots, snapshot_manager);
+    }
+
+    fn show_shortcuts_window(window: &adw::ApplicationWindow) {
+        let dialog = adw::Window::builder()
+            .title("Keyboard Shortcuts")
+            .modal(true)
+            .transient_for(window)
+            .default_width(500)
+            .default_height(450)
+            .build();
+
+        let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+        let header = adw::HeaderBar::new();
+        main_box.append(&header);
+
+        let scrolled = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .build();
+
+        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 24);
+        content_box.set_margin_top(24);
+        content_box.set_margin_bottom(24);
+        content_box.set_margin_start(24);
+        content_box.set_margin_end(24);
+
+        // General shortcuts group
+        let general_group = adw::PreferencesGroup::builder()
+            .title("General")
+            .build();
+
+        Self::add_shortcut_row(&general_group, "Open search", "Ctrl+F");
+        Self::add_shortcut_row(&general_group, "Create new restore point", "Ctrl+N");
+        Self::add_shortcut_row(&general_group, "Refresh snapshot list", "Ctrl+R or F5");
+        Self::add_shortcut_row(&general_group, "Open preferences", "Ctrl+,");
+        Self::add_shortcut_row(&general_group, "Show keyboard shortcuts", "Ctrl+?");
+        Self::add_shortcut_row(&general_group, "Close search bar", "Escape");
+
+        content_box.append(&general_group);
+
+        // Editing shortcuts group
+        let editing_group = adw::PreferencesGroup::builder()
+            .title("Note Editing")
+            .build();
+
+        Self::add_shortcut_row(&editing_group, "Save note changes", "Ctrl+Enter");
+        Self::add_shortcut_row(&editing_group, "Cancel note editing", "Escape");
+
+        content_box.append(&editing_group);
+
+        scrolled.set_child(Some(&content_box));
+        main_box.append(&scrolled);
+
+        dialog.set_content(Some(&main_box));
+        dialog.present();
+    }
+
+    fn add_shortcut_row(group: &adw::PreferencesGroup, action: &str, shortcut: &str) {
+        let row = adw::ActionRow::builder()
+            .title(action)
+            .build();
+
+        // Create a box to hold the keyboard shortcut keys
+        let shortcut_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+
+        // Parse the shortcut string and create key buttons
+        // Handle special cases like "Ctrl+R or F5"
+        if shortcut.contains(" or ") {
+            let parts: Vec<&str> = shortcut.split(" or ").collect();
+            for (idx, part) in parts.iter().enumerate() {
+                if idx > 0 {
+                    let separator = gtk::Label::new(Some("/"));
+                    separator.set_css_classes(&["dim-label"]);
+                    separator.set_margin_start(6);
+                    separator.set_margin_end(6);
+                    shortcut_box.append(&separator);
+                }
+                Self::add_keys_to_box(&shortcut_box, part);
+            }
+        } else {
+            Self::add_keys_to_box(&shortcut_box, shortcut);
+        }
+
+        row.add_suffix(&shortcut_box);
+        group.add(&row);
+    }
+
+    fn add_keys_to_box(container: &gtk::Box, shortcut: &str) {
+        // Split by + to get individual keys
+        let keys: Vec<&str> = shortcut.split('+').collect();
+
+        for (idx, key) in keys.iter().enumerate() {
+            if idx > 0 {
+                let plus = gtk::Label::new(Some("+"));
+                plus.set_css_classes(&["dim-label"]);
+                plus.set_margin_start(3);
+                plus.set_margin_end(3);
+                container.append(&plus);
+            }
+
+            let key_label = gtk::Label::new(Some(key.trim()));
+            key_label.set_css_classes(&["keycap"]);
+            container.append(&key_label);
+        }
     }
 
     fn show_about_dialog(window: &adw::ApplicationWindow) {

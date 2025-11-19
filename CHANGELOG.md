@@ -88,3 +88,11 @@
 - Error message sanitization removing sensitive paths before displaying to users.
 - Defensive bounds checking for /proc filesystem parsing.
 - Progress channel backpressure monitoring with warning logs for slow consumers.
+- Keyboard shortcuts window accessible via hamburger menu and Ctrl+? showing all available shortcuts with visual key buttons.
+- Scheduler service status indicator with color-coded circles (green for running, red for stopped, gray for disabled).
+- Sparkline visualization in snapshot schedules showing actual snapshot creation history instead of expected time slots.
+- Backup preferences UI simplified by removing redundant header section and manual scan button (auto-scans every 5 seconds).
+- Backup pending queue UI cleaned up to remove duplicate "No pending backups" empty state message.
+- Documentation reorganized with technical docs moved to docs/ folder (API.md, ARCHITECTURE.md, FEATURES.md, PERFORMANCE_TESTING.md, SECURITY.md).
+- README.md features section condensed to concise summary with link to full FEATURES.md for better first-time user experience.
+- PERFORMANCE_TESTING.md updated with parallel computation details, analytics performance notes, backup progress tracking, and bulk query optimization.
