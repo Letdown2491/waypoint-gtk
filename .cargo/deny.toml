@@ -18,8 +18,9 @@ allow = [
 confidence-threshold = 0.8
 
 [advisories]
-# Deny security vulnerabilities
-vulnerability = "deny"
+# Deny security vulnerabilities (new format after PR #611)
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
 
 # Warn about yanked crates
 yanked = "warn"
