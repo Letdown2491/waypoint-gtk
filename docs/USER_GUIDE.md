@@ -1,0 +1,536 @@
+# Waypoint User Guide
+
+A complete guide to using Waypoint for system snapshots and backups on Void Linux.
+
+## Table of Contents
+
+- [Getting Started](#getting-started)
+- [Creating Your First Snapshot](#creating-your-first-snapshot)
+- [Managing Snapshots](#managing-snapshots)
+- [Restoring from a Snapshot](#restoring-from-a-snapshot)
+- [Setting Up Automatic Snapshots](#setting-up-automatic-snapshots)
+- [Configuring Backups](#configuring-backups)
+- [Retention Policies](#retention-policies)
+- [Quota Management](#quota-management)
+- [Advanced Features](#advanced-features)
+
+## Getting Started
+
+### What is Waypoint?
+
+Waypoint is a snapshot management tool for Btrfs filesystems that allows you to:
+- Create point-in-time snapshots of your system
+- Restore your system to a previous state
+- Schedule automatic snapshots
+- Backup snapshots to external drives
+- Track package changes between snapshots
+
+### First Launch
+
+After installation, launch Waypoint from your application menu or run:
+
+```sh
+waypoint
+```
+
+On first launch, you'll see:
+- The main snapshot list (likely empty)
+- Disk space indicator at the bottom
+- A "Create Restore Point" button in the header
+
+### Understanding the Interface
+
+**Header Bar:**
+- **Create Restore Point** button (left) - Creates a new snapshot
+- **Compare** button - Compare two snapshots (enabled when 2 snapshots selected)
+- **Search** button (🔍) - Search and filter snapshots
+- **Hamburger menu** (☰) - Access analytics, preferences, keyboard shortcuts, and about
+
+**Snapshot List:**
+- Each snapshot shows: name, creation time, description, and disk usage
+- Click a snapshot row to expand details and actions
+
+**Footer:**
+- Real-time disk space monitoring with color-coded warnings
+- Green = plenty of space, Yellow = low space, Red = critical
+
+## Creating Your First Snapshot
+
+### Manual Snapshot Creation
+
+1. Click the **"Create Restore Point"** button in the header
+2. A dialog will appear with:
+   - **Description** field - Enter a meaningful description (e.g., "Before system upgrade")
+   - **Subvolumes** - Select which parts of your system to snapshot
+     - **/** (root) - System files, installed programs
+     - **/home** - User files and settings
+     - **/var** - Logs, databases, caches
+3. Click **"Create"**
+4. Wait for creation (usually 1-10 seconds depending on system size)
+5. A notification will confirm success
+
+**Tip:** Always create a snapshot before:
+- System upgrades
+- Installing new software
+- Making system configuration changes
+- Major application updates
+
+### Understanding Subvolumes
+
+**What to snapshot:**
+- **Root (/)** - Always snapshot this for system rollback
+- **/home** - Include if you want to restore user data
+- **/var** - Usually not needed unless you need database/log recovery
+
+**Note:** Snapshots are instant and take minimal space initially (copy-on-write).
+
+## Managing Snapshots
+
+### Viewing Snapshot Details
+
+Click any snapshot row to expand it and see:
+- **Full name** and **creation timestamp**
+- **Description** (if provided)
+- **Disk usage** (cached, updates every 5 minutes)
+- **Package count** (if package tracking is enabled)
+- **Subvolumes** included in the snapshot
+
+### Snapshot Actions
+
+Click the **three-dot menu (⋮)** on any snapshot to:
+- **View Details** - See full snapshot information
+- **Restore Files** - Restore individual files without full rollback
+- **Add/Edit Note** - Add personal notes to the snapshot
+- **Compare with Another** - View differences between snapshots
+- **Pin/Unpin** - Keep important snapshots at the top
+- **Delete Restore Point** - Remove the snapshot (requires confirmation)
+
+### Pinning Snapshots
+
+Pin important snapshots to:
+- Keep them at the top of the list
+- Protect them from automatic cleanup
+- Mark them as "favorites"
+
+To pin: Click ⋮ → Toggle the star icon
+
+### Adding Notes
+
+Add context to snapshots:
+1. Click ⋮ → **"Edit Note"**
+2. Type your note (e.g., "Clean install before GPU driver update")
+3. Press **Ctrl+Enter** to save or **Escape** to cancel
+
+Notes appear truncated in the list, click to see full text.
+
+### Searching and Filtering
+
+Click the **🔍 Search** button to:
+- **Text search** - Find snapshots by name or description
+- **Date filter** - Show snapshots from:
+  - Last 7 days
+  - Last 30 days
+  - Last 90 days
+  - All snapshots
+
+**Keyboard shortcut:** Press **Ctrl+F** to open search
+
+## Restoring from a Snapshot
+
+### Full System Restore (Rollback)
+
+**⚠️ Important:** Full restore reboots your system. Save all work first.
+
+1. Find the snapshot you want to restore to
+2. Click the snapshot row to expand it
+3. Click **"Restore"** button
+4. Choose **"Restore Full System"**
+5. Review the rollback preview showing:
+   - **Package changes** (added, removed, upgraded, downgraded)
+   - **Kernel version** comparison
+   - **Affected subvolumes**
+6. Click **"Restore and Reboot"** to proceed
+7. System will reboot into the restored state
+
+**Safety feature:** Waypoint automatically creates a safety backup before rollback, allowing you to undo if needed.
+
+### Restoring Individual Files
+
+Restore specific files without full system rollback:
+
+1. Click the snapshot row
+2. Click **"Restore"** button
+3. Choose **"Restore Individual Files"**
+4. A file browser opens showing snapshot contents
+5. Navigate to the files you want
+6. Select files/folders and click **"Restore Selected"**
+7. Choose restore destination
+8. Files are copied back
+
+**Use cases:**
+- Recover accidentally deleted files
+- Restore old configuration files
+- Get previous versions of documents
+
+## Setting Up Automatic Snapshots
+
+### Accessing Scheduler Settings
+
+1. Open hamburger menu (☰) → **"Preferences"**
+2. Click **"Scheduled Snapshots"** tab
+3. You'll see the scheduler service status and schedule cards
+
+### Understanding the Service Status
+
+**Green circle** + "Running" = Scheduler is active
+**Red circle** + "Stopped" = Scheduler is not running
+**Gray circle** + "Disabled" = Scheduler service not installed
+
+If stopped, click the info bar to restart.
+
+### Configuring Schedules
+
+Waypoint supports four schedule types:
+
+#### Hourly Snapshots
+- Creates snapshots every hour
+- Good for: Active development, frequent changes
+- Example: hourly-20251118-1400
+
+#### Daily Snapshots
+- Creates one snapshot per day at specified time
+- Good for: General system protection
+- Example: daily-20251118-0200
+
+#### Weekly Snapshots
+- Creates one snapshot per week on specified day
+- Good for: Long-term checkpoints
+- Example: weekly-20251118
+
+#### Monthly Snapshots
+- Creates one snapshot per month
+- Good for: Archival purposes
+- Example: monthly-202511
+
+### Enabling a Schedule
+
+1. Find the schedule card (e.g., "Hourly Snapshots")
+2. Toggle the **switch** at the top to enable
+3. Click **"Edit"** to configure:
+   - **Prefix** - Snapshot name prefix (default: hourly, daily, etc.)
+   - **Description** - Optional description for snapshots
+   - **Subvolumes** - Which parts to snapshot (/, /home, /var)
+   - **Retention** - How many to keep (see [Retention Policies](#retention-policies))
+
+### Quick Setup Example
+
+For basic protection:
+
+1. **Enable Daily snapshots**
+   - Set time: 2:00 AM (when you're likely not using the system)
+   - Subvolumes: / and /home
+   - Retention: Keep 7 daily, 4 weekly, 3 monthly
+
+2. **Optional: Enable Weekly snapshots**
+   - Day: Sunday at 3:00 AM
+   - Subvolumes: / and /home
+   - Retention: Keep 4 weekly snapshots
+
+### Viewing Schedule Status
+
+Each schedule card shows:
+- **Next run** - When the next snapshot will be created
+- **Last success** - When the last snapshot was created
+- **Sparkline** - Visual history of recent snapshots (green dots = created snapshots)
+
+## Configuring Backups
+
+### Why Backup Snapshots?
+
+Snapshots protect against software issues, but not:
+- Hardware failure (dead disk)
+- Filesystem corruption
+- Accidental deletion of snapshots
+
+**Solution:** Backup snapshots to external drives.
+
+### Setting Up Backup Destinations
+
+1. Connect an external drive (USB drive, external SSD, etc.)
+2. Open hamburger menu → **"Preferences"** → **"Backups"** tab
+3. Wait for drive to appear in **"Backup Destinations"** (auto-scans every 5 seconds)
+4. Toggle the switch next to your drive to **enable backups**
+5. Waypoint will automatically backup new snapshots when drive is connected
+
+### Backup Types
+
+**Btrfs drives:**
+- Uses incremental backups (btrfs send/receive)
+- First backup: Full copy (slow)
+- Subsequent backups: Only changes (fast)
+- Most efficient for Btrfs-to-Btrfs
+
+**Non-Btrfs drives (NTFS, exFAT, network shares):**
+- Uses rsync for full backups
+- Every backup is complete copy
+- Slower but works with any filesystem
+- Good for universal compatibility
+
+### Monitoring Backup Progress
+
+**Pending Backups section** shows:
+- **Queue Status** - Summary of pending/in-progress/failed backups
+- **Individual backups** - Each backup with progress bar and status
+
+**Progress tracking:**
+- Real-time transfer speed
+- Bytes transferred / total bytes
+- Current stage (preparing, transferring, verifying, complete)
+
+### Drive Health
+
+Each drive shows:
+- **Total space** and **available space**
+- **Number of backups** stored
+- **Last backup** timestamp
+- **Filesystem type** (Btrfs, NTFS, exFAT, etc.)
+
+## Retention Policies
+
+### Why Use Retention?
+
+Without retention, snapshots accumulate and consume disk space. Retention policies automatically delete old snapshots while keeping recent ones.
+
+### Timeline-Based Retention (Recommended)
+
+Timeline retention keeps snapshots distributed across time periods:
+
+**Example configuration:**
+- **Hourly bucket:** Keep last 6 snapshots (6 hours of coverage)
+- **Daily bucket:** Keep last 7 snapshots (1 week of coverage)
+- **Weekly bucket:** Keep last 4 snapshots (1 month of coverage)
+- **Monthly bucket:** Keep last 3 snapshots (3 months of coverage)
+- **Yearly bucket:** Keep last 2 snapshots (2 years of coverage)
+
+**How it works:**
+- Most recent hourly snapshots are kept
+- Older snapshots are "promoted" to daily/weekly/monthly buckets
+- Provides good coverage without excessive disk usage
+
+### Configuring Timeline Retention
+
+1. Open hamburger menu → **"Preferences"** → **"Scheduled Snapshots"**
+2. Click **"Edit"** on any schedule card
+3. Scroll to **"Timeline Retention"** section
+4. Configure each bucket:
+   - Set count to 0 to disable that bucket
+   - Recommended: At least daily and weekly buckets
+5. Click **"Save"**
+
+### Per-Schedule vs Global Retention
+
+**Per-schedule retention** (recommended):
+- Each schedule (hourly, daily, weekly, monthly) has its own policy
+- More flexible control
+- Example: Keep 24 hourly, 7 daily, 4 weekly, 3 monthly
+
+**Global retention:**
+- Apply one policy to all snapshots
+- Simpler but less flexible
+
+### Protected Snapshots
+
+Snapshots are **never** deleted by retention if:
+- **Pinned** (marked as favorite)
+- **Manual snapshots** (created via "Create Restore Point" button)
+- **Less than minimum count** (safety setting)
+
+## Quota Management
+
+### What are Btrfs Quotas?
+
+Quotas limit how much disk space snapshots can use, preventing snapshots from filling your entire disk.
+
+### Enabling Quotas
+
+1. Open hamburger menu → **"Preferences"** → **"Quotas"** tab
+2. Toggle **"Enable Btrfs Quotas"**
+3. Choose quota type:
+   - **Simple quotas** (recommended) - Easier, better performance
+   - **Traditional qgroups** - More features, slower
+4. Set a **quota limit** (e.g., 50GB, 100GB)
+5. Optionally enable **"Automatically delete old snapshots when quota reached"**
+
+### Monitoring Quota Usage
+
+The Quotas tab shows:
+- **Current usage** - How much space snapshots are using
+- **Limit** - Maximum allowed space
+- **Percentage used** - Visual progress bar
+
+Color coding:
+- **Green** - Usage is healthy
+- **Yellow** - Approaching limit
+- **Red** - At or near limit
+
+### Quota-Based Cleanup
+
+When enabled, Waypoint automatically:
+1. Detects when quota limit is reached
+2. Deletes oldest snapshots (respecting pinned snapshots)
+3. Continues until usage drops below limit
+
+## Advanced Features
+
+### Package Tracking
+
+Waypoint automatically tracks installed packages (XBPS) when creating snapshots.
+
+**Viewing package changes:**
+1. Click **"Compare"** button in header
+2. Select two snapshots
+3. View **"Package Diff"** tab showing:
+   - Added packages (green)
+   - Removed packages (red)
+   - Upgraded packages (blue, with version change)
+   - Downgraded packages (orange, with version change)
+
+### Snapshot Comparison
+
+Compare two snapshots to see what changed:
+
+1. Click **"Compare"** button
+2. Select two snapshots from dropdowns
+3. View tabs:
+   - **Overview** - Summary of changes
+   - **Files** - File-level differences
+   - **Packages** - Package changes
+   - **System** - Kernel, subvolumes
+
+**Export comparison:**
+Click **"Export"** to save comparison report as text file.
+
+### Analytics Dashboard
+
+View snapshot statistics and insights:
+
+1. Open hamburger menu → **"Analytics"**
+2. See:
+   - **Total snapshots** and **total size**
+   - **Space usage trends** over time
+   - **Largest snapshots** (identify space hogs)
+   - **Actionable insights** (recommendations)
+
+### Keyboard Shortcuts
+
+Press **Ctrl+?** or hamburger menu → **"Keyboard Shortcuts"** to see all available shortcuts:
+
+**General:**
+- **Ctrl+F** - Open search
+- **Ctrl+N** - Create new restore point
+- **Ctrl+R** or **F5** - Refresh snapshot list
+- **Ctrl+,** - Open preferences
+- **Escape** - Close search bar
+
+**Note Editing:**
+- **Ctrl+Enter** - Save note changes
+- **Escape** - Cancel editing
+
+### Command Line Interface
+
+Waypoint includes a CLI for scripting and automation:
+
+```sh
+# List all snapshots
+waypoint-cli list
+
+# Create snapshot
+waypoint-cli create "my-snapshot" "Description"
+
+# Delete snapshot
+waypoint-cli delete "my-snapshot"
+
+# Show detailed info
+waypoint-cli show "my-snapshot"
+
+# Compare snapshots
+waypoint-cli diff "snapshot1" "snapshot2"
+```
+
+See `waypoint-cli --help` for all commands.
+
+### Browse Snapshots in File Manager
+
+Open any snapshot in your file manager:
+
+1. Click snapshot row to expand
+2. Click **"Browse in File Manager"**
+3. Snapshot opens in your default file manager (Thunar, Nautilus, etc.)
+4. Navigate and view files without restoring
+
+**Read-only:** Snapshot contents cannot be modified.
+
+## Best Practices
+
+### Snapshot Frequency
+
+**Recommended setup:**
+- **Hourly** - If you do frequent system changes
+- **Daily** - Minimum for general protection (at 2 AM)
+- **Weekly** - For long-term checkpoints (Sunday)
+- **Before major changes** - Always create manual snapshot
+
+### Backup Strategy
+
+**The 3-2-1 rule:**
+- **3** copies of data (original + 2 backups)
+- **2** different media types (internal disk + external drive)
+- **1** off-site backup (optional: network share, cloud)
+
+**For Waypoint:**
+1. System with snapshots (copy 1)
+2. External drive backups (copy 2)
+3. Optional: Network share backups (copy 3)
+
+### Retention Guidelines
+
+**Conservative (lots of history):**
+- Hourly: 24
+- Daily: 7
+- Weekly: 4
+- Monthly: 6
+- Yearly: 2
+
+**Balanced (moderate history):**
+- Hourly: 6
+- Daily: 7
+- Weekly: 4
+- Monthly: 3
+- Yearly: 0
+
+**Aggressive (minimal disk usage):**
+- Hourly: 0
+- Daily: 3
+- Weekly: 2
+- Monthly: 1
+- Yearly: 0
+
+### Quota Recommendations
+
+Set quota limit to **20-30% of total disk space** for good balance.
+
+**Examples:**
+- 500GB disk → 100-150GB quota
+- 1TB disk → 200-300GB quota
+- 2TB disk → 400-600GB quota
+
+## Next Steps
+
+- **Set up automatic snapshots** - Start with daily snapshots
+- **Configure backups** - Connect an external drive
+- **Enable retention** - Prevent disk from filling up
+- **Create before upgrades** - Make it a habit
+
+For troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+For API integration, see [API.md](API.md).
+For advanced configuration, see [ARCHITECTURE.md](ARCHITECTURE.md).
