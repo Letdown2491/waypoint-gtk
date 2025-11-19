@@ -65,98 +65,31 @@ The optimized binaries are written to `target/release/`. Use `cargo run --releas
 
 ## Command Line
 
-The CLI tool provides scriptable snapshot management:
-
-### Snapshot Operations
+Waypoint includes a CLI tool for scripting and automation:
 
 ```sh
-# List all snapshots
+# List snapshots
 waypoint-cli list
-waypoint-cli list --verbose  # Show detailed info
+waypoint-cli list --verbose
 
-# Show detailed information about a snapshot
-waypoint-cli show "snapshot-name"
+# Create snapshot
+waypoint-cli create "snapshot-name" "Description" "/,/home"
 
-# Compare two snapshots
-waypoint-cli diff "snapshot1" "snapshot2"
-
-# Create a snapshot
-waypoint-cli create "snapshot-name" "Optional description"
-waypoint-cli create "snapshot-name" "Description" "/,/home"  # Multiple subvolumes
-
-# Restore a snapshot
+# Restore snapshot
 waypoint-cli restore "snapshot-name"
 
-# Preview restore changes before committing
-waypoint-cli preview-restore "snapshot-name"
-
-# Verify snapshot integrity
-waypoint-cli verify "snapshot-name"
-waypoint-cli verify "snapshot-name" --json  # JSON output
-
-# Delete a snapshot
-waypoint-cli delete "snapshot-name"
-
-# Apply retention policy cleanup
-waypoint-cli cleanup
-waypoint-cli cleanup --schedule-based  # Use per-schedule retention
-waypoint-cli cleanup --dry-run  # Preview what would be deleted
-```
-
-### Backup Operations
-
-```sh
-# Scan for available backup destinations
-waypoint-cli scan-destinations
-waypoint-cli scan-destinations --json  # JSON output
-
-# Create backup to external drive
+# Backup to external drive
 waypoint-cli backup "snapshot-name" "/mnt/backup-drive"
-waypoint-cli backup "snapshot-name" "/mnt/backup-drive" "parent-snapshot"  # Incremental
 
-# List backups on destination
-waypoint-cli list-backups "/mnt/backup-drive"
-waypoint-cli list-backups "/mnt/backup-drive" --json  # JSON output
-
-# Verify backup integrity
-waypoint-cli verify-backup "/mnt/backup-drive/waypoint-backups/snapshot-name" \
-  "snapshot-name" "/mnt/backup-drive"
-
-# Restore from external backup
-waypoint-cli restore-backup "/mnt/backup-drive/waypoint-backups/snapshot-name"
-
-# Show drive statistics
-waypoint-cli drive-stats "/mnt/backup-drive"
-```
-
-### File Operations
-
-```sh
-# Restore individual files from snapshot
+# Restore individual files
 waypoint-cli restore-files "snapshot-name" "/etc/fstab"
-waypoint-cli restore-files "snapshot-name" "/etc/fstab,/etc/hosts"  # Multiple files
-waypoint-cli restore-files "snapshot-name" "/etc/fstab" --target /tmp/recovered
-waypoint-cli restore-files "snapshot-name" "/etc/fstab" --overwrite  # Overwrite existing
+
+# Manage quotas
+waypoint-cli quota enable --simple
+waypoint-cli quota set-limit 100G
 ```
 
-### Quota Management
-
-```sh
-# Enable quotas
-waypoint-cli quota enable
-waypoint-cli quota enable --simple  # Use simple quotas
-
-# Disable quotas
-waypoint-cli quota disable
-
-# Show quota status
-waypoint-cli quota status
-waypoint-cli quota status --json  # JSON output
-
-# Set quota limit
-waypoint-cli quota set-limit 50G  # Human-readable size
-waypoint-cli quota set-limit 1T   # Supports K, M, G, T
-```
+[See complete CLI reference →](docs/CLI.md)
 
 ## Scheduler Service
 
