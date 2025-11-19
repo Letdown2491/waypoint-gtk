@@ -20,7 +20,8 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Incremental backups to Btrfs drives using btrfs send/receive
 - Full backups to non-Btrfs drives (NTFS, exFAT, network shares) via rsync
 - Automatic backup destination discovery and mount monitoring
-- Backup verification with file count, size comparison, and SHA256 checksum validation
+- Backup verification with file count and size comparison
+- Automatic integrity verification for restored snapshots
 - Pending backup queue with automatic retry when destinations become available
 - Restore snapshots from external backup
 - Drive health statistics (space usage, backup count, timestamps)
@@ -78,9 +79,11 @@ Complete feature list for Waypoint snapshot and rollback tool.
 ## Security & Performance
 
 - Privilege-separated architecture with D-Bus and Polkit integration
-- Structured JSON audit logging for all security events
-- Rate limiting to prevent DoS attacks
+- Audit logging for security-critical operations
+- Rate limiting with mutex poisoning detection to prevent DoS attacks
+- TOCTOU mitigation via inode verification
 - Input validation preventing command injection and path traversal
+- Automatic resource cleanup verification in error paths
 - Filesystem query caching with TTL for performance
 - Parallel computation for snapshot size calculations
 - Background threading for all blocking operations

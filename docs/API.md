@@ -134,7 +134,7 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
   Verifies backup integrity by comparing file counts, sizes, and optionally checksums. Returns a `BackupVerificationResult` JSON document. No authentication required.
 
 - **RestoreFromBackup** `(s backup_path, s snapshots_dir) → (b, s)`
-  Receives a backup into the live snapshots directory. Requires `restore-snapshot`.
+  Receives a backup into the live snapshots directory. Automatically verifies restore integrity (file count, size comparison, read access, and subvolume validation). Returns error if verification fails. Requires `restore-snapshot`.
 
 ### Miscellaneous
 

@@ -80,7 +80,7 @@ cargo test --release
 
 ## Test Organization
 
-Waypoint has **80 test functions** across **16 test modules**:
+Waypoint has comprehensive test coverage with 90+ test functions across multiple test modules:
 
 ### waypoint-common (39 tests)
 

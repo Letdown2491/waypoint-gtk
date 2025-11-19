@@ -72,8 +72,8 @@
 - Timeline-based retention policies with configurable hourly, daily, weekly, monthly, and yearly buckets.
 - Non-btrfs external drive backup support via rsync for NTFS, exFAT, and network shares.
 - Backup verification with file count and size comparison between source and destination.
-- Enhanced backup verification with SHA256 checksum validation for sampled files.
-- Structured JSON audit logging for security events (snapshot creation, deletion, restore, configuration changes).
+- Automatic integrity verification for restored snapshots with file count comparison, size validation (5% tolerance), subvolume validation for btrfs restores, and read access verification.
+- Audit logging for security-critical operations (snapshot creation, deletion, restore, configuration changes).
 - Rate limiting for expensive operations (5-second cooldown per user/operation) to prevent DoS attacks.
 - Configurable Polkit authentication timeout via WAYPOINT_POLKIT_TIMEOUT environment variable (default: 120 seconds).
 - Input validation for octal escape sequences in btrfs paths preventing control character injection.
@@ -82,9 +82,10 @@
 - Backup destination validation restricting writes to approved removable drives and network shares only.
 - Restore destination validation preventing arbitrary filesystem writes outside snapshot directory.
 - Multi-subvolume file restore with automatic subvolume detection from snapshot metadata.
-- Symlink attack prevention with comprehensive target validation and boundary checks.
-- TOCTOU mitigation with immediate path re-verification after canonicalization.
-- Mutex poisoning recovery for rate limiter and progress channels.
+- Symlink attack prevention with comprehensive target validation and boundary checks including explicit symlink detection in exclusion deletion.
+- TOCTOU mitigation with inode verification capturing inode number and device ID after canonicalization and re-verifying before filesystem operations.
+- Mutex poisoning detection with global counter tracking poisoning events and critical alerts after 10 occurrences.
+- Resource cleanup verification in error paths with automatic cleanup of failed snapshot creations, restore operations, and orphaned snapshots with comprehensive logging.
 - Error message sanitization removing sensitive paths before displaying to users.
 - Defensive bounds checking for /proc filesystem parsing.
 - Progress channel backpressure monitoring with warning logs for slow consumers.
@@ -96,3 +97,4 @@
 - Documentation reorganized with technical docs moved to docs/ folder (API.md, ARCHITECTURE.md, FEATURES.md, PERFORMANCE_TESTING.md, SECURITY.md).
 - README.md features section condensed to concise summary with link to full FEATURES.md for better first-time user experience.
 - PERFORMANCE_TESTING.md updated with parallel computation details, analytics performance notes, backup progress tracking, and bulk query optimization.
+- Automated security scanning in CI/CD with cargo-audit for dependency vulnerabilities, cargo-deny for license and supply chain validation, security-focused clippy lints, and weekly scheduled runs.

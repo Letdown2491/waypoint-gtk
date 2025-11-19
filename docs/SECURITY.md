@@ -260,9 +260,10 @@ Waypoint implements multiple defenses against Time-Of-Check-Time-Of-Use (TOCTOU)
 
 ### Backup Restore Operations
 - Paths canonicalized before use to resolve symlinks
-- **Re-verification**: Destination path re-checked after canonicalization
+- **Inode verification**: Captures inode number and device ID after canonicalization
+- **Re-verification**: Inode checked again immediately before use to detect path swaps
 - Explicit validation that destination matches configured snapshot directory
-- Prevents malicious path swaps between check and use
+- Prevents malicious path swaps between check and use via inode tracking
 
 ### Recursive Directory Copy
 - Each directory entry validated during iteration
@@ -297,6 +298,43 @@ System paths are redacted from error messages:
 - Prevents exposure of system layout details
 - Protects against reconnaissance attacks
 - Maintains audit trail with full details for authorized administrators
+
+## Restore Integrity Verification
+
+Waypoint automatically verifies the integrity of restored snapshots to detect corruption or incomplete restores:
+
+### Verification Steps
+- **Existence check**: Verifies restored path exists and is a directory
+- **Subvolume validation**: For btrfs restores, validates proper subvolume structure
+- **File count comparison**: Compares file counts between backup source and restored snapshot (must match exactly)
+- **Size comparison**: Compares total sizes with 5% tolerance for filesystem overhead
+- **Read access test**: Verifies restored data is readable
+
+### Failure Detection
+- File count mismatches indicate incomplete restore
+- Size differences > 5% indicate potential data corruption
+- Unreadable directories indicate permission or filesystem issues
+- All failures logged with detailed diagnostic information
+
+### Implementation
+- Integrated into both btrfs send/receive and rsync restore operations
+- Verification runs automatically after successful restore
+- Failed verification returns detailed error preventing use of corrupted data
+
+## Resource Cleanup
+
+Waypoint implements comprehensive resource cleanup in error paths to prevent resource leaks:
+
+### Cleanup Verification
+- **Snapshot creation failures**: Automatically deletes partially created subvolumes
+- **Restore failures**: Cleans up failed restore subvolumes before returning error
+- **Metadata save failures**: Removes orphaned snapshots that aren't tracked in metadata
+- **Comprehensive logging**: All cleanup operations logged with success/failure counts
+
+### Implementation
+- `cleanup_failed_snapshot()` function with detailed logging
+- Cleanup triggered automatically on all error paths
+- Prevents orphaned subvolumes and disk space leaks
 
 ## Network Security
 
