@@ -1830,24 +1830,59 @@ impl MainWindow {
             return Err(anyhow::anyhow!("Backup path does not exist"));
         }
 
-        // Check if it's a directory (btrfs subvolume should be a directory)
+        // Check if it's a directory
         if !path.is_dir() {
             return Err(anyhow::anyhow!("Backup path is not a directory"));
         }
 
-        // Verify it's a btrfs subvolume using btrfs subvolume show
-        let output = std::process::Command::new("btrfs")
-            .arg("subvolume")
-            .arg("show")
-            .arg(backup_path)
-            .output()
-            .context("Failed to run btrfs subvolume show")?;
+        // The backup_path is a container directory that holds the actual subvolumes
+        // For Btrfs backups: subvolumes are inside (e.g., @root/, @home/)
+        // For rsync backups: regular directories are inside
+        // We need to check if there's content inside the backup directory
 
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("Not a valid btrfs subvolume"));
+        // List directory contents
+        let entries = std::fs::read_dir(path)
+            .context("Failed to read backup directory")?
+            .filter_map(|e| e.ok())
+            .collect::<Vec<_>>();
+
+        if entries.is_empty() {
+            return Err(anyhow::anyhow!("Backup directory is empty"));
         }
 
-        Ok(())
+        // Check if at least one entry is a btrfs subvolume (for Btrfs backups)
+        // or if entries exist (for rsync backups)
+        let mut has_subvolume = false;
+        let mut has_directory = false;
+
+        for entry in &entries {
+            let entry_path = entry.path();
+
+            if entry_path.is_dir() {
+                has_directory = true;
+
+                // Try to verify if it's a btrfs subvolume
+                let check_subvolume = std::process::Command::new("btrfs")
+                    .arg("subvolume")
+                    .arg("show")
+                    .arg(&entry_path)
+                    .output();
+
+                if let Ok(output) = check_subvolume {
+                    if output.status.success() {
+                        has_subvolume = true;
+                        break; // Found at least one subvolume, backup is valid
+                    }
+                }
+            }
+        }
+
+        // Valid backup if it has subvolumes (Btrfs) or directories (rsync)
+        if has_subvolume || has_directory {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Backup directory contains no valid subvolumes or directories"))
+        }
     }
 
     /// Format elapsed time in human-readable format

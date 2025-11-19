@@ -11,9 +11,12 @@ Waypoint includes built-in performance tracking that measures timing for key ope
 - **filter_snapshots** - Time to filter snapshots based on search criteria
 - **populate_ui** - Time to create and populate UI widgets
 - **get_snapshot_size** - Time to calculate snapshot size
+- **get_snapshot_size_cache_hit** - Time for cached snapshot size lookups
 - **du_command** - Time for the actual `du` command execution
 - **get_available_space** - Time to check available disk space
 - **df_command** - Time for the actual `df` command execution
+- **bulk_snapshot_sizes** - Time to query multiple snapshot sizes in parallel (analytics)
+- **backup_progress_update** - Time to emit backup progress signals
 
 ### Enabling Performance Logging
 
@@ -90,11 +93,14 @@ To test performance with many snapshots, create multiple snapshots using the app
 - Search/filtering: < 10ms for 100 snapshots
 - Cache hits: < 1ms
 - UI population: < 50ms for 100 rows
+- Bulk snapshot size query: < 2s for 50 snapshots (parallel processing)
+- Analytics dashboard load: < 3s for 100 snapshots
 
 **Expensive Operations (cached):**
 - `du` command: 100ms - 5s depending on snapshot size
 - Cache reduces this to < 1ms for repeated queries
 - Cache TTL: 5 minutes for snapshot sizes, 30 seconds for disk space
+- Backup operations: Progress updates every 100ms for responsive UI
 
 ### Performance Bottlenecks
 
@@ -103,7 +109,8 @@ Based on the code audit, potential bottlenecks include:
 1. **Snapshot size calculation** (`du` command)
    - Mitigated by 5-minute cache
    - Runs in background thread
-   - Only calculated when viewing details
+   - Bulk queries use parallel processing with rayon
+   - Only calculated when viewing details or analytics
 
 2. **UI widget creation** (creating 100+ GTK widgets)
    - Each snapshot creates a complex `SnapshotRow` widget
@@ -113,6 +120,11 @@ Based on the code audit, potential bottlenecks include:
 3. **Disk I/O** (loading snapshot metadata)
    - Already cached by filesystem
    - Typically < 20ms even with 100 snapshots
+
+4. **Analytics calculations** (storage trends, retention analysis)
+   - Uses bulk D-Bus queries to minimize round-trips
+   - Parallel size calculation for multiple snapshots
+   - Results cached for dashboard performance
 
 ## Optimization Status
 
@@ -126,6 +138,11 @@ The following optimizations are already implemented:
 - All expensive operations run in background threads
 - UI remains responsive during operations
 
+✅ **Parallel Computation**
+- Snapshot size calculations use rayon for parallel processing
+- Multiple snapshots sized concurrently (analytics dashboard)
+- Optimized bulk snapshot size queries via D-Bus
+
 ✅ **Cheap Cloning**
 - Snapshot data uses `Rc<Vec<T>>` for packages and subvolumes
 - Filtering and sorting don't duplicate large data structures
@@ -133,6 +150,21 @@ The following optimizations are already implemented:
 ✅ **Performance Instrumentation**
 - Comprehensive timing for all operations
 - Debug logging for analysis
+- Detailed performance profiling with operation breakdowns
+- Performance statistics include min/max/avg/median for all measured operations
+
+✅ **Bulk Query Optimization**
+- `GetSnapshotSizes()` D-Bus method for batch size queries
+- Reduces round-trip overhead when querying multiple snapshots
+- Analytics dashboard uses bulk queries for efficiency
+- Parallel processing of bulk requests with rayon
+
+✅ **Backup Progress Tracking**
+- Real-time progress updates via D-Bus `BackupProgress` signal
+- Tracks bytes transferred, total bytes, and transfer speed
+- Progress updates sent every 100ms during transfers
+- Non-blocking UI with responsive progress indicators
+- Stage tracking: preparing, transferring, verifying, complete
 
 ## Memory Usage
 
