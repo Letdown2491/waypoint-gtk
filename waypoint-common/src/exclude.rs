@@ -240,10 +240,9 @@ impl ExcludeConfig {
     }
 
     /// Get the configuration file path
+    /// Uses system-wide config because waypoint-helper runs as root
     fn config_path() -> PathBuf {
-        dirs::config_local_dir()
-            .map(|d| d.join("waypoint").join("exclude.toml"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/waypoint-exclude.toml"))
+        PathBuf::from("/etc/waypoint/exclude.toml")
     }
 
     /// Merge default patterns with current config

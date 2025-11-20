@@ -6,9 +6,9 @@ This document explains how the Waypoint client, helper daemon, scheduler, and su
 
 | Component | Path | Responsibility |
 | --- | --- | --- |
-| GTK/libadwaita app | `waypoint/` | Presents the UI, drives user workflows, shows diffs, configures schedules/quotas. Talks to the helper through `WaypointHelperClient` (D-Bus). |
-| CLI | `waypoint-cli` | Thin Bash wrapper around `busctl` for scripting/scheduling without the GUI. |
-| Privileged helper | `waypoint-helper/` | Owns the `tech.geektoshi.waypoint` D-Bus name, performs all Btrfs/snapshot/backup operations as root, emits the `SnapshotCreated` signal, enforces Polkit. |
+| GTK/libadwaita app | `waypoint/` | Presents the UI, drives user workflows, shows diffs, configures schedules/quotas. Talks to the helper through `WaypointHelperClient` (D-Bus). Includes `BackupManager` for automatic backup orchestration and queue management. |
+| CLI | `waypoint-cli` | Comprehensive Bash-based CLI wrapper around D-Bus calls, supporting all snapshot operations, backup management, file restore, quota control, and more. Used by both users and the scheduler. |
+| Privileged helper | `waypoint-helper/` | Owns the `tech.geektoshi.waypoint` D-Bus name, performs all Btrfs/snapshot/backup operations as root, emits the `SnapshotCreated` and `BackupProgress` signals, enforces Polkit. |
 | Scheduler | `waypoint-scheduler/` | Rust runit service that reads `schedules.toml` and invokes `waypoint-cli` to create snapshots + cleanup on timers. |
 | Shared crate | `waypoint-common/` | Provides config paths, snapshot/backup/quota types, validation helpers, and serialization used by both helper and clients. |
 | Services & policy | `data/dbus-1/`, `data/tech.geektoshi.waypoint.policy`, `services/waypoint-scheduler/`, `system/polkit/` | Describe how the helper is activated on the system bus, which Polkit actions gate each method, and how runit starts the scheduler/log service. |
@@ -49,7 +49,9 @@ Waypoint keeps data in a few standard locations; all paths are configurable thro
 | `/etc/waypoint/schedules.toml` | Structured definition of runit schedules, prefixes, retention knobs (`waypoint-common::schedules`). |
 | `/etc/waypoint/scheduler.conf` | Legacy key/value scheduler config still supported for older Nebula versions. |
 | `/etc/waypoint/quota.toml` | Serialized `QuotaConfig`, consumed by D-Bus `GetQuotaUsage`, `SaveQuotaConfig`, etc. |
-| `/etc/waypoint/backups.toml` | Optional backup destinations and filters. |
+| `/etc/waypoint/exclude.toml` | Snapshot exclusion patterns. Defines which files/directories to exclude from snapshots (e.g., caches, temporary files). |
+| `~/.config/waypoint/backup-config.toml` | Per-user backup destinations, filters, pending backups, and backup history. Managed by `BackupManager` in the GUI. |
+| `~/.local/share/waypoint/user-preferences.json` | Per-user snapshot preferences (favorites, notes). |
 | `/var/log/waypoint-scheduler/` | Managed by `svlogd` through `services/waypoint-scheduler/log/run`. |
 | `/etc/dbus-1/system.d/tech.geektoshi.waypoint.conf` + `/usr/share/dbus-1/system-services/tech.geektoshi.waypoint.service` | D-Bus policy + activation. Installed by `setup.sh install`. |
 | `/usr/share/polkit-1/actions/tech.geektoshi.waypoint.policy` and `system/polkit/*.rules` | Desktop prompts + optional auto-approval rules. |
@@ -72,11 +74,23 @@ The helper centralizes all privileged operations that need filesystem access:
 
 Keeping these in the helper keeps the GTK app completely unprivileged and makes it safe to expose the same capabilities over the CLI and scheduler.
 
+### BackupManager
+
+The GUI includes a `BackupManager` component (`waypoint/src/backup_manager.rs`) that orchestrates automatic backups:
+
+- **Configuration**: Manages per-user backup destinations with filters (All, Favorites, LastN, Critical), retention policies, and trigger settings (on snapshot creation, on drive mount).
+- **Queue Management**: Tracks pending backups when destinations are unmounted. When drives reconnect, pending backups are automatically processed in chronological order (oldest first) to maintain proper parent relationships for incremental backups.
+- **Live Progress**: Subscribes to `BackupProgress` D-Bus signals and displays real-time transfer status in the UI.
+- **Status Monitoring**: Polls mounted destinations, counts pending/failed backups, and displays a footer status summary (healthy, pending, failed, disconnected).
+- **History Tracking**: Records completed backups with timestamps, sizes, parent snapshots, and verification status.
+
+The BackupManager bridges the gap between the privileged helper (which performs actual `btrfs send|receive` operations) and the unprivileged GUI (which manages user preferences and workflow).
+
 ## CLI & External Integration
 
-- `waypoint-cli` exists so scripts or the scheduler can talk to the helper without duplicating D-Bus bindings. It validates names, prints JSON via `jq` if available, and surfaces the helper’s `(bool, string)` responses.
-- `waypoint-scheduler` just shells out to `waypoint-cli` and inherits its Polkit prompts if run interactively; when managed by runit on Void the provided Polkit rules allow password-less operation for the runit user.
-- Other Void tools (Nebula, future importers) use the same `tech.geektoshi.waypoint` D-Bus API documented in [API.md](API.md). The helper emits `SnapshotCreated` so they can react to new snapshots without polling.
+- `waypoint-cli` is a comprehensive Bash-based command-line interface that wraps all D-Bus methods exposed by the helper. It supports snapshot operations (create, list, delete, restore, cleanup, verify), backup management (backup, list-backups, verify-backup, restore-backup, scan-destinations), file restore, quota control, and more. It validates inputs, formats output (with optional JSON), and provides helpful error messages. Used by both end-users for scripting and by `waypoint-scheduler` for automated operations.
+- `waypoint-scheduler` shells out to `waypoint-cli` and inherits its Polkit prompts if run interactively; when managed by runit on Void the provided Polkit rules allow password-less operation for the runit user.
+- Other Void tools (Nebula, future importers) use the same `tech.geektoshi.waypoint` D-Bus API documented in [API.md](API.md). The helper emits `SnapshotCreated` and `BackupProgress` signals so they can react to events without polling.
 
 ## Extending the Architecture
 

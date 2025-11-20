@@ -166,6 +166,12 @@ The following optimizations are already implemented:
 - Non-blocking UI with responsive progress indicators
 - Stage tracking: preparing, transferring, verifying, complete
 
+✅ **Rate Limiting (DoS Prevention)**
+- Per-user, per-operation rate limiting in waypoint-helper
+- 1 operation per 5 seconds per user for expensive operations
+- Prevents system overload from malicious or buggy clients
+- Mutex poisoning detection and recovery for robustness
+
 ## Memory Usage
 
 Monitor memory usage during testing:

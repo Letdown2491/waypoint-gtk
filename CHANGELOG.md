@@ -6,12 +6,22 @@
 - Snapshot integrity verification with btrfs subvolume checks via D-Bus method.
 - Multi-subvolume support for root (/), /home, /var, and other subvolumes with atomic operations.
 - Preferences dialog to select which subvolumes to snapshot with automatic subvolume detection.
+- Snapshot exclusion patterns to reduce snapshot sizes by omitting unnecessary files (caches, temporary files, build artifacts).
+- Exclusion pattern types: Prefix (paths starting with pattern), Suffix (paths ending with pattern), Glob (wildcard matching), and Exact (exact path match).
+- System default exclusions for common temporary and cache directories with user-customizable patterns via Preferences → Exclusions tab.
+- Exclusion configuration via SaveExcludeConfig D-Bus method stored at /etc/waypoint/exclude.toml requiring configure-system authorization.
 - Package tracking with automatic capture of installed package list and integration with XBPS package manager.
 - Package diff viewer with side-by-side snapshot selection and version change tracking.
 - Browse snapshots feature to open snapshot directories in file manager via xdg-open.
 - Real-time snapshot search and filter with text search and date range filters (7/30/90 days, or all).
 - Match count display showing filtered vs total snapshots with instant UI updates.
-- Command-line interface (waypoint-cli) for scriptable snapshot management with JSON output.
+- Command-line interface (waypoint-cli) for scriptable snapshot management with comprehensive features.
+- CLI support for all snapshot operations: create, list, show, delete, restore, verify, compare, and cleanup with dry-run mode.
+- CLI backup management: backup, list-backups, verify-backup, restore-backup, scan-destinations, and drive-stats commands.
+- CLI file restoration with restore-files command supporting individual file/directory recovery with custom target paths and overwrite options.
+- CLI quota management: enable/disable quotas (simple or traditional qgroups), status checking, and limit configuration with human-readable sizes.
+- CLI JSON output mode for all commands enabling machine-readable results for scripting and monitoring integration.
+- CLI command aliases for convenience: ls (list), info (show), del/rm (delete), rollback (restore), compare (diff).
 - Scheduled snapshots with runit service (waypoint-scheduler) for automated periodic creation.
 - GUI configuration dialog for scheduler with service status monitoring and live service restart.
 - Scheduler quick presets: "Daily at 2 AM", "Daily at Midnight", and "Weekly on Sunday".
@@ -71,9 +81,22 @@
 - Enhanced note display in snapshot list with 60-character truncation and clean "Note:" prefix.
 - Timeline-based retention policies with configurable hourly, daily, weekly, monthly, and yearly buckets.
 - Non-btrfs external drive backup support via rsync for NTFS, exFAT, and network shares.
+- Incremental backups to Btrfs drives using btrfs send/receive with parent snapshot tracking for efficient space usage.
+- Backup filter system with multiple modes: All (backup everything), Favorites (pinned snapshots only), Last 7/30 days (recent snapshots), and Critical (system-only snapshots excluding user data).
+- Flexible backup triggers: automatic backup on snapshot creation, automatic backup on drive mount, and manual backup initiation.
+- Backup queue management with chronological processing (oldest first) to maintain proper parent relationships for incremental backups.
+- Per-destination backup retention policies with age-based automatic cleanup (delete backups older than X days).
+- Real-time backup progress tracking with BackupProgress D-Bus signals showing bytes transferred, total bytes, transfer speed, and current stage (preparing, transferring, verifying, complete).
+- Backup status footer in main window showing healthy/pending/failed/disconnected states with clickable link to backup preferences.
+- Failed backup tracking with detailed error messages and manual retry functionality for all failed backups.
+- Individual backup deletion from external drives with D-Bus DeleteBackup method requiring create-snapshot authorization.
+- Backup retention application via D-Bus ApplyBackupRetention method with configurable age threshold and filter matching.
+- Drive statistics with total/used/available space, backup count, last backup timestamp, and filesystem type detection.
 - Backup verification with file count and size comparison between source and destination.
 - Automatic integrity verification for restored snapshots with file count comparison, size validation (5% tolerance), subvolume validation for btrfs restores, and read access verification.
-- Audit logging for security-critical operations (snapshot creation, deletion, restore, configuration changes).
+- BackupManager component orchestrating automatic backups with configuration management, queue handling, live progress monitoring, and status tracking.
+- UpdateSnapshotMetadata D-Bus method for updating snapshot metadata (size_bytes and other computed fields) requiring configure-system authorization.
+- Audit logging for security-critical operations (snapshot creation, deletion, restore, configuration changes, backup operations).
 - Rate limiting for expensive operations (5-second cooldown per user/operation) to prevent DoS attacks.
 - Configurable Polkit authentication timeout via WAYPOINT_POLKIT_TIMEOUT environment variable (default: 120 seconds).
 - Input validation for octal escape sequences in btrfs paths preventing control character injection.
@@ -94,7 +117,15 @@
 - Sparkline visualization in snapshot schedules showing actual snapshot creation history instead of expected time slots.
 - Backup preferences UI simplified by removing redundant header section and manual scan button (auto-scans every 5 seconds).
 - Backup pending queue UI cleaned up to remove duplicate "No pending backups" empty state message.
-- Documentation reorganized with technical docs moved to docs/ folder (API.md, ARCHITECTURE.md, FEATURES.md, PERFORMANCE_TESTING.md, SECURITY.md).
+- Documentation reorganized with technical docs moved to docs/ folder (API.md, ARCHITECTURE.md, FEATURES.md, PERFORMANCE_TESTING.md, SECURITY.md, CLI.md, USER_GUIDE.md, TESTING.md, TROUBLESHOOTING.md).
 - README.md features section condensed to concise summary with link to full FEATURES.md for better first-time user experience.
-- PERFORMANCE_TESTING.md updated with parallel computation details, analytics performance notes, backup progress tracking, and bulk query optimization.
+- API.md updated with SaveExcludeConfig, UpdateSnapshotMetadata, DeleteBackup, and ApplyBackupRetention D-Bus methods with authorization requirements.
+- ARCHITECTURE.md enhanced with BackupManager component documentation, backup configuration paths, and exclusion patterns system description.
+- FEATURES.md expanded with exclusion patterns, backup filters, backup triggers, backup retention, backup status monitoring, and comprehensive CLI feature list.
+- PERFORMANCE_TESTING.md updated with parallel computation details, analytics performance notes, backup progress tracking, bulk query optimization, and rate limiting documentation.
+- SECURITY.md enhanced with backup operations logging, configuration changes auditing, and comprehensive coverage of all security features.
+- TESTING.md updated with accurate test counts (41 tests in waypoint-common) and actual test function names for all modules.
+- TROUBLESHOOTING.md expanded with backup status footer issues, pending backup queue problems, exclusion pattern troubleshooting, D-Bus service issues, and rate limiting guidance.
+- USER_GUIDE.md enhanced with exclusion patterns usage guide, backup filter configuration, backup triggers setup, pending backup management, failed backup handling, and backup deletion instructions.
+- CLI.md providing complete reference for waypoint-cli with all commands, options, examples, and usage patterns.
 - Automated security scanning in CI/CD with cargo-audit for dependency vulnerabilities, cargo-deny for license and supply chain validation, security-focused clippy lints, and weekly scheduled runs.

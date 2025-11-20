@@ -155,6 +155,43 @@ waypoint-cli verify <snapshot-name>
 # If corrupted, you may need to delete and use another snapshot
 ```
 
+### Snapshots are unexpectedly large
+
+**Problem:** Snapshots are much larger than expected.
+
+**Diagnosis:**
+1. Check what's included in snapshots: `du -sh /.snapshots/<name>/*`
+2. Review exclusion patterns: Preferences → Exclusions
+3. Common large directories that should be excluded:
+   - `/var/cache`
+   - `/tmp`
+   - Browser caches (`~/.cache`)
+   - Package manager caches
+
+**Solution:**
+1. Go to Preferences → Exclusions
+2. Add exclusion patterns for large directories:
+   - Pattern: `/var/cache`, Type: Prefix
+   - Pattern: `/tmp`, Type: Prefix
+   - Pattern: `.cache`, Type: Contains (for user caches)
+3. New snapshots will exclude these paths
+4. Old snapshots won't change - delete them manually if needed
+
+### Exclusion patterns not working
+
+**Problem:** Files that should be excluded are still in snapshots.
+
+**Diagnosis:**
+1. Check if pattern is enabled: Preferences → Exclusions
+2. Verify pattern type matches your use case (Prefix, Suffix, Glob, Exact)
+3. Test pattern matching with actual paths
+
+**Solution:**
+- For directories: Use Prefix pattern like `/var/cache`
+- For file extensions: Use Suffix pattern like `.log`
+- For complex patterns: Use Glob pattern like `/home/*/.cache/*`
+- Exclusions only apply to NEW snapshots, not existing ones
+
 ## Backup Issues
 
 ### Backup verification fails: "Not a valid btrfs subvolume"
@@ -213,6 +250,64 @@ sudo xbps-install -S ntfs-3g
 - Subsequent backups should be much faster (incremental)
 - Use USB 3.0+ drives for better performance
 - See [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) for optimization tips
+
+### Backup status footer shows "disconnected" but drive is mounted
+
+**Problem:** Footer shows "All destinations disconnected" but your backup drive is plugged in.
+
+**Diagnosis:**
+1. Check if Waypoint recognizes the drive: Preferences → Backups
+2. Verify mount point: `findmnt | grep /run/media`
+3. Check if UUID matches configuration
+
+**Solution:**
+```sh
+# Verify drive is mounted and has correct filesystem
+lsblk -f
+
+# Remount if necessary
+sudo umount /dev/sdX1
+sudo mount /dev/sdX1 /run/media/$USER/BackupDrive
+
+# Wait a few seconds for Waypoint to detect it, or restart Waypoint
+```
+
+### Snapshots not being automatically backed up
+
+**Problem:** Created a snapshot but it wasn't automatically backed up despite having backup destinations configured.
+
+**Diagnosis:**
+1. Check Preferences → Backups → Destination settings
+2. Verify "Backup on snapshot creation" is enabled
+3. Check backup filter matches the snapshot (All/Favorites/LastN/Critical)
+4. Ensure destination is connected when snapshot is created
+
+**Solution:**
+- Enable "Backup on snapshot creation" in destination settings
+- Adjust backup filter to match your snapshots (e.g., if only backing up Favorites, make sure to pin the snapshot)
+- For pending backups, connect the destination drive - they'll be processed automatically
+
+### Pending backups not processing when drive is connected
+
+**Problem:** Backup status shows "X backups pending" but they don't start when drive is connected.
+
+**Solution:**
+1. Verify the drive is actually detected: Preferences → Backups
+2. Check that "Backup on drive mount" is enabled for the destination
+3. Wait up to 5 seconds for auto-detection
+4. Try unplugging and reconnecting the drive
+5. Restart Waypoint if the issue persists
+
+### Failed backups won't retry
+
+**Problem:** Some backups failed and remain in failed state.
+
+**Solution:**
+1. Go to Preferences → Backups
+2. Find the destination with failed backups
+3. Click the destination to view details
+4. Use the "Retry Failed" button to retry all failed backups
+5. Check logs if failures persist: `journalctl -u waypoint-helper | grep backup`
 
 ## Polkit Authentication Issues
 
@@ -354,6 +449,72 @@ iostat -x 1
 - Large snapshots take time (this is normal)
 - Ensure disk is healthy: `sudo btrfs device stats /`
 - Check for filesystem errors: `sudo btrfs scrub start /`
+
+## D-Bus and Service Issues
+
+### "Failed to connect to D-Bus service"
+
+**Problem:** Waypoint or waypoint-cli reports it can't connect to the helper service.
+
+**Diagnosis:**
+```sh
+# Check if D-Bus service is running
+busctl status tech.geektoshi.waypoint
+
+# Check if helper binary exists
+ls -l /usr/bin/waypoint-helper
+
+# Check D-Bus configuration
+ls -l /usr/share/dbus-1/system-services/tech.geektoshi.waypoint.service
+ls -l /etc/dbus-1/system.d/tech.geektoshi.waypoint.conf
+```
+
+**Solution:**
+```sh
+# Reinstall Waypoint
+./setup.sh install
+
+# Reload D-Bus
+sudo sv reload dbus
+
+# Try to activate the service manually
+busctl call --system tech.geektoshi.waypoint /tech/geektoshi/waypoint tech.geektoshi.waypoint.Helper ListSnapshots
+
+# Check for errors
+journalctl -xe | grep waypoint
+```
+
+### D-Bus signals not working (UI not updating)
+
+**Problem:** Snapshots created by scheduler don't appear in GUI until manual refresh.
+
+**Diagnosis:**
+1. Check if signal listener is running: Look for "Signal listener started" in debug logs
+2. Verify D-Bus policy allows signal emissions
+
+**Solution:**
+```sh
+# Run with debug logging to see signal reception
+RUST_LOG=debug waypoint 2>&1 | grep -i signal
+
+# Restart D-Bus if signals are blocked
+sudo sv restart dbus
+
+# Reinstall to fix D-Bus policy
+./setup.sh install
+```
+
+### Rate limiting errors: "Operation rate limited"
+
+**Problem:** Operations fail with "Please wait X seconds before retrying"
+
+**Cause:** Waypoint implements per-user rate limiting (1 operation per 5 seconds) to prevent DoS attacks.
+
+**Solution:**
+- Wait 5 seconds between operations
+- This is expected behavior for expensive operations
+- If you're scripting, add delays: `sleep 6` between commands
+- For legitimate high-frequency needs, contact the maintainers
 
 ## General Debugging
 

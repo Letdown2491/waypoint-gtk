@@ -25,8 +25,10 @@ fn create_empty_state() -> adw::StatusPage {
 fn persist_snapshot_sizes(
     snapshots: &[Snapshot],
     sizes: &std::collections::HashMap<String, u64>,
-    snapshot_manager: &std::rc::Rc<std::cell::RefCell<crate::snapshot::SnapshotManager>>,
+    _snapshot_manager: &std::rc::Rc<std::cell::RefCell<crate::snapshot::SnapshotManager>>,
 ) {
+    use crate::dbus_client::WaypointHelperClient;
+
     // Update any snapshots that didn't have size_bytes cached
     for snapshot in snapshots {
         if snapshot.size_bytes.is_none() {
@@ -35,9 +37,16 @@ fn persist_snapshot_sizes(
                 let mut updated_snapshot = snapshot.clone();
                 updated_snapshot.size_bytes = Some(size);
 
-                // Save back to metadata
-                if let Err(e) = snapshot_manager.borrow().add_snapshot(updated_snapshot) {
-                    log::warn!("Failed to persist size for snapshot {}: {}", snapshot.name, e);
+                // Save back to metadata via D-Bus (requires root permissions)
+                match WaypointHelperClient::new() {
+                    Ok(client) => {
+                        if let Err(e) = client.update_snapshot_metadata(&updated_snapshot) {
+                            log::warn!("Failed to persist size for snapshot {}: {}", snapshot.name, e);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to connect to waypoint-helper for snapshot {}: {}", snapshot.name, e);
+                    }
                 }
             }
         }

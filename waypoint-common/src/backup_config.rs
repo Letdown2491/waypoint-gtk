@@ -3,9 +3,12 @@
 //! Handles automatic backup configuration, pending backup queue, and backup history
 
 use anyhow::Context;
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use crate::SnapshotInfo;
 
 /// Sanitize a UUID for use as a TOML table key
 /// Replaces characters that are problematic in TOML table names
@@ -21,11 +24,116 @@ pub enum BackupFilter {
     All,
     /// Only backup snapshots marked as favorites
     Favorites,
+    /// Only backup snapshots from the last 7 days
+    #[serde(rename = "last_7_days")]
+    Last7Days,
+    /// Only backup snapshots from the last 30 days
+    #[serde(rename = "last_30_days")]
+    Last30Days,
+    /// Only backup snapshots from the last 90 days
+    #[serde(rename = "last_90_days")]
+    Last90Days,
+    /// Only backup the last N snapshots (most recent)
+    #[serde(rename = "last_n")]
+    LastN(u32),
+    /// Smart filter: favorites + last 7 days + snapshots with "upgrade" in description
+    Critical,
 }
 
 impl Default for BackupFilter {
     fn default() -> Self {
         Self::All
+    }
+}
+
+impl BackupFilter {
+    /// Get a human-readable display name for this filter
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::All => "All Snapshots".to_string(),
+            Self::Favorites => "Favorites Only".to_string(),
+            Self::Last7Days => "Recent (Last 7 Days)".to_string(),
+            Self::Last30Days => "Recent (Last 30 Days)".to_string(),
+            Self::Last90Days => "Recent (Last 90 Days)".to_string(),
+            Self::LastN(n) => format!("Last {} Snapshots", n),
+            Self::Critical => "Critical (Favorites + Recent + Upgrades)".to_string(),
+        }
+    }
+
+    /// Get all available filter options
+    pub fn all_options() -> Vec<Self> {
+        vec![
+            Self::All,
+            Self::Favorites,
+            Self::Last7Days,
+            Self::Last30Days,
+            Self::Last90Days,
+            Self::LastN(10), // Default to last 10
+            Self::Critical,
+        ]
+    }
+
+    /// Check if a snapshot matches this filter
+    ///
+    /// # Arguments
+    /// * `snapshot` - The snapshot to check
+    /// * `is_favorite` - Whether this snapshot is marked as a favorite
+    /// * `all_snapshots` - All snapshots (needed for LastN filter to sort by timestamp)
+    pub fn matches(&self, snapshot: &SnapshotInfo, is_favorite: bool, all_snapshots: &[SnapshotInfo]) -> bool {
+        let now = Utc::now();
+
+        match self {
+            Self::All => true,
+            Self::Favorites => is_favorite,
+
+            Self::Last7Days => {
+                let cutoff = now - Duration::days(7);
+                snapshot.timestamp >= cutoff
+            }
+
+            Self::Last30Days => {
+                let cutoff = now - Duration::days(30);
+                snapshot.timestamp >= cutoff
+            }
+
+            Self::Last90Days => {
+                let cutoff = now - Duration::days(90);
+                snapshot.timestamp >= cutoff
+            }
+
+            Self::LastN(n) => {
+                // Sort all snapshots by timestamp (newest first) and check if this snapshot is in the top N
+                let mut sorted: Vec<_> = all_snapshots.iter().collect();
+                sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+                let top_n: Vec<_> = sorted.iter().take(*n as usize).collect();
+                top_n.iter().any(|s| s.name == snapshot.name)
+            }
+
+            Self::Critical => {
+                // Match if any of these conditions are true:
+                // 1. Is a favorite
+                // 2. Is from the last 7 days
+                // 3. Has "upgrade" in the description (case-insensitive)
+
+                if is_favorite {
+                    return true;
+                }
+
+                let cutoff = now - Duration::days(7);
+                if snapshot.timestamp >= cutoff {
+                    return true;
+                }
+
+                if let Some(desc) = &snapshot.description {
+                    if desc.to_lowercase().contains("upgrade") {
+                        return true;
+                    }
+                }
+
+                false
+            }
+        }
     }
 }
 

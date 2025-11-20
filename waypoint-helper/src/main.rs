@@ -684,6 +684,69 @@ impl WaypointHelper {
         }
     }
 
+    /// Save exclude configuration to /etc/waypoint/exclude.toml
+    ///
+    /// # Arguments
+    /// * `config_toml` - TOML string of exclude configuration
+    async fn save_exclude_config(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        config_toml: String,
+    ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
+        // Check authorization
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
+            audit::log_auth_failure(uid, pid, POLKIT_ACTION_CONFIGURE, &e.to_string());
+            return (false, format!("Authorization failed: {e}"));
+        }
+
+        match Self::save_exclude_config_impl(&config_toml) {
+            Ok(msg) => {
+                audit::log_config_change(uid, pid, "exclude", true, None);
+                (true, msg)
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                audit::log_config_change(uid, pid, "exclude", false, Some(&error_msg));
+                (false, format!("Failed to save exclude configuration: {e}"))
+            }
+        }
+    }
+
+    /// Update snapshot metadata (specifically size_bytes)
+    ///
+    /// # Arguments
+    /// * `snapshot_json` - JSON string of the snapshot with updated metadata
+    async fn update_snapshot_metadata(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        snapshot_json: String,
+    ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
+        // Check authorization - using configure action since we're modifying metadata
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
+            audit::log_auth_failure(uid, pid, POLKIT_ACTION_CONFIGURE, &e.to_string());
+            return (false, format!("Authorization failed: {e}"));
+        }
+
+        match Self::update_snapshot_metadata_impl(&snapshot_json) {
+            Ok(msg) => {
+                log::info!("Snapshot metadata updated by uid={uid} pid={pid}");
+                (true, msg)
+            }
+            Err(e) => {
+                log::error!("Failed to update snapshot metadata: {e}");
+                (false, format!("Failed to update snapshot metadata: {e}"))
+            }
+        }
+    }
+
     /// Scan for available backup destinations
     ///
     /// This is a read-only operation and does not require authorization
@@ -848,6 +911,114 @@ impl WaypointHelper {
                 Err(e) => (false, format!("Failed to serialize backups: {e}")),
             },
             Err(e) => (false, format!("Failed to list backups: {e}")),
+        }
+    }
+
+    /// Delete a backup from destination
+    ///
+    /// # Arguments
+    /// * `backup_path` - Full path to the backup to delete
+    ///
+    /// # Returns
+    /// * `(success, message)` - Success status and message/error
+    async fn delete_backup(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        backup_path: String,
+    ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
+        // Check authorization - require CREATE permission (same as creating snapshots/backups)
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
+            log::warn!("Unauthorized backup deletion attempt by {} (PID {}): {}", uid, pid, backup_path);
+            return (false, format!("Authorization failed: {e}"));
+        }
+
+        log::info!("User {} (PID {}) deleting backup: {}", uid, pid, backup_path);
+
+        match backup::delete_backup(&backup_path) {
+            Ok(()) => {
+                log::info!("Successfully deleted backup: {}", backup_path);
+                (true, format!("Backup deleted successfully: {}", backup_path))
+            }
+            Err(e) => {
+                log::error!("Failed to delete backup {}: {}", backup_path, e);
+                (false, format!("Failed to delete backup: {e}"))
+            }
+        }
+    }
+
+    /// Apply retention policy to backups at a destination
+    ///
+    /// # Arguments
+    /// * `destination_mount` - Mount point of backup destination
+    /// * `retention_days` - Maximum age of backups to keep (in days)
+    /// * `filter_json` - JSON-serialized BackupFilter
+    /// * `snapshots_json` - JSON-serialized array of SnapshotInfo
+    ///
+    /// # Returns
+    /// * `(success, json_result)` - JSON array of deleted backup paths or error message
+    async fn apply_backup_retention(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        destination_mount: String,
+        retention_days: u32,
+        filter_json: String,
+        snapshots_json: String,
+    ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
+        // Check authorization
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CREATE).await {
+            log::warn!(
+                "Unauthorized retention cleanup attempt by {} (PID {}): {}",
+                uid, pid, destination_mount
+            );
+            return (false, format!("Authorization failed: {e}"));
+        }
+
+        log::info!(
+            "User {} (PID {}) applying retention to {}: {} days",
+            uid, pid, destination_mount, retention_days
+        );
+
+        // Deserialize filter and snapshots
+        let filter: waypoint_common::BackupFilter = match serde_json::from_str(&filter_json) {
+            Ok(f) => f,
+            Err(e) => {
+                return (false, format!("Failed to parse filter: {e}"));
+            }
+        };
+
+        let all_snapshots: Vec<waypoint_common::SnapshotInfo> =
+            match serde_json::from_str(&snapshots_json) {
+                Ok(s) => s,
+                Err(e) => {
+                    return (false, format!("Failed to parse snapshots: {e}"));
+                }
+            };
+
+        match backup::apply_backup_retention(
+            &destination_mount,
+            retention_days,
+            &filter,
+            &all_snapshots,
+        ) {
+            Ok(deleted_paths) => {
+                log::info!("Retention policy deleted {} backups", deleted_paths.len());
+                match serde_json::to_string(&deleted_paths) {
+                    Ok(json) => (true, json),
+                    Err(e) => (false, format!("Failed to serialize result: {e}")),
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to apply retention policy: {}", e);
+                (false, format!("Failed to apply retention: {e}"))
+            }
         }
     }
 
@@ -1823,6 +1994,80 @@ impl WaypointHelper {
             .context("Failed to write quota configuration file")?;
 
         Ok("Quota configuration saved successfully".to_string())
+    }
+
+    /// Save exclude configuration to file
+    fn save_exclude_config_impl(config_toml: &str) -> Result<String> {
+        use waypoint_common::ExcludeConfig;
+
+        // Validate TOML by parsing it
+        let _config: ExcludeConfig =
+            toml::from_str(config_toml).context("Invalid exclude configuration")?;
+
+        let config_path = std::path::PathBuf::from("/etc/waypoint/exclude.toml");
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).context("Failed to create config directory")?;
+        }
+
+        // Write configuration
+        std::fs::write(&config_path, config_toml)
+            .context("Failed to write exclude configuration file")?;
+
+        Ok("Exclude configuration saved successfully".to_string())
+    }
+
+    /// Update snapshot metadata implementation
+    fn update_snapshot_metadata_impl(snapshot_json: &str) -> Result<String> {
+        use waypoint_common::WaypointConfig;
+        use std::fs;
+
+        // Parse the snapshot from JSON as a generic Value
+        let snapshot: serde_json::Value =
+            serde_json::from_str(snapshot_json).context("Invalid snapshot JSON")?;
+
+        let snapshot_id = snapshot.get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Snapshot JSON missing 'id' field"))?;
+
+        let size_bytes = snapshot.get("size_bytes")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| anyhow::anyhow!("Snapshot JSON missing valid 'size_bytes' field"))?;
+
+        let config = WaypointConfig::new();
+        let metadata_path = &config.metadata_file;
+
+        // Load existing snapshots as JSON array
+        let content = fs::read_to_string(metadata_path)
+            .context("Failed to read metadata file")?;
+        let mut snapshots: Vec<serde_json::Value> =
+            serde_json::from_str(&content).context("Failed to parse metadata file")?;
+
+        // Find and update the snapshot
+        let mut found = false;
+        for existing in &mut snapshots {
+            if let Some(existing_id) = existing.get("id").and_then(|v| v.as_str()) {
+                if existing_id == snapshot_id {
+                    // Update only the size_bytes field
+                    existing["size_bytes"] = serde_json::json!(size_bytes);
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            return Err(anyhow::anyhow!("Snapshot {} not found in metadata", snapshot_id));
+        }
+
+        // Save back to file
+        let updated_content = serde_json::to_string_pretty(&snapshots)
+            .context("Failed to serialize snapshots")?;
+        fs::write(metadata_path, updated_content)
+            .context("Failed to write metadata file")?;
+
+        Ok(format!("Snapshot {} metadata updated successfully", snapshot_id))
     }
 }
 

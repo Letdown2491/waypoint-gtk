@@ -4,7 +4,7 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Void%20Linux-478061?logo=linux)
 
-Waypoint is a GTK/libadwaita snapshot and rollback tool with a built in scheduling service for Btrfs filesystems on Void Linux.
+Waypoint is a GTK/libadwaita snapshot and rollback tool with a built in scheduling service for Btrfs filesystems on Void Linux. For a complete walkthrough, see the [User Guide →](docs/USER_GUIDE.md)
 
 For Void Linux users, Waypoint integration is available on [Nebula](https://github.com/Letdown2491/nebula-gtk) >= 1.3.0 to automatically create system snapshots when performing system upgrades.
 
@@ -18,16 +18,21 @@ For Void Linux users, Waypoint integration is available on [Nebula](https://gith
   <img src="assets/screenshots/3-waypointquotas.png" alt="Waypoint Snapshot Quotas" width="49%">
   <img src="assets/screenshots/4-waypointbackups.png" alt="Waypoint Snapshot Backups" width="49%">
 </p>
+<p align="center">
+  <img src="assets/screenshots/5-waypointdrives.png" alt="Waypoint Destination Drive" width="49%">
+  <img src="assets/screenshots/6-waypointanalytics.png" alt="Waypoint Snapshot Analytics" width="49%">
+</p>
 
 ## Features
 
 - **System Snapshots & Rollback** - Create, restore, compare, and verify snapshots with rollback preview showing package changes and affected subvolumes
-- **Backup to External Drives** - Automatic backups with incremental support for Btrfs drives and full backups for NTFS/exFAT/network shares
+- **Smart Backups** - Automatic backups with filters (All, Favorites, Critical), incremental support for Btrfs, and queue management for disconnected drives
+- **Exclusion Patterns** - Reduce snapshot sizes by excluding caches, temporary files, and build artifacts with customizable patterns
 - **Flexible Scheduling** - Multiple concurrent schedules (hourly, daily, weekly, monthly) with timeline-based retention policies
 - **Package Tracking** - Automatic XBPS package state tracking with version comparison and visual diff viewer
 - **Analytics Dashboard** - Snapshot statistics, space usage trends, and actionable insights
 - **Quota Management** - Configure Btrfs quotas with automatic cleanup triggers and disk space warnings
-- **Modern Interface** - GTK4 + libadwaita UI with theme switching, real-time monitoring, and command-line tools
+- **Modern Interface** - GTK4 + libadwaita UI with theme switching, real-time monitoring, and comprehensive CLI tools
 - **Security First** - Privilege-separated architecture with D-Bus, Polkit, audit logging, and input validation
 
 [See full feature list →](docs/FEATURES.md)
@@ -105,3 +110,13 @@ sudo ln -s /etc/sv/waypoint-scheduler /var/service/
 
 # Configure via GUI or edit /etc/waypoint/scheduler.conf
 ```
+
+## Documentation
+
+- **[User Guide](docs/USER_GUIDE.md)** - Complete walkthrough for new users
+- **[CLI Reference](docs/CLI.md)** - Full command-line documentation
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Features](docs/FEATURES.md)** - Comprehensive feature list
+- **[API Reference](docs/API.md)** - D-Bus integration for external tools
+- **[Architecture](docs/ARCHITECTURE.md)** - System design and components
+- **[Security](docs/SECURITY.md)** - Security configuration guide

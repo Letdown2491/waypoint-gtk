@@ -780,6 +780,50 @@ impl WaypointHelperClient {
         Ok(result.1)
     }
 
+    /// Save exclude configuration
+    pub fn save_exclude_config(&self, config_toml: String) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("SaveExcludeConfig", &(config_toml,))
+            .context("Failed to call SaveExcludeConfig")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        Ok(result.1)
+    }
+
+    /// Update snapshot metadata (specifically size_bytes)
+    pub fn update_snapshot_metadata(&self, snapshot: &crate::snapshot::Snapshot) -> Result<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        // Serialize snapshot to JSON
+        let snapshot_json = serde_json::to_string(snapshot)
+            .context("Failed to serialize snapshot")?;
+
+        let result: (bool, String) = proxy
+            .call("UpdateSnapshotMetadata", &(snapshot_json,))
+            .context("Failed to call UpdateSnapshotMetadata")?;
+
+        if !result.0 {
+            anyhow::bail!(result.1);
+        }
+
+        Ok(result.1)
+    }
+
     /// Scan for available backup destinations
     pub fn scan_backup_destinations(&self) -> Result<(bool, String)> {
         // Use a channel and thread with timeout to prevent indefinite blocking
@@ -861,6 +905,72 @@ impl WaypointHelperClient {
             .context("Failed to call ListBackups")?;
 
         Ok(result)
+    }
+
+    /// Delete a backup from destination
+    ///
+    /// # Arguments
+    /// * `backup_path` - Full path to the backup to delete
+    ///
+    /// # Returns
+    /// * `(success, message)` - Success status and message/error
+    pub fn delete_backup(&self, backup_path: String) -> Result<(bool, String)> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        let result: (bool, String) = proxy
+            .call("DeleteBackup", &(backup_path,))
+            .context("Failed to call DeleteBackup")?;
+
+        Ok(result)
+    }
+
+    /// Apply retention policy to backups at a destination
+    ///
+    /// # Arguments
+    /// * `destination_mount` - Mount point of backup destination
+    /// * `retention_days` - Maximum age of backups to keep (in days)
+    /// * `filter` - Backup filter to determine which backups to protect
+    /// * `all_snapshots` - All snapshots for filter evaluation
+    ///
+    /// # Returns
+    /// * `Vec<String>` - List of deleted backup paths
+    pub fn apply_backup_retention(
+        &self,
+        destination_mount: String,
+        retention_days: u32,
+        filter: &waypoint_common::BackupFilter,
+        all_snapshots: &[waypoint_common::SnapshotInfo],
+    ) -> Result<Vec<String>> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.connection,
+            DBUS_SERVICE_NAME,
+            DBUS_OBJECT_PATH,
+            DBUS_INTERFACE_NAME,
+        )?;
+
+        // Serialize filter and snapshots
+        let filter_json = serde_json::to_string(filter)
+            .context("Failed to serialize filter")?;
+        let snapshots_json = serde_json::to_string(all_snapshots)
+            .context("Failed to serialize snapshots")?;
+
+        let result: (bool, String) = proxy
+            .call("ApplyBackupRetention", &(destination_mount, retention_days, filter_json, snapshots_json))
+            .context("Failed to call ApplyBackupRetention")?;
+
+        if !result.0 {
+            return Err(anyhow::anyhow!("ApplyBackupRetention failed: {}", result.1));
+        }
+
+        let deleted_paths: Vec<String> = serde_json::from_str(&result.1)
+            .context("Failed to parse retention result")?;
+
+        Ok(deleted_paths)
     }
 
     /// Get drive health statistics

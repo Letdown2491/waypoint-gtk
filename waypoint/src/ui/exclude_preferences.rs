@@ -36,7 +36,7 @@ pub fn create_exclude_page(parent: &adw::ApplicationWindow) -> adw::PreferencesP
         .collect();
 
     for (idx, pattern) in system_patterns.iter().enumerate() {
-        let row = create_pattern_row(pattern, idx, true, parent);
+        let row = create_pattern_row(pattern, idx, true, parent, None);
         defaults_group.add(&row);
     }
 
@@ -55,12 +55,13 @@ pub fn create_exclude_page(parent: &adw::ApplicationWindow) -> adw::PreferencesP
         .collect();
 
     if custom_patterns.is_empty() {
-        let empty_label = gtk::Label::new(Some("No custom patterns defined"));
-        empty_label.add_css_class("dim-label");
-        custom_group.add(&empty_label);
+        let empty_row = adw::ActionRow::new();
+        empty_row.set_title("No custom patterns defined");
+        empty_row.set_sensitive(false);
+        custom_group.add(&empty_row);
     } else {
         for (idx, pattern) in custom_patterns {
-            let row = create_pattern_row(pattern, idx, false, parent);
+            let row = create_pattern_row(pattern, idx, false, parent, Some(&custom_group));
             custom_group.add(&row);
         }
     }
@@ -81,8 +82,9 @@ pub fn create_exclude_page(parent: &adw::ApplicationWindow) -> adw::PreferencesP
     add_button.add_css_class("suggested-action");
 
     let parent_clone = parent.clone();
+    let custom_group_clone = custom_group.clone();
     add_button.connect_clicked(move |_| {
-        show_add_pattern_dialog(&parent_clone);
+        show_add_pattern_dialog(&parent_clone, &custom_group_clone);
     });
 
     add_row.add_suffix(&add_button);
@@ -99,6 +101,7 @@ fn create_pattern_row(
     _index: usize,
     is_system: bool,
     parent: &adw::ApplicationWindow,
+    custom_group: Option<&adw::PreferencesGroup>,
 ) -> adw::ActionRow {
     let row = adw::ActionRow::new();
     row.set_title(&pattern.pattern);
@@ -133,7 +136,7 @@ fn create_pattern_row(
             p.enabled = sw.is_active();
         }
 
-        if let Err(e) = config.save() {
+        if let Err(e) = save_exclude_config(&config) {
             log::error!("Failed to save exclude config: {e}");
             super::dialogs::show_error(
                 &parent_clone,
@@ -155,13 +158,15 @@ fn create_pattern_row(
 
         let pattern_str = pattern.pattern.clone();
         let parent_clone2 = parent.clone();
+        let row_clone = row.clone();
+        let custom_group_clone = custom_group.cloned();
         delete_button.connect_clicked(move |_| {
             let mut config = ExcludeConfig::load().unwrap_or_default();
 
             // Find and remove this pattern
             config.patterns.retain(|p| p.pattern != pattern_str);
 
-            if let Err(e) = config.save() {
+            if let Err(e) = save_exclude_config(&config) {
                 log::error!("Failed to save exclude config: {e}");
                 super::dialogs::show_error(
                     &parent_clone2,
@@ -171,7 +176,19 @@ fn create_pattern_row(
             } else {
                 log::info!("Deleted pattern: {pattern_str}");
                 super::dialogs::show_toast(&parent_clone2, "Exclusion pattern deleted");
-                // User will see changes when reopening preferences
+
+                // Remove this row from the group
+                if let Some(ref group) = custom_group_clone {
+                    group.remove(&row_clone);
+
+                    // Check if group is now empty and add empty state if needed
+                    if !has_custom_rows(group) {
+                        let empty_row = adw::ActionRow::new();
+                        empty_row.set_title("No custom patterns defined");
+                        empty_row.set_sensitive(false);
+                        group.add(&empty_row);
+                    }
+                }
             }
         });
 
@@ -181,8 +198,24 @@ fn create_pattern_row(
     row
 }
 
+/// Check if a preferences group has any custom pattern rows (non-empty-state rows)
+fn has_custom_rows(group: &adw::PreferencesGroup) -> bool {
+    let mut child = group.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(row) = widget.downcast::<adw::ActionRow>() {
+            // If the row is sensitive, it's a real pattern row (empty state is insensitive)
+            if row.is_sensitive() {
+                return true;
+            }
+        }
+        child = next;
+    }
+    false
+}
+
 /// Show dialog to add a new pattern
-fn show_add_pattern_dialog(parent: &adw::ApplicationWindow) {
+fn show_add_pattern_dialog(parent: &adw::ApplicationWindow, custom_group: &adw::PreferencesGroup) {
     let dialog = adw::MessageDialog::new(Some(parent), Some("Add Exclusion Pattern"), None);
     dialog.set_modal(true);
 
@@ -230,6 +263,8 @@ fn show_add_pattern_dialog(parent: &adw::ApplicationWindow) {
     dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("add"));
 
+    let parent_clone = parent.clone();
+    let custom_group_clone = custom_group.clone();
     dialog.connect_response(None, move |dialog, response| {
         if response == "add" {
             let pattern_text = pattern_row.text().to_string();
@@ -256,13 +291,36 @@ fn show_add_pattern_dialog(parent: &adw::ApplicationWindow) {
             );
 
             let mut config = ExcludeConfig::load().unwrap_or_default();
-            config.add_pattern(new_pattern);
+            config.add_pattern(new_pattern.clone());
 
-            if let Err(e) = config.save() {
+            if let Err(e) = save_exclude_config(&config) {
                 log::error!("Failed to save exclude config: {e}");
+                super::dialogs::show_error(
+                    &parent_clone,
+                    "Save Failed",
+                    &format!("Failed to add exclusion pattern: {e}"),
+                );
             } else {
                 log::info!("Added new exclude pattern: {pattern_text}");
-                // User will see changes when reopening preferences
+                super::dialogs::show_toast(&parent_clone, "Exclusion pattern added");
+
+                // Remove empty state if present
+                let mut child = custom_group_clone.first_child();
+                while let Some(widget) = child {
+                    let next = widget.next_sibling();
+                    if let Ok(row) = widget.downcast::<adw::ActionRow>() {
+                        if !row.is_sensitive() {
+                            // This is the empty state row, remove it
+                            custom_group_clone.remove(&row);
+                            break;
+                        }
+                    }
+                    child = next;
+                }
+
+                // Add the new pattern row
+                let new_row = create_pattern_row(&new_pattern, 0, false, &parent_clone, Some(&custom_group_clone));
+                custom_group_clone.add(&new_row);
             }
         }
 
@@ -270,4 +328,18 @@ fn show_add_pattern_dialog(parent: &adw::ApplicationWindow) {
     });
 
     dialog.present();
+}
+
+/// Save exclude config via D-Bus (requires root permissions)
+fn save_exclude_config(config: &ExcludeConfig) -> anyhow::Result<()> {
+    use crate::dbus_client::WaypointHelperClient;
+
+    // Serialize config to TOML
+    let toml_content = toml::to_string_pretty(config)?;
+
+    // Call D-Bus to save (this will prompt for password)
+    let client = WaypointHelperClient::new()?;
+    client.save_exclude_config(toml_content)?;
+
+    Ok(())
 }

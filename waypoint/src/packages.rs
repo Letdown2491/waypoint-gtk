@@ -16,6 +16,16 @@ impl Package {
     }
 }
 
+/// Convert GUI Package to common Package
+impl From<&Package> for waypoint_common::Package {
+    fn from(p: &Package) -> Self {
+        waypoint_common::Package {
+            name: p.name.clone(),
+            version: p.version.clone(),
+        }
+    }
+}
+
 /// Get list of all installed packages using xbps-query
 #[allow(dead_code)]
 pub fn get_installed_packages() -> Result<Vec<Package>> {

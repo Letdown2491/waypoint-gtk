@@ -105,6 +105,25 @@ pub fn notify_scheduled_snapshot(app: &Application, snapshot_name: &str) {
     );
 }
 
+/// Send a notification about backup starting
+pub fn notify_backup_started(
+    app: &Application,
+    destination_label: &str,
+    pending_count: usize,
+) {
+    let message = if pending_count == 1 {
+        format!("Starting backup of 1 snapshot to {destination_label}")
+    } else {
+        format!("Starting backup of {pending_count} snapshots to {destination_label}")
+    };
+    send_notification(
+        app,
+        "Backup Started",
+        &message,
+        NotificationPriority::Low,
+    );
+}
+
 /// Send a notification about successful backup completion
 pub fn notify_backup_completed(
     app: &Application,

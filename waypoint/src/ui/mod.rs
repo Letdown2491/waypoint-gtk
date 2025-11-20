@@ -59,8 +59,6 @@ pub struct MainWindow {
     snapshot_list: ListBox,
     create_btn: Button,
     compare_btn: Button,
-    disk_space_label: Label,
-    disk_space_bar: gtk::LevelBar,
     _search_entry: SearchEntry,
     _match_label: Label,
     _date_filter: Rc<RefCell<DateFilter>>,
@@ -133,19 +131,6 @@ impl MainWindow {
                 ))
             }
         };
-
-        // Start listening for backup progress events
-        let bm_clone = backup_manager.clone();
-        gtk::glib::spawn_future_local(async move {
-            loop {
-                if let Ok(event) = backup_progress_rx.try_recv() {
-                    bm_clone.borrow().update_progress(event);
-                }
-
-                // Sleep briefly to avoid busy waiting
-                gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
-            }
-        });
 
         // Create header bar
         let header = adw::HeaderBar::new();
@@ -347,29 +332,19 @@ impl MainWindow {
         scrolled.set_margin_start(12);
         scrolled.set_margin_end(12);
 
-        // Disk space indicator footer with progress bar
-        let disk_space_box = gtk::Box::new(Orientation::Vertical, 6);
-        disk_space_box.set_halign(gtk::Align::Center);
-        disk_space_box.set_margin_top(6);
-        disk_space_box.set_margin_bottom(12);
+        // Backup status footer
+        let backup_status_box = gtk::Box::new(Orientation::Vertical, 6);
+        backup_status_box.set_halign(gtk::Align::Center);
+        backup_status_box.set_margin_top(0);
+        backup_status_box.set_margin_bottom(12);
 
-        let disk_space_bar = gtk::LevelBar::new();
-        disk_space_bar.set_min_value(0.0);
-        disk_space_bar.set_max_value(1.0);
-        disk_space_bar.set_width_request(300);
-        disk_space_bar.set_halign(gtk::Align::Center);
+        let backup_status_label = Label::new(Some("Checking backup status..."));
+        backup_status_label.add_css_class("caption");
+        backup_status_label.add_css_class("dim-label");
+        backup_status_label.add_css_class("link"); // Make it look clickable
+        backup_status_label.set_halign(gtk::Align::Center);
 
-        // Add offset markers for color coding
-        disk_space_bar.add_offset_value("full", 0.9); // > 90% used = critical
-        disk_space_bar.add_offset_value("high", 0.8); // > 80% used = warning
-
-        let disk_space_label = Label::new(Some("Checking space..."));
-        disk_space_label.add_css_class("caption");
-        disk_space_label.add_css_class("dim-label");
-        disk_space_label.set_halign(gtk::Align::Center);
-
-        disk_space_box.append(&disk_space_bar);
-        disk_space_box.append(&disk_space_label);
+        backup_status_box.append(&backup_status_label);
 
         // Main content box
         let content_box = gtk::Box::new(Orientation::Vertical, 0);
@@ -377,7 +352,7 @@ impl MainWindow {
         content_box.append(&toolbar);
         content_box.append(&search_revealer);
         content_box.append(&scrolled);
-        content_box.append(&disk_space_box);
+        content_box.append(&backup_status_box);
 
         // Use ToolbarView for proper GNOME layout
         let toolbar_view = adw::ToolbarView::new();
@@ -396,6 +371,15 @@ impl MainWindow {
             .default_height(720)
             .content(&toast_overlay)
             .build();
+
+        // Make backup status label clickable to open preferences
+        let gesture = gtk::GestureClick::new();
+        let window_for_click = window.clone();
+        let backup_manager_for_click = backup_manager.clone();
+        gesture.connect_released(move |_, _, _, _| {
+            Self::show_preferences_dialog(&window_for_click, &backup_manager_for_click);
+        });
+        backup_status_label.add_controller(gesture);
 
         // Add Ctrl+F keyboard shortcut to open search
         let window_key_controller = gtk::EventControllerKey::new();
@@ -498,8 +482,6 @@ impl MainWindow {
             snapshot_list: snapshot_list.clone(),
             create_btn: create_btn.clone(),
             compare_btn: compare_btn.clone(),
-            disk_space_label: disk_space_label.clone(),
-            disk_space_bar: disk_space_bar.clone(),
             _search_entry: search_entry.clone(),
             _match_label: match_label.clone(),
             _date_filter: date_filter.clone(),
@@ -515,8 +497,6 @@ impl MainWindow {
         let bm_clone_search = backup_manager.clone();
         let list_clone_search = snapshot_list.clone();
         let compare_btn_clone_search = compare_btn.clone();
-        let disk_space_clone_search = disk_space_label.clone();
-        let disk_space_bar_clone_search = disk_space_bar.clone();
         let match_label_clone = match_label.clone();
         let date_filter_clone = date_filter.clone();
 
@@ -529,8 +509,6 @@ impl MainWindow {
                 &bm_clone_search,
                 &list_clone_search,
                 &compare_btn_clone_search,
-                &disk_space_clone_search,
-                &disk_space_bar_clone_search,
                 &match_label_clone,
                 &search_text,
                 *date_filter_clone.borrow(),
@@ -544,8 +522,6 @@ impl MainWindow {
         let bm_clone_all = backup_manager.clone();
         let list_clone_all = snapshot_list.clone();
         let compare_btn_clone_all = compare_btn.clone();
-        let disk_space_clone_all = disk_space_label.clone();
-        let disk_space_bar_clone_all = disk_space_bar.clone();
         let match_label_clone_all = match_label.clone();
         let search_entry_clone_all = search_entry.clone();
         let date_filter_clone_all = date_filter.clone();
@@ -567,8 +543,6 @@ impl MainWindow {
                     &bm_clone_all,
                     &list_clone_all,
                     &compare_btn_clone_all,
-                    &disk_space_clone_all,
-                    &disk_space_bar_clone_all,
                     &match_label_clone_all,
                     &search_text,
                     DateFilter::All,
@@ -582,8 +556,6 @@ impl MainWindow {
         let bm_clone_week = backup_manager.clone();
         let list_clone_week = snapshot_list.clone();
         let compare_btn_clone_week = compare_btn.clone();
-        let disk_space_clone_week = disk_space_label.clone();
-        let disk_space_bar_clone_week = disk_space_bar.clone();
         let match_label_clone_week = match_label.clone();
         let search_entry_clone_week = search_entry.clone();
         let date_filter_clone_week = date_filter.clone();
@@ -605,8 +577,6 @@ impl MainWindow {
                     &bm_clone_week,
                     &list_clone_week,
                     &compare_btn_clone_week,
-                    &disk_space_clone_week,
-                    &disk_space_bar_clone_week,
                     &match_label_clone_week,
                     &search_text,
                     DateFilter::Last7Days,
@@ -620,8 +590,6 @@ impl MainWindow {
         let bm_clone_month = backup_manager.clone();
         let list_clone_month = snapshot_list.clone();
         let compare_btn_clone_month = compare_btn.clone();
-        let disk_space_clone_month = disk_space_label.clone();
-        let disk_space_bar_clone_month = disk_space_bar.clone();
         let match_label_clone_month = match_label.clone();
         let search_entry_clone_month = search_entry.clone();
         let date_filter_clone_month = date_filter.clone();
@@ -643,8 +611,6 @@ impl MainWindow {
                     &bm_clone_month,
                     &list_clone_month,
                     &compare_btn_clone_month,
-                    &disk_space_clone_month,
-                    &disk_space_bar_clone_month,
                     &match_label_clone_month,
                     &search_text,
                     DateFilter::Last30Days,
@@ -658,8 +624,6 @@ impl MainWindow {
         let bm_clone_quarter = backup_manager.clone();
         let list_clone_quarter = snapshot_list.clone();
         let compare_btn_clone_quarter = compare_btn.clone();
-        let disk_space_clone_quarter = disk_space_label.clone();
-        let disk_space_bar_clone_quarter = disk_space_bar.clone();
         let match_label_clone_quarter = match_label.clone();
         let search_entry_clone_quarter = search_entry.clone();
         let date_filter_clone_quarter = date_filter.clone();
@@ -681,8 +645,6 @@ impl MainWindow {
                     &bm_clone_quarter,
                     &list_clone_quarter,
                     &compare_btn_clone_quarter,
-                    &disk_space_clone_quarter,
-                    &disk_space_bar_clone_quarter,
                     &match_label_clone_quarter,
                     &search_text,
                     DateFilter::Last90Days,
@@ -697,8 +659,6 @@ impl MainWindow {
         let list_clone = snapshot_list.clone();
         let win_clone = window.clone();
         let compare_btn_clone = compare_btn.clone();
-        let disk_space_clone = disk_space_label.clone();
-        let disk_space_bar_clone = disk_space_bar.clone();
 
         create_btn.connect_clicked(move |_| {
             Self::on_create_snapshot(
@@ -708,8 +668,6 @@ impl MainWindow {
                 bm_clone.clone(),
                 list_clone.clone(),
                 compare_btn_clone.clone(),
-                disk_space_clone.clone(),
-                disk_space_bar_clone.clone(),
             );
         });
 
@@ -805,15 +763,31 @@ impl MainWindow {
             Self::show_about_dialog(&win_clone_menu_about);
         });
 
-        // Initialize disk space monitoring
-        main_window_helpers::update_disk_space_label(&disk_space_label, &disk_space_bar);
+        // Initialize backup status monitoring
+        main_window_helpers::update_backup_status_label(&backup_status_label, &backup_manager);
 
-        // Set up periodic disk space updates (every 30 seconds)
-        let disk_space_label_clone = disk_space_label.clone();
-        let disk_space_bar_clone = disk_space_bar.clone();
-        glib::timeout_add_seconds_local(30, move || {
-            main_window_helpers::update_disk_space_label(&disk_space_label_clone, &disk_space_bar_clone);
+        // Set up periodic backup status updates (every 15 seconds to match drive scanning)
+        let backup_status_label_clone = backup_status_label.clone();
+        let backup_manager_clone_status = backup_manager.clone();
+        glib::timeout_add_seconds_local(15, move || {
+            main_window_helpers::update_backup_status_label(&backup_status_label_clone, &backup_manager_clone_status);
             glib::ControlFlow::Continue
+        });
+
+        // Start listening for backup progress events (real-time updates)
+        let bm_clone = backup_manager.clone();
+        let backup_status_label_for_progress = backup_status_label.clone();
+        gtk::glib::spawn_future_local(async move {
+            loop {
+                if let Ok(event) = backup_progress_rx.try_recv() {
+                    bm_clone.borrow().update_progress(event);
+                    // Update footer status in real-time
+                    main_window_helpers::update_backup_status_label(&backup_status_label_for_progress, &bm_clone);
+                }
+
+                // Sleep briefly to avoid busy waiting
+                gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
+            }
         });
 
         // Set up periodic snapshot list refresh (every 30 seconds)
@@ -824,8 +798,6 @@ impl MainWindow {
         let backup_manager_refresh = backup_manager.clone();
         let list_refresh = snapshot_list.clone();
         let compare_refresh = compare_btn.clone();
-        let disk_space_refresh = disk_space_label.clone();
-        let disk_space_bar_refresh = disk_space_bar.clone();
         glib::timeout_add_seconds_local(30, move || {
             Self::refresh_list_static(
                 &window_refresh,
@@ -834,8 +806,6 @@ impl MainWindow {
                 &backup_manager_refresh,
                 &list_refresh,
                 &compare_refresh,
-                &disk_space_refresh,
-                &disk_space_bar_refresh,
             );
             glib::ControlFlow::Continue
         });
@@ -850,6 +820,7 @@ impl MainWindow {
 
             // Start monitoring for new drive mounts
             let backup_manager_monitor = backup_manager.clone();
+            let snapshot_manager_monitor = snapshot_manager.clone();
             let window_monitor = window.clone();
             let app_monitor = app.clone();
 
@@ -869,13 +840,40 @@ impl MainWindow {
                     .to_string_lossy()
                     .to_string();
 
-                // Get destination label for notifications
-                let dest_label = backup_manager_monitor
-                    .borrow()
-                    .get_config()
-                    .ok()
-                    .and_then(|c| c.destinations.get(&uuid).map(|d| d.label.clone()))
-                    .unwrap_or_else(|| mount_point.clone());
+                // Load all snapshots to evaluate filters
+                let snapshots = match snapshot_manager_monitor.borrow().load_snapshots() {
+                    Ok(snaps) => snaps,
+                    Err(e) => {
+                        log::error!("Failed to load snapshots for backup evaluation: {e}");
+                        return;
+                    }
+                };
+
+                // Queue snapshots that match this destination's filter (if backup_on_mount is enabled)
+                if let Err(e) = backup_manager_monitor.borrow().queue_destination_snapshots(&uuid, &snapshots) {
+                    log::error!("Failed to queue snapshots for destination {uuid}: {e}");
+                }
+
+                // Get destination label and pending count for notifications
+                let (dest_label, pending_count) = {
+                    let bm = backup_manager_monitor.borrow();
+                    let label = bm
+                        .get_config()
+                        .ok()
+                        .and_then(|c| c.destinations.get(&uuid).map(|d| d.label.clone()))
+                        .unwrap_or_else(|| mount_point.clone());
+                    let count = bm.get_pending_count(&uuid);
+                    (label, count)
+                };
+
+                // Only proceed if there are pending backups
+                if pending_count == 0 {
+                    log::info!("No pending backups for destination {uuid}");
+                    return;
+                }
+
+                // Send start notification
+                notifications::notify_backup_started(&app_monitor, &dest_label, pending_count);
 
                 // Clone backup manager for background thread work
                 let manager_for_thread = { backup_manager_monitor.borrow().clone() };
@@ -987,8 +985,6 @@ impl MainWindow {
         let backup_manager = self.backup_manager.clone();
         let list = self.snapshot_list.clone();
         let compare_btn = self.compare_btn.clone();
-        let disk_space_label = self.disk_space_label.clone();
-        let disk_space_bar = self.disk_space_bar.clone();
 
         snapshot_list::refresh_snapshot_list_internal(
             &self.window,
@@ -1008,8 +1004,6 @@ impl MainWindow {
                     &backup_manager,
                     &list,
                     &compare_btn,
-                    &disk_space_label,
-                    &disk_space_bar,
                     id,
                     action,
                 );
@@ -1025,8 +1019,6 @@ impl MainWindow {
         backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
-        disk_space_label: &Label,
-        disk_space_bar: &gtk::LevelBar,
         match_label: &Label,
         search_text: &str,
         date_filter: DateFilter,
@@ -1037,8 +1029,6 @@ impl MainWindow {
         let backup_manager_clone = backup_manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
-        let disk_space_clone = disk_space_label.clone();
-        let disk_space_bar_clone = disk_space_bar.clone();
 
         snapshot_list::refresh_snapshot_list_internal(
             window,
@@ -1058,8 +1048,6 @@ impl MainWindow {
                     &backup_manager_clone,
                     &list_clone,
                     &compare_btn_clone,
-                    &disk_space_clone,
-                    &disk_space_bar_clone,
                     id,
                     action,
                 );
@@ -1075,8 +1063,6 @@ impl MainWindow {
         backup_manager: Rc<RefCell<BackupManager>>,
         list: ListBox,
         compare_btn: Button,
-        disk_space_label: Label,
-        disk_space_bar: gtk::LevelBar,
     ) {
         // Check if root is on Btrfs (can check without root)
         match btrfs::is_btrfs(&std::path::PathBuf::from("/")) {
@@ -1160,8 +1146,6 @@ impl MainWindow {
             let user_prefs_clone2 = user_prefs_clone.clone();
             let backup_manager_clone2 = backup_manager.clone();
             let compare_btn_clone2 = compare_btn_clone.clone();
-            let disk_space_clone2 = disk_space_label.clone();
-            let disk_space_bar_clone2 = disk_space_bar.clone();
 
             create_snapshot_dialog::show_create_snapshot_dialog_async(
                 &window_clone,
@@ -1175,8 +1159,6 @@ impl MainWindow {
                             backup_manager_clone2.clone(),
                             list_clone2.clone(),
                             compare_btn_clone2.clone(),
-                            disk_space_clone2.clone(),
-                            disk_space_bar_clone2.clone(),
                             snapshot_name,
                             description,
                         );
@@ -1194,8 +1176,6 @@ impl MainWindow {
         backup_manager: Rc<RefCell<BackupManager>>,
         list: ListBox,
         compare_btn: Button,
-        disk_space_label: Label,
-        disk_space_bar: gtk::LevelBar,
         snapshot_name: String,
         description: String,
     ) {
@@ -1205,8 +1185,6 @@ impl MainWindow {
         let user_prefs_clone = user_prefs_manager.clone();
         let backup_manager_clone = backup_manager.clone();
         let compare_btn_clone = compare_btn.clone();
-        let disk_space_clone = disk_space_label.clone();
-        let disk_space_bar_clone = disk_space_bar.clone();
         let snapshot_name_clone = snapshot_name.clone();
         let description_clone = description.clone();
 
@@ -1297,34 +1275,124 @@ impl MainWindow {
                             );
 
                             // Queue snapshot for automatic backup
-                            if let Ok(prefs) = user_prefs_clone.borrow().get(&snapshot_name) {
-                                let is_favorite = prefs.is_favorite;
-                                if let Err(e) = backup_manager_clone
-                                    .borrow()
-                                    .queue_snapshot_backup(snapshot_name.clone(), is_favorite)
-                                {
-                                    log::warn!(
-                                        "Failed to queue automatic backup for {snapshot_name}: {e}"
-                                    );
+                            // Need to load all snapshots to support filters like LastN
+                            if let Ok(snapshots) = manager_clone.borrow().load_snapshots() {
+                                // Find the snapshot we just created
+                                if let Some(snapshot) = snapshots.iter().find(|s| s.name == snapshot_name) {
+                                    let is_favorite = user_prefs_clone
+                                        .borrow()
+                                        .get(&snapshot_name)
+                                        .map(|p| p.is_favorite)
+                                        .unwrap_or(false);
+
+                                    // Convert snapshots to SnapshotInfo for filtering
+                                    let snapshot_info: waypoint_common::SnapshotInfo = snapshot.into();
+                                    let all_snapshots: Vec<waypoint_common::SnapshotInfo> =
+                                        snapshots.iter().map(|s| s.into()).collect();
+
+                                    log::info!("Attempting to queue snapshot {} for automatic backup (is_favorite: {})", snapshot_name, is_favorite);
+
+                                    match backup_manager_clone.borrow().queue_snapshot_backup(
+                                        &snapshot_info,
+                                        is_favorite,
+                                        &all_snapshots,
+                                    ) {
+                                        Ok(queued_destinations) => {
+                                            if queued_destinations.is_empty() {
+                                                log::info!("No destinations needed backup for snapshot {snapshot_name}");
+                                            } else {
+                                                log::info!(
+                                                    "Queued snapshot {snapshot_name} for {} destination(s)",
+                                                    queued_destinations.len()
+                                                );
+
+                                                // Check if any queued destinations are currently mounted
+                                                // and trigger immediate backup processing
+                                                for dest_uuid in queued_destinations {
+                                                    if let Some(mount_point) = backup_manager_clone.borrow().get_mounted_destination(&dest_uuid) {
+                                                        log::info!(
+                                                            "Destination {} is already mounted at {}, triggering immediate backup processing",
+                                                            dest_uuid,
+                                                            mount_point
+                                                        );
+
+                                                        // Get destination label and pending count for notifications
+                                                        let (dest_label, pending_count) = {
+                                                            let bm = backup_manager_clone.borrow();
+                                                            let label = bm
+                                                                .get_config()
+                                                                .ok()
+                                                                .and_then(|c| c.destinations.get(&dest_uuid).map(|d| d.label.clone()))
+                                                                .unwrap_or_else(|| mount_point.clone());
+                                                            let count = bm.get_pending_count(&dest_uuid);
+                                                            (label, count)
+                                                        };
+
+                                                        // Send start notification
+                                                        if let Some(app) = window_clone.application() {
+                                                            notifications::notify_backup_started(&app, &dest_label, pending_count);
+                                                        }
+
+                                                        // Spawn background thread to process this destination's pending backups
+                                                        let backup_manager_bg = backup_manager_clone.borrow().clone();
+                                                        let dest_uuid_clone = dest_uuid.clone();
+                                                        let mount_point_clone = mount_point.clone();
+
+                                                        // Get snapshot directory from config
+                                                        let snapshot_dir = waypoint_common::WaypointConfig::new()
+                                                            .snapshot_dir
+                                                            .to_string_lossy()
+                                                            .to_string();
+
+                                                        std::thread::spawn(move || {
+                                                            log::info!("Background thread: Processing pending backups for destination {}", dest_uuid_clone);
+
+                                                            match backup_manager_bg.process_pending_backups(
+                                                                &dest_uuid_clone,
+                                                                &mount_point_clone,
+                                                                &snapshot_dir,
+                                                            ) {
+                                                                Ok((success, failed, errors)) => {
+                                                                    log::info!(
+                                                                        "Immediate backup processing completed: {} succeeded, {} failed",
+                                                                        success,
+                                                                        failed
+                                                                    );
+                                                                    if !errors.is_empty() {
+                                                                        log::error!("Backup errors: {:?}", errors);
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    log::error!(
+                                                                        "Failed to process immediate backups for destination {}: {}",
+                                                                        dest_uuid_clone,
+                                                                        e
+                                                                    );
+                                                                }
+                                                            }
+                                                        });
+                                                    } else {
+                                                        log::info!(
+                                                            "Destination {} is not currently mounted, backup will process when drive is connected",
+                                                            dest_uuid
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            log::warn!(
+                                                "Failed to queue automatic backup for {snapshot_name}: {e}"
+                                            );
+                                        }
+                                    }
                                 } else {
-                                    log::info!(
-                                        "Queued snapshot {snapshot_name} for automatic backup"
+                                    log::warn!(
+                                        "Could not find snapshot {snapshot_name} in snapshot list for backup queueing"
                                     );
                                 }
                             } else {
-                                // No prefs yet, assume not favorite
-                                if let Err(e) = backup_manager_clone
-                                    .borrow()
-                                    .queue_snapshot_backup(snapshot_name.clone(), false)
-                                {
-                                    log::warn!(
-                                        "Failed to queue automatic backup for {snapshot_name}: {e}"
-                                    );
-                                } else {
-                                    log::info!(
-                                        "Queued snapshot {snapshot_name} for automatic backup"
-                                    );
-                                }
+                                log::warn!("Failed to load snapshots for backup queueing");
                             }
 
                             // Note: Retention cleanup is handled automatically by the scheduler service
@@ -1338,12 +1406,7 @@ impl MainWindow {
                                 &backup_manager_clone,
                                 &list_clone,
                                 &compare_btn_clone,
-                                &disk_space_clone,
-                                &disk_space_bar_clone,
                             );
-
-                            // Update disk space after creating snapshot
-                            main_window_helpers::update_disk_space_label(&disk_space_clone, &disk_space_bar_clone);
                         }
                         Ok((false, message)) => {
                             error_helpers::show_error_with_context(
@@ -1452,8 +1515,6 @@ impl MainWindow {
         backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
-        disk_space_label: &Label,
-        disk_space_bar: &gtk::LevelBar,
     ) {
         let window_clone = window.clone();
         let manager_clone = manager.clone();
@@ -1461,8 +1522,6 @@ impl MainWindow {
         let backup_manager_clone = backup_manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
-        let disk_space_clone = disk_space_label.clone();
-        let disk_space_bar_clone = disk_space_bar.clone();
 
         snapshot_list::refresh_snapshot_list_internal(
             window,
@@ -1482,8 +1541,6 @@ impl MainWindow {
                     &backup_manager_clone,
                     &list_clone,
                     &compare_btn_clone,
-                    &disk_space_clone,
-                    &disk_space_bar_clone,
                     id,
                     action,
                 );
@@ -1503,8 +1560,6 @@ impl MainWindow {
         backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
-        disk_space_label: &Label,
-        disk_space_bar: &gtk::LevelBar,
         snapshot_id: &str,
         action: SnapshotAction,
     ) {
@@ -1526,8 +1581,6 @@ impl MainWindow {
                     backup_manager,
                     list,
                     compare_btn,
-                    disk_space_label,
-                    disk_space_bar,
                     snapshot_id,
                 );
             }
@@ -2249,11 +2302,6 @@ impl MainWindow {
                     let list = list_clone.clone();
                     let compare_btn = compare_btn_clone.clone();
 
-                    // We need disk_space_label and disk_space_bar, but we don't have them here
-                    // For now, we'll use dummy labels that won't be updated
-                    let disk_space_label = Label::new(None);
-                    let disk_space_bar = gtk::LevelBar::new();
-
                     Self::handle_snapshot_action(
                         &window,
                         &manager,
@@ -2261,8 +2309,6 @@ impl MainWindow {
                         &backup_manager,
                         &list,
                         &compare_btn,
-                        &disk_space_label,
-                        &disk_space_bar,
                         id,
                         action,
                     );
@@ -2510,8 +2556,6 @@ impl MainWindow {
                         None,
                         None,
                         move |id, action| {
-                            let disk_space_label = Label::new(None);
-                            let disk_space_bar = gtk::LevelBar::new();
                             Self::handle_snapshot_action(
                                 &window_inner,
                                 &manager_inner,
@@ -2519,8 +2563,6 @@ impl MainWindow {
                                 &backup_manager_inner,
                                 &list_inner,
                                 &compare_btn_inner,
-                                &disk_space_label,
-                                &disk_space_bar,
                                 id,
                                 action,
                             );
@@ -2580,8 +2622,6 @@ impl MainWindow {
         backup_manager: &Rc<RefCell<BackupManager>>,
         list: &ListBox,
         compare_btn: &Button,
-        disk_space_label: &Label,
-        disk_space_bar: &gtk::LevelBar,
         snapshot_id: &str,
     ) {
         let snapshot = match manager.borrow().get_snapshot(snapshot_id) {
@@ -2611,8 +2651,6 @@ impl MainWindow {
         let backup_manager_clone = backup_manager.clone();
         let list_clone = list.clone();
         let compare_btn_clone = compare_btn.clone();
-        let disk_space_clone = disk_space_label.clone();
-        let disk_space_bar_clone = disk_space_bar.clone();
 
         // Check if snapshot has backups
         let has_backups = backup_manager.borrow().is_snapshot_backed_up(&snapshot.id);
@@ -2639,8 +2677,6 @@ impl MainWindow {
                 let backup_manager = backup_manager_clone.clone();
                 let list = list_clone.clone();
                 let compare_btn = compare_btn_clone.clone();
-                let disk_space = disk_space_clone.clone();
-                let disk_space_bar = disk_space_bar_clone.clone();
                 let name = snapshot_basename.clone();
                 let name_for_notification = snapshot_basename.clone();
 
@@ -2703,11 +2739,7 @@ impl MainWindow {
                                         &backup_manager,
                                         &list,
                                         &compare_btn,
-                                        &disk_space,
-                                        &disk_space_bar,
                                     );
-                                    // Update disk space after deletion
-                                    main_window_helpers::update_disk_space_label(&disk_space, &disk_space_bar);
                                 }
                                 Ok((false, message)) => {
                                     error_helpers::show_error_with_context(

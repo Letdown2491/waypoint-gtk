@@ -80,9 +80,9 @@ cargo test --release
 
 ## Test Organization
 
-Waypoint has comprehensive test coverage with 90+ test functions across multiple test modules:
+Waypoint has comprehensive test coverage with 41+ test functions across multiple test modules:
 
-### waypoint-common (39 tests)
+### waypoint-common (41 tests)
 
 The common library has the most comprehensive test coverage:
 
@@ -97,40 +97,47 @@ The common library has the most comprehensive test coverage:
 - Additional validation tests for edge cases
 
 **waypoint-common/src/exclude.rs**
-- `test_is_excluded` - Pattern matching for excluded paths
-- `test_is_excluded_with_wildcards` - Glob pattern support
-- `test_is_excluded_directories` - Directory exclusion rules
+- `test_exact_match` - Exact path matching
+- `test_prefix_match` - Prefix-based exclusion
+- `test_glob_match` - Glob pattern support
+- `test_disabled_pattern` - Disabled pattern handling
 
 **waypoint-common/src/retention.rs**
-- `test_timeline_retention_basic` - Basic timeline bucket logic
-- `test_timeline_retention_empty` - Empty snapshot list handling
-- `test_timeline_retention_keep_all` - Zero bucket configuration
-- `test_timeline_retention_complex` - Multi-bucket scenarios
-- `test_get_snapshots_to_delete_respects_pinned` - Pinned snapshot protection
-- `test_get_snapshots_to_delete_respects_minimum` - Minimum count enforcement
-- Additional retention policy tests
+- `test_hourly_retention` - Hourly bucket retention logic
+- `test_daily_retention` - Daily bucket retention logic
+- `test_multiple_snapshots_same_bucket` - Same-bucket conflict resolution
+- `test_combined_retention` - Multi-bucket retention scenarios
+- Timeline-based retention with configurable buckets
 
 **waypoint-common/src/schedules.rs**
-- `test_parse_cron_expression` - Cron parsing
-- `test_calculate_next_run` - Next run time calculation
-- `test_is_schedule_due` - Due time detection
-- Schedule validation tests
+- `test_default_schedules` - Default schedule configuration
+- `test_time_validation` - Time format validation (HH:MM)
+- `test_schedule_validation` - Schedule completeness checks
+- `test_toml_serialization` - TOML config serialization/deserialization
+- `test_enabled_schedules` - Enabled schedule filtering
 
 **waypoint-common/src/backup_config.rs**
-- `test_backup_config_serialization` - JSON serialization
-- `test_backup_destination_validation` - Destination path checks
-- `test_backup_config_defaults` - Default value behavior
+- `test_add_pending_backup` - Pending backup queue management
+- `test_mark_completed` - Backup completion tracking
+- `test_is_backed_up` - Backup status verification
+- Backup filter matching tests (All, Favorites, LastN, Critical)
 
 **waypoint-common/src/config.rs**
-- `test_config_load` - Configuration file loading
-- `test_config_save` - Configuration persistence
-- `test_config_defaults` - Default configuration values
-- `test_config_validation` - Invalid configuration rejection
+- `test_default_config` - Default configuration values
+- `test_scheduler_service_path` - Service path resolution
 
 **waypoint-common/src/quota.rs**
-- `test_parse_quota_size` - Human-readable size parsing (50G, 1T)
-- `test_quota_calculations` - Usage percentage calculations
-- `test_quota_exceeded` - Limit detection
+- `test_parse_size` - Human-readable size parsing (50G, 1T)
+- `test_format_size` - Size formatting for display
+- `test_quota_usage_percent` - Usage percentage calculations
+- `test_default_config` - Default quota configuration
+- `test_quota_overflow_protection` - Overflow protection with extreme values
+- `test_exceeds_threshold_with_extreme_usage` - Edge case threshold testing
+- `test_exceeds_threshold_with_invalid_threshold` - Invalid threshold handling
+
+**waypoint-common/src/format.rs**
+- `test_format_bytes` - Byte formatting (KB, MB, GB, TB)
+- `test_format_elapsed_time` - Time formatting (seconds, minutes, hours, days)
 
 ### waypoint-helper (minimal tests)
 

@@ -14,6 +14,7 @@ use super::dialogs;
 use crate::backup_manager::BackupManager;
 use crate::dbus_client::WaypointHelperClient;
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 
 // Re-export and use types from submodules
@@ -446,11 +447,11 @@ fn create_destination_row(
 
     let mut subtitle_parts = Vec::new();
 
-    // Status indicator (emoji for visual clarity)
+    // Status indicator (colored circle with text)
     if is_connected {
-        subtitle_parts.push("🟢 Connected".to_string());
+        subtitle_parts.push("<span foreground=\"#26a269\">●</span> Connected".to_string());
     } else {
-        subtitle_parts.push("⚪ Disconnected".to_string());
+        subtitle_parts.push("<span foreground=\"#9a9996\">●</span> Disconnected".to_string());
     }
 
     // Drive type and filesystem
@@ -471,6 +472,7 @@ fn create_destination_row(
 
     let subtitle = subtitle_parts.join(" • ");
     row.set_subtitle(&subtitle);
+    row.set_use_markup(true);
 
     // Add icon based on drive type and connection status
     let icon_name = if !is_connected {
@@ -523,12 +525,28 @@ fn create_destination_row(
         // Backup filter selector
         let filter_row = adw::ActionRow::new();
         filter_row.set_title("Backup Filter");
+        filter_row.set_subtitle("Choose which snapshots to backup to this destination");
 
-        let filter_combo = gtk::DropDown::from_strings(&["All Snapshots", "Favorites Only"]);
-        filter_combo.set_selected(match current_filter {
-            BackupFilter::All => 0,
-            BackupFilter::Favorites => 1,
-        });
+        // Get all filter options and create labels
+        let filter_options = BackupFilter::all_options();
+        let filter_labels: Vec<String> = filter_options.iter().map(|f| f.display_name()).collect();
+        let filter_labels_str: Vec<&str> = filter_labels.iter().map(|s| s.as_str()).collect();
+
+        let filter_combo = gtk::DropDown::from_strings(&filter_labels_str);
+
+        // Find the index of the current filter
+        let current_index = filter_options
+            .iter()
+            .position(|f| {
+                // Compare filters, treating LastN variants as equal regardless of N value
+                match (f, &current_filter) {
+                    (BackupFilter::LastN(_), BackupFilter::LastN(_)) => true,
+                    (a, b) => a == b,
+                }
+            })
+            .unwrap_or(0);
+
+        filter_combo.set_selected(current_index as u32);
         filter_combo.set_valign(gtk::Align::Center);
         filter_row.add_suffix(&filter_combo);
 
@@ -751,12 +769,12 @@ fn create_destination_row(
                 let parent_window = parent.clone();
 
                 move || {
-                    let filter_index = filter_dd.selected();
-                    let filter = if filter_index == 0 {
-                        BackupFilter::All
-                    } else {
-                        BackupFilter::Favorites
-                    };
+                    let filter_index = filter_dd.selected() as usize;
+                    let filter_options = BackupFilter::all_options();
+                    let filter = filter_options
+                        .get(filter_index)
+                        .cloned()
+                        .unwrap_or(BackupFilter::All);
 
                     // Get nickname from entry, convert empty string to None
                     let nickname_text = nickname_ent.text().to_string();
@@ -935,6 +953,35 @@ fn show_backups_list_dialog(parent: &adw::ApplicationWindow, destination_mount: 
                         row.set_title(name);
                         row.set_subtitle(backup_path);
 
+                        // Add Waypoint logo (16x16)
+                        let logo = gtk::Image::from_icon_name("waypoint");
+                        logo.set_pixel_size(16);
+                        row.add_prefix(&logo);
+
+                        // Add delete button
+                        let delete_btn = Button::new();
+                        delete_btn.set_icon_name("user-trash-symbolic");
+                        delete_btn.set_valign(gtk::Align::Center);
+                        delete_btn.add_css_class("flat");
+                        delete_btn.add_css_class("destructive-action");
+                        delete_btn.set_tooltip_text(Some("Delete this backup"));
+
+                        let backup_path_clone = backup_path.clone();
+                        let parent_clone2 = parent_clone.clone();
+                        let row_clone = row.clone();
+                        let list_box_clone = list_box.clone();
+                        let content_clone2 = content_clone.clone();
+                        delete_btn.connect_clicked(move |_| {
+                            show_delete_backup_confirmation(
+                                &parent_clone2,
+                                &row_clone,
+                                &list_box_clone,
+                                &content_clone2,
+                                &backup_path_clone,
+                            );
+                        });
+
+                        row.add_suffix(&delete_btn);
                         list_box.append(&row);
                     }
 
@@ -952,6 +999,150 @@ fn show_backups_list_dialog(parent: &adw::ApplicationWindow, destination_mount: 
             }
         }
     });
+}
+
+/// Show confirmation dialog before deleting a backup
+fn show_delete_backup_confirmation(
+    parent: &adw::ApplicationWindow,
+    row: &adw::ActionRow,
+    list_box: &gtk::ListBox,
+    content_box: &gtk::Box,
+    backup_path: &str,
+) {
+    // Extract backup name for display
+    let backup_name = std::path::Path::new(backup_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(backup_path);
+
+    let dialog = adw::MessageDialog::new(
+        Some(parent),
+        Some("Delete Backup?"),
+        Some(&format!(
+            "Are you sure you want to delete the backup '{}'?\n\nThis action cannot be undone.",
+            backup_name
+        )),
+    );
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    let backup_path = backup_path.to_string();
+    let parent_clone = parent.clone();
+    let row_clone = row.clone();
+    let list_box_clone = list_box.clone();
+    let content_box_clone = content_box.clone();
+
+    dialog.connect_response(None, move |dialog, response| {
+        dialog.close();
+
+        if response == "delete" {
+            // Perform deletion
+            let backup_path_clone = backup_path.clone();
+            let parent_clone2 = parent_clone.clone();
+            let row_clone2 = row_clone.clone();
+            let list_box_clone2 = list_box_clone.clone();
+            let content_box_clone2 = content_box_clone.clone();
+
+            // Show progress
+            let progress_dialog = adw::MessageDialog::new(
+                Some(&parent_clone),
+                Some("Deleting Backup"),
+                Some("Please wait while the backup is being deleted..."),
+            );
+            progress_dialog.present();
+
+            // Delete in background thread
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let client = match WaypointHelperClient::new() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(Err(anyhow::anyhow!("Failed to connect to helper: {}", e)));
+                        return;
+                    }
+                };
+
+                let result = client.delete_backup(backup_path_clone);
+                let _ = tx.send(result);
+            });
+
+            // Poll for result
+            gtk::glib::spawn_future_local(async move {
+                let result = loop {
+                    match rx.try_recv() {
+                        Ok(result) => break result,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            gtk::glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                            continue;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            progress_dialog.close();
+                            dialogs::show_error(
+                                &parent_clone2,
+                                "Delete Failed",
+                                "Delete thread disconnected unexpectedly",
+                            );
+                            return;
+                        }
+                    }
+                };
+
+                progress_dialog.close();
+
+                match result {
+                    Ok((success, message)) => {
+                        if success {
+                            // Remove the row from the list
+                            list_box_clone2.remove(&row_clone2);
+
+                            // Check if list is now empty and show empty state
+                            if list_box_clone2.first_child().is_none() {
+                                // Find and remove the scrolled window
+                                let mut child = content_box_clone2.first_child();
+                                while let Some(widget) = child {
+                                    if widget.is::<gtk::ScrolledWindow>() {
+                                        content_box_clone2.remove(&widget);
+                                        break;
+                                    }
+                                    child = widget.next_sibling();
+                                }
+
+                                // Show empty state
+                                let empty_status = adw::StatusPage::new();
+                                empty_status.set_title("No Backups");
+                                empty_status.set_description(Some("No backups found at this destination"));
+                                empty_status.set_icon_name(Some("folder-symbolic"));
+                                empty_status.set_vexpand(true);
+                                content_box_clone2.append(&empty_status);
+                            }
+
+                            // Show a brief toast notification
+                            let toast = adw::Toast::new("Backup deleted successfully");
+                            toast.set_timeout(3);
+
+                            // Find the ToastOverlay parent if available, otherwise just skip the toast
+                            // (since we're in a simple dialog without ToastOverlay, we'll skip this for now)
+                        } else {
+                            dialogs::show_error(&parent_clone2, "Delete Failed", &message);
+                        }
+                    }
+                    Err(e) => {
+                        dialogs::show_error(
+                            &parent_clone2,
+                            "Delete Failed",
+                            &format!("Failed to delete backup: {}", e),
+                        );
+                    }
+                }
+            });
+        }
+    });
+
+    dialog.present();
 }
 
 /// List backups at a destination
@@ -1000,25 +1191,29 @@ fn update_backup_status_summary(row: &adw::ActionRow, backup_manager: Rc<RefCell
         }
     }
 
-    let parts = vec![
-        if in_progress_count > 0 {
-            Some(format!("{in_progress_count} in progress"))
-        } else {
-            None
-        },
-        if pending_count > 0 {
-            Some(format!("{pending_count} pending"))
-        } else {
-            None
-        },
-        if failed_count > 0 {
-            Some(format!("{failed_count} failed"))
-        } else {
-            None
-        },
-    ];
+    // Show different message based on state
+    let subtitle = if in_progress_count > 0 {
+        // Show progress when backups are actively running
+        let total = pending_count + in_progress_count + failed_count;
+        let completed = total - pending_count - in_progress_count;
+        format!("Backing up: {} of {} snapshots", completed + in_progress_count, total)
+    } else {
+        // Show status breakdown when idle
+        let parts = vec![
+            if pending_count > 0 {
+                Some(format!("{pending_count} pending"))
+            } else {
+                None
+            },
+            if failed_count > 0 {
+                Some(format!("{failed_count} failed"))
+            } else {
+                None
+            },
+        ];
+        parts.into_iter().flatten().collect::<Vec<_>>().join(", ")
+    };
 
-    let subtitle = parts.into_iter().flatten().collect::<Vec<_>>().join(", ");
     row.set_subtitle(&subtitle);
 }
 
@@ -1186,7 +1381,7 @@ fn create_pending_backups_list(backup_manager: Rc<RefCell<BackupManager>>) -> gt
                 .map(|d| d.display_name().to_string())
                 .unwrap_or_else(|| pb.destination_uuid.clone());
 
-            row.set_subtitle(&format!("Waiting for: {dest_name}"));
+            row.set_subtitle(&format!("Queued for {dest_name}"));
 
             let status_icon = gtk::Image::from_icon_name("document-save-symbolic");
             status_icon.set_pixel_size(16);
@@ -1337,11 +1532,8 @@ fn create_drive_health_section(mount_point: &str) -> gtk::Box {
 
     // Header
     let header_box = gtk::Box::new(Orientation::Horizontal, 8);
-    let health_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
-    health_icon.add_css_class("success");
     let header_label = Label::new(Some("Drive Health"));
     header_label.add_css_class("heading");
-    header_box.append(&health_icon);
     header_box.append(&header_label);
     container.append(&header_box);
 
@@ -1365,17 +1557,13 @@ fn create_drive_health_section(mount_point: &str) -> gtk::Box {
             };
 
             // Health indicator: green if <75%, yellow if 75-90%, red if >90%
-            let (health_class, health_text) = if used_pct < 75 {
+            let (_health_class, health_text) = if used_pct < 75 {
                 ("success", "Healthy")
             } else if used_pct < 90 {
                 ("warning", "Running Low")
             } else {
                 ("error", "Nearly Full")
             };
-
-            // Update header icon based on health
-            health_icon.remove_css_class("success");
-            health_icon.add_css_class(health_class);
 
             // Space usage bar
             let space_box = gtk::Box::new(Orientation::Vertical, 4);
@@ -1563,7 +1751,14 @@ fn verify_all_backups(destination_mount: &str) -> VerificationResults {
         details: Vec::new(),
     };
 
-    for backup_id in backups {
+    for backup_path in backups {
+        // Extract snapshot ID from the backup path (e.g., "hourly-20251117-1100" from "/mnt/backup/waypoint-backups/hourly-20251117-1100")
+        let backup_id = Path::new(&backup_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&backup_path)
+            .to_string();
+
         let snapshot_path = snapshot_dir.join(&backup_id);
 
         let result = client.verify_backup(
@@ -1660,17 +1855,20 @@ fn show_verification_results_dialog(parent: &adw::ApplicationWindow, results: Ve
             row.set_title(&snapshot_id);
             row.set_subtitle(&message);
 
-            let icon_name = if success {
-                "emblem-ok-symbolic"
-            } else {
-                "dialog-warning-symbolic"
-            };
+            // Left side: Waypoint logo (16x16)
+            let logo = gtk::Image::from_icon_name("waypoint");
+            logo.set_pixel_size(16);
+            row.add_prefix(&logo);
 
-            let icon = gtk::Image::from_icon_name(icon_name);
-            if !success {
-                icon.add_css_class("warning");
+            // Right side: Colored status circle
+            let status_circle = Label::new(None);
+            if success {
+                status_circle.set_markup("<span foreground=\"#26a269\">●</span>");
+            } else {
+                status_circle.set_markup("<span foreground=\"#e01b24\">●</span>");
             }
-            row.add_prefix(&icon);
+            status_circle.set_valign(gtk::Align::Center);
+            row.add_suffix(&status_circle);
 
             list_box.append(&row);
         }

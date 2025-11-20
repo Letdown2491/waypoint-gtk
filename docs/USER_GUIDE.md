@@ -34,8 +34,8 @@ waypoint
 ```
 
 On first launch, you'll see:
-- The main snapshot list (likely empty)
-- Disk space indicator at the bottom
+- The main snapshot list
+- Backup indicator at the bottom
 - A "Create Restore Point" button in the header
 
 ### Understanding the Interface
@@ -51,8 +51,12 @@ On first launch, you'll see:
 - Click a snapshot row to expand details and actions
 
 **Footer:**
-- Real-time disk space monitoring with color-coded warnings
-- Green = plenty of space, Yellow = low space, Red = critical
+- **Backup status** - Shows current backup status (click to open backup preferences)
+  - "All backups current • Last: X ago" = Healthy
+  - "X backups pending" = Waiting for drive connection
+  - "X backups failed" = Action needed
+  - "All destinations disconnected" = Connect backup drives
+  - "Backing up..." = Backup in progress
 
 ## Creating Your First Snapshot
 
@@ -259,8 +263,26 @@ Snapshots protect against software issues, but not:
 1. Connect an external drive (USB drive, external SSD, etc.)
 2. Open hamburger menu → **"Preferences"** → **"Backups"** tab
 3. Wait for drive to appear in **"Backup Destinations"** (auto-scans every 5 seconds)
-4. Toggle the switch next to your drive to **enable backups**
-5. Waypoint will automatically backup new snapshots when drive is connected
+4. Click on the drive to configure it
+5. Configure backup settings:
+   - **Enable backups** - Toggle switch to activate
+   - **Backup filter** - Choose which snapshots to backup:
+     - **All** - Backup every snapshot
+     - **Favorites** - Only backup pinned snapshots
+     - **Last 7 days** - Only recent snapshots
+     - **Last 30 days** - Last month of snapshots
+     - **Critical** - System snapshots only (excludes user data)
+   - **Backup triggers**:
+     - **Backup on snapshot creation** - Automatically backup when new snapshot is created
+     - **Backup on drive mount** - Backup pending snapshots when drive is connected
+   - **Retention** - Automatically delete backups older than X days
+6. Click **"Save"**
+
+**Automatic backup workflow:**
+1. You create a snapshot (manual or scheduled)
+2. If drive is connected: Backup starts immediately
+3. If drive is disconnected: Backup added to pending queue
+4. When drive reconnects: Pending backups process automatically
 
 ### Backup Types
 
@@ -294,6 +316,51 @@ Each drive shows:
 - **Number of backups** stored
 - **Last backup** timestamp
 - **Filesystem type** (Btrfs, NTFS, exFAT, etc.)
+
+### Managing Pending Backups
+
+**Viewing pending backups:**
+1. Open hamburger menu → **"Preferences"** → **"Backups"** tab
+2. Scroll to **"Pending Backups"** section
+3. See list of backups waiting for drive connection
+
+**Pending backups are processed automatically when:**
+- The destination drive is connected
+- "Backup on drive mount" is enabled
+- Waypoint is running
+
+**Manual processing:**
+- Connect the drive and wait 5-10 seconds
+- Backups process in chronological order (oldest first)
+- Watch progress in real-time
+
+### Handling Failed Backups
+
+**If backups fail:**
+1. Check the **"Failed Backups"** section in Backups preferences
+2. Review the error message for each failed backup
+3. Fix the issue (e.g., free up drive space, check permissions)
+4. Click **"Retry Failed"** button to retry all failed backups
+
+**Common failure causes:**
+- Drive full (no space left)
+- Drive disconnected during backup
+- Permission issues
+- Drive filesystem errors
+
+### Deleting Backups
+
+**To free up space on backup drives:**
+1. Go to Preferences → Backups
+2. Click on the destination drive
+3. View list of backups
+4. Select backups to delete
+5. Click **"Delete Selected"**
+6. Confirm deletion
+
+**Or use retention policies:**
+- Set "Delete backups older than X days" when configuring destination
+- Backups are automatically deleted after the specified age
 
 ## Retention Policies
 
@@ -381,6 +448,44 @@ When enabled, Waypoint automatically:
 3. Continues until usage drops below limit
 
 ## Advanced Features
+
+### Exclusion Patterns
+
+Reduce snapshot sizes by excluding unnecessary files and directories.
+
+**Accessing exclusions:**
+1. Open hamburger menu → **"Preferences"** → **"Exclusions"** tab
+2. View system defaults and add custom patterns
+
+**System default exclusions:**
+- `/var/cache` - Package manager caches
+- `/tmp` - Temporary files
+- Browser caches and other temporary data
+
+**Adding custom exclusions:**
+1. Click **"Add Pattern"** button
+2. Enter the pattern (e.g., `/var/log`)
+3. Choose pattern type:
+   - **Prefix** - Matches paths starting with pattern (e.g., `/var/cache`)
+   - **Suffix** - Matches paths ending with pattern (e.g., `.log`)
+   - **Glob** - Wildcard matching (e.g., `/home/*/.cache/*`)
+   - **Exact** - Exact path match only
+4. Add a description (optional but helpful)
+5. Click **"Add"**
+
+**Important notes:**
+- Exclusions only apply to **new snapshots**, not existing ones
+- Excluded paths are deleted from snapshots after creation
+- Be careful not to exclude important system files
+- Test with a manual snapshot before enabling for scheduled snapshots
+
+**Common patterns to exclude:**
+- `/var/cache` - Package caches (can be regenerated)
+- `/tmp` - Temporary files
+- `/var/tmp` - More temporary files
+- `.cache` - User application caches (use Contains pattern)
+- `.thumbnails` - Image thumbnails
+- `node_modules` - JavaScript dependencies (for developers)
 
 ### Package Tracking
 
@@ -492,6 +597,23 @@ Open any snapshot in your file manager:
 2. External drive backups (copy 2)
 3. Optional: Network share backups (copy 3)
 
+**Backup filter recommendations:**
+- **Home user:** Use "All" or "Favorites" filter
+  - Pin important snapshots before upgrades
+  - Regular backups capture everything
+- **Developer:** Use "Last 7 days" or "Favorites"
+  - Recent work is backed up
+  - Save space by not backing up old dev snapshots
+- **Server:** Use "Critical" filter
+  - Only backup system snapshots (/)
+  - Exclude user data if backed up separately
+
+**Backup automation tips:**
+- Enable "Backup on snapshot creation" for critical systems
+- Enable "Backup on drive mount" for portable drives
+- Use backup retention to manage drive space (e.g., 30-90 days)
+- Keep at least one backup drive offsite for disaster recovery
+
 ### Retention Guidelines
 
 **Conservative (lots of history):**
@@ -523,6 +645,30 @@ Set quota limit to **20-30% of total disk space** for good balance.
 - 500GB disk → 100-150GB quota
 - 1TB disk → 200-300GB quota
 - 2TB disk → 400-600GB quota
+
+### Exclusion Best Practices
+
+**Always exclude:**
+- `/tmp` and `/var/tmp` - Temporary files
+- `/var/cache` - Package manager caches
+- Browser caches (`~/.cache/mozilla`, `~/.cache/chromium`)
+
+**Consider excluding (depending on needs):**
+- Log files (`/var/log`) - If you don't need historical logs
+- Download directories - Large files you can re-download
+- Build artifacts (`node_modules`, `target/`, `build/`) - For developers
+
+**Never exclude:**
+- System configuration (`/etc`)
+- Boot files (`/boot`)
+- User documents and important data
+- Application binaries (`/usr`, `/bin`, `/sbin`)
+
+**Test your exclusions:**
+1. Add exclusion patterns
+2. Create a test snapshot
+3. Browse the snapshot to verify important files are still included
+4. Adjust patterns as needed
 
 ## Next Steps
 

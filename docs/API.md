@@ -18,10 +18,10 @@ Most write operations require one of four Polkit actions exposed in `data/tech.g
 
 | Action ID | Permission scope | Example methods |
 | --- | --- | --- |
-| `tech.geektoshi.waypoint.create-snapshot` | Create/backup snapshot data | `CreateSnapshot`, `BackupSnapshot`, `ListBackups` |
+| `tech.geektoshi.waypoint.create-snapshot` | Create/backup snapshot data | `CreateSnapshot`, `BackupSnapshot`, `ListBackups`, `DeleteBackup`, `ApplyBackupRetention` |
 | `tech.geektoshi.waypoint.delete-snapshot` | Delete snapshots | `DeleteSnapshot`, `CleanupSnapshots` |
 | `tech.geektoshi.waypoint.restore-snapshot` | Roll back or read snapshot contents | `RestoreSnapshot`, `RestoreFiles`, `CompareSnapshots`, `GetQuotaUsage`, `RestoreFromBackup` |
-| `tech.geektoshi.waypoint.configure-system` | Scheduler/quota configuration | `UpdateSchedulerConfig`, `SaveSchedulesConfig`, `RestartScheduler`, `EnableQuotas`, `DisableQuotas`, `SetQuotaLimit`, `SaveQuotaConfig` |
+| `tech.geektoshi.waypoint.configure-system` | Scheduler/quota/exclusion configuration | `UpdateSchedulerConfig`, `SaveSchedulesConfig`, `RestartScheduler`, `EnableQuotas`, `DisableQuotas`, `SetQuotaLimit`, `SaveQuotaConfig`, `SaveExcludeConfig`, `UpdateSnapshotMetadata` |
 
 Read-only helpers such as `ListSnapshots`, `VerifySnapshot`, `GetSchedulerStatus`, and `ScanBackupDestinations` do not require authentication. For write calls, Polkit may display a password prompt depending on local policy. The helper identifies callers via `org.freedesktop.DBus.GetConnectionUnixProcessID` plus `/proc/$PID/stat` start times (see `check_authorization` in `waypoint-helper/src/main.rs`).
 
@@ -118,14 +118,20 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
 
 ### Backup and external media
 
-- **ScanBackupDestinations** `() → (b, s json)`  
+- **ScanBackupDestinations** `() → (b, s json)`
   Lists mounted Btrfs destinations (USB, network, etc.) as `BackupDestination` JSON structures. Read-only.
 
-- **BackupSnapshot** `(s snapshot_path, s destination_mount, s parent_snapshot) → (b success, s result, t size_bytes)`  
+- **BackupSnapshot** `(s snapshot_path, s destination_mount, s parent_snapshot) → (b success, s result, t size_bytes)`
   Runs `btrfs send|receive` into `<destination>/waypoint-backups`. `parent_snapshot` may be empty for full backups. On success `result` is the new backup path; on failure it contains an error string. Requires `create-snapshot`.
 
 - **ListBackups** `(s destination_mount) → (b, s json)`
   Returns a JSON array of absolute subvolume paths below `<destination>/waypoint-backups`. Requires `create-snapshot`.
+
+- **DeleteBackup** `(s backup_path) → (b, s)`
+  Deletes a backup from an external drive. The `backup_path` must be a full path to the backup subvolume. Requires `create-snapshot`.
+
+- **ApplyBackupRetention** `(s destination_mount, u retention_days, s filter_json, s snapshots_json) → (b, s json)`
+  Applies retention policy to backups at a destination. Deletes backups older than `retention_days` that match the filter criteria. Returns JSON array of deleted backup paths. The `filter_json` is a serialized `BackupFilter` and `snapshots_json` is a serialized array of `SnapshotInfo`. Requires `create-snapshot`.
 
 - **GetDriveStats** `(s destination_mount) → (b, s json)`
   Returns a `DriveStats` JSON document with drive health statistics including total/used/available space, backup count, and timestamp information. No authentication required.
@@ -136,9 +142,17 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
 - **RestoreFromBackup** `(s backup_path, s snapshots_dir) → (b, s)`
   Receives a backup into the live snapshots directory. Automatically verifies restore integrity (file count, size comparison, read access, and subvolume validation). Returns error if verification fails. Requires `restore-snapshot`.
 
+### Configuration management
+
+- **SaveExcludeConfig** `(s config_toml) → (b, s)`
+  Writes `/etc/waypoint/exclude.toml` with snapshot exclusion patterns. The config should contain an array of pattern objects with `pattern`, `pattern_type`, `description`, `enabled`, and `system_default` fields. Requires `configure-system`.
+
+- **UpdateSnapshotMetadata** `(s snapshot_json) → (b, s)`
+  Updates snapshot metadata in `/var/lib/waypoint/snapshots.json`. Used to update computed fields like `size_bytes` or user-editable fields. The `snapshot_json` should be a serialized `SnapshotInfo` object. Requires `configure-system`.
+
 ### Miscellaneous
 
-- **UpdateSchedulerConfig**, **SaveSchedulesConfig**, **SaveQuotaConfig** all create parent directories if missing, so callers just supply the full serialized file contents.
+- **UpdateSchedulerConfig**, **SaveSchedulesConfig**, **SaveQuotaConfig**, and **SaveExcludeConfig** all create parent directories if missing, so callers just supply the full serialized file contents.
 - Most `(b, s)` calls keep `success=false` paired with a human-readable error message; callers should treat a returned `Err` as transport failure and inspect `success` otherwise.
 
 ## JSON Payloads

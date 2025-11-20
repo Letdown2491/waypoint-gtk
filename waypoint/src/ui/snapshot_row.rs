@@ -53,7 +53,7 @@ impl SnapshotRow {
         snapshot: &Snapshot,
         preferences: &SnapshotPreferences,
         on_action: F,
-        max_size: Option<u64>,
+        _max_size: Option<u64>,
         backup_status: &BackupStatus,
     ) -> adw::ActionRow
     where
@@ -109,8 +109,8 @@ impl SnapshotRow {
 
         row.add_prefix(&prefix_box);
 
-        // Build subtitle with metadata - cleaner format
-        let mut subtitle_parts = vec![snapshot.format_timestamp()];
+        // Build subtitle with metadata - cleaner format with relative time
+        let mut subtitle_parts = vec![snapshot.format_relative_time()];
 
         // Add size if available
         if let Some(size) = snapshot.size_bytes {
@@ -142,33 +142,6 @@ impl SnapshotRow {
         };
 
         row.set_subtitle(&subtitle);
-
-        // Add size indicator if size is available and max_size is provided
-        if let (Some(size), Some(max)) = (snapshot.size_bytes, max_size) {
-            if max > 0 {
-                let size_box = Box::new(Orientation::Vertical, 4);
-                size_box.set_valign(gtk::Align::Center);
-                size_box.set_margin_end(12);
-
-                // Size label
-                let size_label = gtk::Label::new(Some(&format_bytes(size)));
-                size_label.add_css_class("caption");
-                size_label.add_css_class("dim-label");
-                size_label.set_halign(gtk::Align::End);
-                size_box.append(&size_label);
-
-                // Level bar showing relative size
-                let level_bar = gtk::LevelBar::new();
-                level_bar.set_min_value(0.0);
-                level_bar.set_max_value(1.0);
-                level_bar.set_value((size as f64) / (max as f64));
-                level_bar.set_width_request(80);
-                level_bar.set_valign(gtk::Align::Center);
-                size_box.append(&level_bar);
-
-                row.add_suffix(&size_box);
-            }
-        }
 
         // Add action buttons - primary action + menu
         let button_box = Box::new(Orientation::Horizontal, 6);

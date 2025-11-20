@@ -859,6 +859,295 @@ pub fn list_backups(destination_mount: &str) -> Result<Vec<String>> {
     Ok(backups)
 }
 
+/// Delete a backup from destination
+///
+/// # Arguments
+/// * `backup_path` - Full path to the backup to delete (e.g., /mnt/backup/waypoint-backups/snapshot-name)
+///
+/// # Returns
+/// * `Ok(())` if deletion was successful
+/// * `Err(_)` if deletion failed
+///
+/// # Security
+/// - Validates backup_path is within a waypoint-backups directory
+/// - Handles both btrfs subvolume backups and rsync directory backups
+pub fn delete_backup(backup_path: &str) -> Result<()> {
+    let path = Path::new(backup_path);
+
+    // Security check: ensure path is within a waypoint-backups directory
+    let path_str = path.to_string_lossy();
+    if !path_str.contains("/waypoint-backups/") {
+        bail!("Security: Backup path must be within a waypoint-backups directory");
+    }
+
+    // Check if path exists
+    if !path.exists() {
+        bail!("Backup does not exist: {}", backup_path);
+    }
+
+    // Check if it's a directory
+    if !path.is_dir() {
+        bail!("Backup path is not a directory: {}", backup_path);
+    }
+
+    log::info!("Deleting backup: {}", backup_path);
+
+    // Check if the backup contains btrfs subvolumes
+    let has_btrfs_subvolumes = if let Ok(entries) = fs::read_dir(path) {
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .any(|entry| {
+                Command::new("btrfs")
+                    .arg("subvolume")
+                    .arg("show")
+                    .arg(entry.path())
+                    .output()
+                    .map(|output| output.status.success())
+                    .unwrap_or(false)
+            })
+    } else {
+        false
+    };
+
+    if has_btrfs_subvolumes {
+        // Delete btrfs subvolumes first
+        log::info!("Backup contains btrfs subvolumes, deleting each subvolume");
+
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let subvol_path = entry.path();
+
+            if !subvol_path.is_dir() {
+                continue;
+            }
+
+            // Check if it's a btrfs subvolume
+            let is_subvolume = Command::new("btrfs")
+                .arg("subvolume")
+                .arg("show")
+                .arg(&subvol_path)
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false);
+
+            if is_subvolume {
+                log::info!("Deleting btrfs subvolume: {}", subvol_path.display());
+                let output = Command::new("btrfs")
+                    .arg("subvolume")
+                    .arg("delete")
+                    .arg(&subvol_path)
+                    .output()
+                    .with_context(|| format!("Failed to delete subvolume: {}", subvol_path.display()))?;
+
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    bail!("Failed to delete subvolume {}: {}", subvol_path.display(), stderr);
+                }
+            }
+        }
+    }
+
+    // Delete the parent directory
+    log::info!("Removing backup directory: {}", backup_path);
+    fs::remove_dir_all(path)
+        .with_context(|| format!("Failed to remove backup directory: {}", backup_path))?;
+
+    log::info!("Successfully deleted backup: {}", backup_path);
+    Ok(())
+}
+
+/// Apply retention policy to backups at a destination
+///
+/// # Arguments
+/// * `destination_mount` - Mount point of the destination
+/// * `retention_days` - Maximum age of backups to keep (in days)
+/// * `filter` - Current backup filter to determine which backups should be protected
+/// * `all_snapshots` - All available snapshots (for filter evaluation)
+///
+/// # Returns
+/// * `Vec<String>` - List of backup paths that were deleted
+///
+/// # Strategy
+/// 1. List all backups at destination
+/// 2. For each backup:
+///    - Calculate age
+///    - Check if it matches current filter
+///    - Mark for deletion if: older than retention_days AND doesn't match filter
+/// 3. Always keep at least 1 backup (safety minimum)
+/// 4. Delete marked backups
+pub fn apply_backup_retention(
+    destination_mount: &str,
+    retention_days: u32,
+    filter: &waypoint_common::BackupFilter,
+    all_snapshots: &[waypoint_common::SnapshotInfo],
+) -> Result<Vec<String>> {
+    log::info!(
+        "Applying backup retention policy: {} days, filter: {:?}",
+        retention_days,
+        filter
+    );
+
+    let backup_dir = Path::new(destination_mount).join("waypoint-backups");
+
+    if !backup_dir.exists() {
+        log::debug!("No backup directory found at {}", backup_dir.display());
+        return Ok(Vec::new());
+    }
+
+    // List all backups with their metadata
+    #[derive(Debug)]
+    struct BackupInfo {
+        path: PathBuf,
+        name: String,
+        age_days: i64,
+        matches_filter: bool,
+        timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    let mut backups: Vec<BackupInfo> = Vec::new();
+    let now = chrono::Utc::now();
+
+    for entry in std::fs::read_dir(&backup_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if !path.is_dir() {
+            continue;
+        }
+
+        let name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Get backup age from directory modification time
+        let age_days = if let Ok(metadata) = entry.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                let duration = now.signed_duration_since(
+                    chrono::DateTime::<chrono::Utc>::from(modified)
+                );
+                duration.num_days()
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        // Find corresponding snapshot info
+        let snapshot_info = all_snapshots.iter().find(|s| s.name == name);
+
+        // Check if this backup matches the current filter
+        let matches_filter = if let Some(snapshot) = snapshot_info {
+            // For now, we'll be conservative and check if the snapshot still exists
+            // and matches the filter. If we can't determine, we keep it.
+            let is_favorite = false; // We don't have favorite info here, be conservative
+            filter.matches(snapshot, is_favorite, all_snapshots)
+        } else {
+            // Snapshot no longer exists in metadata - check age only
+            false
+        };
+
+        let timestamp = snapshot_info.map(|s| s.timestamp);
+
+        backups.push(BackupInfo {
+            path: path.clone(),
+            name: name.clone(),
+            age_days,
+            matches_filter,
+            timestamp,
+        });
+
+        log::debug!(
+            "Backup '{}': age={} days, matches_filter={}, exists_in_metadata={}",
+            name,
+            age_days,
+            matches_filter,
+            snapshot_info.is_some()
+        );
+    }
+
+    if backups.is_empty() {
+        log::debug!("No backups found to evaluate for retention");
+        return Ok(Vec::new());
+    }
+
+    // Sort by timestamp (oldest first) for predictable deletion order
+    backups.sort_by(|a, b| {
+        match (&a.timestamp, &b.timestamp) {
+            (Some(ta), Some(tb)) => ta.cmp(tb),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.age_days.cmp(&b.age_days),
+        }
+    });
+
+    // Determine which backups to delete
+    let mut to_delete: Vec<&BackupInfo> = Vec::new();
+
+    for backup in &backups {
+        let should_delete =
+            // Must be older than retention period
+            backup.age_days > retention_days as i64
+            // AND must not match current filter (protected backups)
+            && !backup.matches_filter;
+
+        if should_delete {
+            to_delete.push(backup);
+        }
+    }
+
+    // Safety minimum: always keep at least 1 backup
+    let backups_to_keep = backups.len() - to_delete.len();
+    if backups_to_keep == 0 && !backups.is_empty() {
+        log::warn!(
+            "Retention policy would delete all {} backups. Keeping the newest backup as safety minimum.",
+            backups.len()
+        );
+        // Remove the newest backup from deletion list (it's at the end after sorting)
+        if !to_delete.is_empty() {
+            to_delete.pop();
+        }
+    }
+
+    if to_delete.is_empty() {
+        log::info!("No backups need to be deleted by retention policy");
+        return Ok(Vec::new());
+    }
+
+    log::info!(
+        "Retention policy: deleting {} of {} backups",
+        to_delete.len(),
+        backups.len()
+    );
+
+    let mut deleted_paths = Vec::new();
+
+    // Delete the backups
+    for backup in to_delete {
+        log::info!(
+            "Deleting backup '{}' (age: {} days, matches_filter: {})",
+            backup.name,
+            backup.age_days,
+            backup.matches_filter
+        );
+
+        match delete_backup(&backup.path.to_string_lossy()) {
+            Ok(()) => {
+                deleted_paths.push(backup.path.to_string_lossy().to_string());
+            }
+            Err(e) => {
+                log::error!("Failed to delete backup '{}': {}", backup.name, e);
+                // Continue with other deletions even if one fails
+            }
+        }
+    }
+
+    log::info!("Retention policy deleted {} backups", deleted_paths.len());
+    Ok(deleted_paths)
+}
+
 /// Restore a backup from destination to snapshots directory
 /// Automatically detects if backup is btrfs subvolume or rsync directory
 ///
@@ -1200,21 +1489,6 @@ pub fn get_drive_stats(destination_mount: &str) -> Result<DriveStats> {
     })
 }
 
-/// Check if a path is on a btrfs filesystem
-fn is_btrfs_filesystem(path: &Path) -> Result<bool> {
-    let output = Command::new("stat")
-        .args(["-f", "-c", "%T"])
-        .arg(path)
-        .output()?;
-
-    if !output.status.success() {
-        bail!("Failed to check filesystem type");
-    }
-
-    let fstype = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(fstype == "btrfs")
-}
-
 /// Verify a restored snapshot's integrity
 ///
 /// Performs comprehensive integrity checks on a restored snapshot:
@@ -1340,22 +1614,6 @@ pub fn verify_backup(
     let snapshot_path = Path::new(snapshot_path);
     let destination_mount = Path::new(destination_mount);
 
-    // Ensure snapshot lives within configured snapshot directory
-    let canonical_snapshot = snapshot_path
-        .canonicalize()
-        .context("Failed to resolve snapshot path")?;
-    let canonical_snapshot_root = config
-        .snapshot_dir
-        .canonicalize()
-        .context("Failed to resolve configured snapshot directory")?;
-    if !canonical_snapshot.starts_with(&canonical_snapshot_root) {
-        anyhow::bail!(
-            "Security: Snapshot path {} is outside configured snapshot directory {}",
-            canonical_snapshot.display(),
-            canonical_snapshot_root.display()
-        );
-    }
-
     // Ensure destination mount is a valid backup destination
     let canonical_destination = validate_backup_destination(
         destination_mount
@@ -1363,17 +1621,27 @@ pub fn verify_backup(
             .ok_or_else(|| anyhow::anyhow!("Destination mount contains invalid UTF-8"))?,
     )?;
 
-    // Check if original snapshot exists
-    if !canonical_snapshot.exists() {
-        return Ok(VerificationResult {
-            success: false,
-            message: "Original snapshot not found".to_string(),
-            details: vec![format!(
-                "Snapshot path {} does not exist",
-                canonical_snapshot.display()
-            )],
-        });
-    }
+    // Check if original snapshot exists (it might have been deleted by retention)
+    let canonical_snapshot = if snapshot_path.exists() {
+        // Validate it's in the correct directory
+        let canonical = snapshot_path
+            .canonicalize()
+            .context("Failed to resolve snapshot path")?;
+        let canonical_snapshot_root = config
+            .snapshot_dir
+            .canonicalize()
+            .context("Failed to resolve configured snapshot directory")?;
+        if !canonical.starts_with(&canonical_snapshot_root) {
+            anyhow::bail!(
+                "Security: Snapshot path {} is outside configured snapshot directory {}",
+                canonical.display(),
+                canonical_snapshot_root.display()
+            );
+        }
+        Some(canonical)
+    } else {
+        None
+    };
 
     // Find the backup directory
     let waypoint_backups = canonical_destination.join("waypoint-backups");
@@ -1394,78 +1662,189 @@ pub fn verify_backup(
         });
     }
 
-    // Check if destination is btrfs
-    let is_btrfs_dest = is_btrfs_filesystem(&canonical_destination)?;
+    // Check if this is a btrfs send/receive backup or rsync backup
+    // For btrfs backups, the subdirectories (@ @home @var etc) are btrfs subvolumes
+    // For rsync backups, they are regular directories
+    let is_btrfs_backup = if let Ok(entries) = fs::read_dir(&backup_path) {
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .any(|entry| {
+                Command::new("btrfs")
+                    .arg("subvolume")
+                    .arg("show")
+                    .arg(entry.path())
+                    .output()
+                    .map(|output| output.status.success())
+                    .unwrap_or(false)
+            })
+    } else {
+        false
+    };
+
     let mut details = Vec::new();
 
-    if is_btrfs_dest {
-        // For btrfs: verify subvolume properties
-        details.push("Destination filesystem: btrfs".to_string());
+    if is_btrfs_backup {
+        // For btrfs subvolume backups: verify each subvolume
+        details.push("Backup type: btrfs send/receive".to_string());
 
-        // Check if backup is a valid btrfs subvolume
-        let output = Command::new("btrfs")
-            .args(["subvolume", "show", &backup_path.to_string_lossy()])
-            .output()?;
-
-        if !output.status.success() {
-            return Ok(VerificationResult {
-                success: false,
-                message: "Backup is not a valid btrfs subvolume".to_string(),
-                details: vec![
-                    "Expected a btrfs subvolume but verification failed".to_string(),
-                ],
-            });
-        }
-
-        details.push("✓ Backup is a valid btrfs subvolume".to_string());
-
-        // Compare basic metadata
-        let backup_info = String::from_utf8_lossy(&output.stdout);
-        if backup_info.contains("Snapshot(s):") || backup_info.contains("UUID:") {
-            details.push("✓ Subvolume metadata present".to_string());
-        }
-    } else {
-        // For non-btrfs: compare file counts and total size
-        details.push("Destination filesystem: non-btrfs".to_string());
-
-        let orig_stats = get_directory_stats(&canonical_snapshot)?;
-        let backup_stats = get_directory_stats(&backup_path)?;
-
-        details.push(format!("Original: {} files, {} MB",
-            orig_stats.0,
-            orig_stats.1 / (1024 * 1024)
-        ));
-        details.push(format!("Backup: {} files, {} MB",
-            backup_stats.0,
-            backup_stats.1 / (1024 * 1024)
-        ));
-
-        // Allow small differences due to filesystem overhead
-        let size_diff_percent = if orig_stats.1 > 0 {
-            ((backup_stats.1 as i64 - orig_stats.1 as i64).abs() as f64 / orig_stats.1 as f64) * 100.0
-        } else {
-            0.0
+        // Load snapshot metadata to get expected subvolumes
+        let metadata = match load_snapshot_metadata(snapshot_id) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(VerificationResult {
+                    success: false,
+                    message: format!("Failed to load snapshot metadata: {e}"),
+                    details: vec!["Cannot verify backup without snapshot metadata".to_string()],
+                });
+            }
         };
 
-        if backup_stats.0 != orig_stats.0 {
-            return Ok(VerificationResult {
-                success: false,
-                message: format!("File count mismatch: {} files backed up vs {} original",
-                    backup_stats.0, orig_stats.0),
-                details,
-            });
+        // Verify each subvolume exists and is valid
+        for subvol in &metadata.subvolumes {
+            // Convert mount point to subdir name (e.g., "/" -> "root", "/home" -> "home")
+            let subvol_name = mount_point_to_subdir_name(subvol);
+
+            let backup_subvol = backup_path.join(&subvol_name);
+
+            if !backup_subvol.exists() {
+                return Ok(VerificationResult {
+                    success: false,
+                    message: format!("Backup missing subvolume '{}' (from mount point '{}')",
+                        subvol_name, subvol.display()),
+                    details,
+                });
+            }
+
+            // Verify it's a btrfs subvolume
+            let is_subvolume = Command::new("btrfs")
+                .arg("subvolume")
+                .arg("show")
+                .arg(&backup_subvol)
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false);
+
+            if !is_subvolume {
+                return Ok(VerificationResult {
+                    success: false,
+                    message: format!("Backup subvolume '{subvol_name}' is not a valid btrfs subvolume"),
+                    details,
+                });
+            }
+
+            details.push(format!("✓ Subvolume '{subvol_name}' is valid btrfs subvolume", ));
         }
 
-        if size_diff_percent > 5.0 {
-            return Ok(VerificationResult {
-                success: false,
-                message: format!("Size difference too large: {size_diff_percent:.1}%"),
-                details,
-            });
-        }
+        details.push("✓ All subvolumes verified".to_string());
+    } else {
+        // For rsync backups: compare file counts and total size for each subvolume
+        details.push("Backup type: rsync".to_string());
 
-        details.push("✓ File counts match".to_string());
-        details.push("✓ Sizes are consistent".to_string());
+        // Check if we have the original snapshot for comparison
+        if let Some(ref canonical_snapshot) = canonical_snapshot {
+            // Load snapshot metadata to get list of subvolumes
+            let metadata = match load_snapshot_metadata(snapshot_id) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Ok(VerificationResult {
+                        success: false,
+                        message: format!("Failed to load snapshot metadata: {e}"),
+                        details: vec!["Cannot verify backup without snapshot metadata".to_string()],
+                    });
+                }
+            };
+
+            let mut total_orig_files = 0;
+            let mut total_orig_size = 0;
+            let mut total_backup_files = 0;
+            let mut total_backup_size = 0;
+
+            // Verify each subvolume
+            for subvol in &metadata.subvolumes {
+                let subvol_name = subvol
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+
+                // Original subvolume path: /.snapshots/snapshot-name/@/root/
+                let orig_subvol = canonical_snapshot.join(subvol_name).join("root");
+
+                // Backup subvolume path: /mnt/backup/waypoint-backups/snapshot-name/@/
+                let backup_subvol = backup_path.join(subvol_name);
+
+                if !orig_subvol.exists() {
+                    log::warn!("Original subvolume path does not exist: {}", orig_subvol.display());
+                    continue;
+                }
+
+                if !backup_subvol.exists() {
+                    return Ok(VerificationResult {
+                        success: false,
+                        message: format!("Backup missing subvolume: {subvol_name}"),
+                        details,
+                    });
+                }
+
+                let orig_stats = get_directory_stats(&orig_subvol)?;
+                let backup_stats = get_directory_stats(&backup_subvol)?;
+
+                total_orig_files += orig_stats.0;
+                total_orig_size += orig_stats.1;
+                total_backup_files += backup_stats.0;
+                total_backup_size += backup_stats.1;
+
+                details.push(format!("Subvolume '{subvol_name}': {} files, {} MB",
+                    backup_stats.0,
+                    backup_stats.1 / (1024 * 1024)
+                ));
+            }
+
+            details.push(format!("Total: {} files, {} MB (original: {} files, {} MB)",
+                total_backup_files,
+                total_backup_size / (1024 * 1024),
+                total_orig_files,
+                total_orig_size / (1024 * 1024)
+            ));
+
+            // Allow small differences due to filesystem overhead
+            let size_diff_percent = if total_orig_size > 0 {
+                ((total_backup_size as i64 - total_orig_size as i64).abs() as f64 / total_orig_size as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            if total_backup_files != total_orig_files {
+                return Ok(VerificationResult {
+                    success: false,
+                    message: format!("File count mismatch: {} files backed up vs {} original",
+                        total_backup_files, total_orig_files),
+                    details,
+                });
+            }
+
+            if size_diff_percent > 5.0 {
+                return Ok(VerificationResult {
+                    success: false,
+                    message: format!("Size difference too large: {size_diff_percent:.1}%"),
+                    details,
+                });
+            }
+
+            details.push("✓ File counts match".to_string());
+            details.push("✓ Sizes are consistent".to_string());
+        } else {
+            // Original snapshot no longer exists - just verify backup is readable
+            details.push("⚠ Original snapshot no longer exists (may have been deleted by retention)".to_string());
+            details.push("✓ Backup exists and is readable".to_string());
+
+            // Count backup files
+            let backup_stats = get_directory_stats(&backup_path)?;
+            details.push(format!("Backup: {} files, {} MB",
+                backup_stats.0,
+                backup_stats.1 / (1024 * 1024)
+            ));
+        }
     }
 
     // Check read access

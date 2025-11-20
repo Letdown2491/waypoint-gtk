@@ -1,6 +1,7 @@
 //! Helper functions for MainWindow
 
 use crate::btrfs;
+use crate::backup_manager::{BackupManager, BackupStatusType};
 use gtk::prelude::*;
 use gtk::{glib, Label};
 use libadwaita as adw;
@@ -11,6 +12,7 @@ use std::rc::Rc;
 ///
 /// Queries the available space for the root filesystem and updates the label and level bar
 /// with color-coded visuals based on remaining space percentage.
+#[allow(dead_code)] // Kept for potential future use
 pub fn update_disk_space_label(label: &Label, level_bar: &gtk::LevelBar) {
     use std::path::PathBuf;
 
@@ -146,5 +148,50 @@ pub fn create_status_banner() -> (adw::Banner, bool) {
 pub fn stop_progress_pulse(handle: &Rc<RefCell<Option<glib::SourceId>>>) {
     if let Some(source_id) = handle.borrow_mut().take() {
         source_id.remove();
+    }
+}
+
+/// Update the backup status label with current status
+///
+/// Queries the backup manager for the current status and updates the label
+/// with appropriate styling and tooltips.
+pub fn update_backup_status_label(label: &Label, backup_manager: &Rc<RefCell<BackupManager>>) {
+    let bm = backup_manager.borrow();
+    let summary = bm.get_backup_status_summary();
+
+    label.set_text(&summary.message);
+
+    // Remove existing CSS classes
+    label.remove_css_class("warning");
+    label.remove_css_class("error");
+    label.remove_css_class("success");
+    label.remove_css_class("dim-label");
+
+    // Apply styling based on status type
+    match summary.status_type {
+        BackupStatusType::NotConfigured => {
+            label.add_css_class("dim-label");
+            label.set_tooltip_text(Some("Click to configure backup destinations"));
+        }
+        BackupStatusType::Healthy => {
+            label.add_css_class("success");
+            label.set_tooltip_text(Some("All backup destinations are up to date"));
+        }
+        BackupStatusType::Active => {
+            label.add_css_class("dim-label");
+            label.set_tooltip_text(Some("Backup in progress..."));
+        }
+        BackupStatusType::Pending => {
+            label.add_css_class("warning");
+            label.set_tooltip_text(Some("Click to view pending backups"));
+        }
+        BackupStatusType::Failed => {
+            label.add_css_class("error");
+            label.set_tooltip_text(Some("Click to view failed backups"));
+        }
+        BackupStatusType::Disconnected => {
+            label.add_css_class("warning");
+            label.set_tooltip_text(Some("Some backup destinations are not connected"));
+        }
     }
 }

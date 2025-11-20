@@ -13,18 +13,26 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Per-user snapshot notes and pinned favorites
 - Search and filter with real-time text search and date ranges
 - Browse snapshots in file manager via xdg-open
+- Snapshot exclusion patterns to omit caches, temporary files, and custom paths
+- System-default and user-defined exclusion rules with prefix/suffix/glob matching
 
 ## Backup & Recovery
 
 - Automatic backup to external drives with real-time progress tracking
-- Incremental backups to Btrfs drives using btrfs send/receive
+- Incremental backups to Btrfs drives using btrfs send/receive with parent tracking
 - Full backups to non-Btrfs drives (NTFS, exFAT, network shares) via rsync
 - Automatic backup destination discovery and mount monitoring
+- Per-destination backup filters (All, Favorites, LastN days, Critical snapshots)
+- Flexible backup triggers (on snapshot creation, on drive mount, manual)
 - Backup verification with file count and size comparison
 - Automatic integrity verification for restored snapshots
 - Pending backup queue with automatic retry when destinations become available
+- Chronological backup processing (oldest first) to maintain parent relationships
 - Restore snapshots from external backup
+- Delete individual backups from external drives
+- Age-based backup retention policies per destination
 - Drive health statistics (space usage, backup count, timestamps)
+- Real-time backup status footer showing healthy/pending/failed/disconnected states
 
 ## Package Management
 
@@ -74,7 +82,13 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Toast notifications for in-app feedback
 - Desktop notifications for all major operations
 - Auto-refresh UI every 30 seconds
-- Command-line interface for scripting and automation
+- Backup status footer with live monitoring and clickable configuration
+- Comprehensive command-line interface (waypoint-cli) for scripting and automation
+  - All snapshot operations (create, list, delete, restore, verify, compare)
+  - Complete backup management (backup, list-backups, verify-backup, restore-backup)
+  - File restore, quota control, and drive scanning
+  - JSON output mode for machine-readable results
+  - Full feature parity with GUI for all core operations
 
 ## Security & Performance
 
@@ -83,7 +97,18 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Rate limiting with mutex poisoning detection to prevent DoS attacks
 - TOCTOU mitigation via inode verification
 - Input validation preventing command injection and path traversal
+- Symlink validation for safe file restoration operations
 - Automatic resource cleanup verification in error paths
 - Filesystem query caching with TTL for performance
 - Parallel computation for snapshot size calculations
 - Background threading for all blocking operations
+
+## Integration & External Tools
+
+- Complete D-Bus API for third-party tool integration
+- D-Bus signal emissions (SnapshotCreated, BackupProgress) for event-driven workflows
+- Polkit-based authorization with fine-grained permission control
+- Integration with Nebula package manager for automatic pre-upgrade snapshots
+- Runit service integration for scheduled snapshots
+- Environment variable configuration for custom paths and testing
+- Machine-readable JSON output for scripting and monitoring

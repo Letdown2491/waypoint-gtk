@@ -6,7 +6,7 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
-use waypoint_common::WaypointConfig;
+use waypoint_common::{SnapshotInfo, WaypointConfig};
 
 use crate::packages::Package;
 
@@ -93,6 +93,55 @@ impl Snapshot {
     /// Format timestamp for display
     pub fn format_timestamp(&self) -> String {
         self.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
+    }
+
+    /// Format timestamp as relative time (e.g., "2 hours ago", "Yesterday")
+    pub fn format_relative_time(&self) -> String {
+        let now = chrono::Local::now();
+        let duration = now.signed_duration_since(self.timestamp);
+
+        if duration.num_seconds() < 60 {
+            "Just now".to_string()
+        } else if duration.num_minutes() < 60 {
+            let mins = duration.num_minutes();
+            if mins == 1 {
+                "1 minute ago".to_string()
+            } else {
+                format!("{} minutes ago", mins)
+            }
+        } else if duration.num_hours() < 24 {
+            let hours = duration.num_hours();
+            if hours == 1 {
+                "1 hour ago".to_string()
+            } else {
+                format!("{} hours ago", hours)
+            }
+        } else if duration.num_days() == 1 {
+            "Yesterday".to_string()
+        } else if duration.num_days() < 7 {
+            format!("{} days ago", duration.num_days())
+        } else if duration.num_weeks() == 1 {
+            "1 week ago".to_string()
+        } else if duration.num_weeks() < 4 {
+            format!("{} weeks ago", duration.num_weeks())
+        } else {
+            // For older snapshots, show the date
+            self.timestamp.format("%b %d, %Y").to_string()
+        }
+    }
+}
+
+/// Convert GUI Snapshot to common SnapshotInfo (for use with backup filtering)
+impl From<&Snapshot> for SnapshotInfo {
+    fn from(s: &Snapshot) -> Self {
+        SnapshotInfo {
+            name: s.name.clone(),
+            timestamp: s.timestamp,
+            description: s.description.clone(),
+            package_count: s.package_count,
+            packages: s.packages.as_ref().iter().map(|p| p.into()).collect(),
+            subvolumes: s.subvolumes.as_ref().clone(),
+        }
     }
 }
 
