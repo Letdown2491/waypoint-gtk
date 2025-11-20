@@ -8,6 +8,9 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Rollback preview showing package changes, kernel version comparison, and affected subvolumes
 - Snapshot integrity verification via D-Bus
 - Multi-subvolume support (/, /home, /var, etc.) with atomic operations
+- Automatic fstab validation during restore to prevent boot failures
+- Safety checks for writable snapshot copies with automatic cleanup
+- Clear error messages for missing or invalid restore requirements
 - Individual file/directory restoration without full system rollback
 - Snapshot comparison with file-level diff visualization
 - Per-user snapshot notes and pinned favorites

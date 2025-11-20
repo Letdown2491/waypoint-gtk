@@ -117,6 +117,12 @@
 - Sparkline visualization in snapshot schedules showing actual snapshot creation history instead of expected time slots.
 - Backup preferences UI simplified by removing redundant header section and manual scan button (auto-scans every 5 seconds).
 - Backup pending queue UI cleaned up to remove duplicate "No pending backups" empty state message.
+- Automatic cleanup of orphaned writable snapshot copies after restore operations preventing disk space waste from accumulated temporary subvolumes.
+- CleanupWritableSnapshots D-Bus method for removing orphaned root-writable subvolumes created during multi-subvolume restores with safety checks preventing deletion of currently booted or default subvolumes.
+- CLI cleanup-writable-snapshots command for manual cleanup of orphaned writable snapshot copies with detailed output showing deleted paths.
+- Comprehensive fstab validation during multi-subvolume restores checking syntax (4-6 fields per entry), mount options (required subvol for btrfs, rw for root), and snapshot subvolume existence preventing boot failures from malformed configuration.
+- Multi-subvolume restore validation failing early when /etc/fstab is missing with clear error messages explaining requirements and suggesting alternatives (create new snapshot or restore only root subvolume).
+- Writable snapshot cleanup audit logging with detailed tracking of deleted subvolumes and automatic cleanup invocation after successful restore operations.
 - Documentation reorganized with technical docs moved to docs/ folder (API.md, ARCHITECTURE.md, FEATURES.md, PERFORMANCE_TESTING.md, SECURITY.md, CLI.md, USER_GUIDE.md, TESTING.md, TROUBLESHOOTING.md).
 - README.md features section condensed to concise summary with link to full FEATURES.md for better first-time user experience.
 - API.md updated with SaveExcludeConfig, UpdateSnapshotMetadata, DeleteBackup, and ApplyBackupRetention D-Bus methods with authorization requirements.

@@ -18,10 +18,6 @@ Waypoint integration is available on [Nebula](https://github.com/Letdown2491/neb
   <img src="assets/screenshots/3-waypointquotas.png" alt="Waypoint Snapshot Quotas" width="49%">
   <img src="assets/screenshots/4-waypointbackups.png" alt="Waypoint Snapshot Backups" width="49%">
 </p>
-<p align="center">
-  <img src="assets/screenshots/5-waypointdrives.png" alt="Waypoint Destination Drive" width="49%">
-  <img src="assets/screenshots/6-waypointanalytics.png" alt="Waypoint Snapshot Analytics" width="49%">
-</p>
 
 ## Features
 
@@ -108,7 +104,7 @@ Enable automatic periodic snapshots:
 # Enable the scheduler service
 sudo ln -s /etc/sv/waypoint-scheduler /var/service/
 
-# Configure via GUI or edit /etc/waypoint/scheduler.conf
+# Configure via GUI (Preferences → Scheduled Snapshots)
 ```
 
 ## Documentation

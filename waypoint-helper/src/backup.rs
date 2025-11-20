@@ -869,31 +869,26 @@ pub fn list_backups(destination_mount: &str) -> Result<Vec<String>> {
 /// * `Err(_)` if deletion failed
 ///
 /// # Security
-/// - Validates backup_path is within a waypoint-backups directory
+/// - Validates backup_path is within a waypoint-backups directory on a trusted destination
+/// - Uses canonicalization to prevent path traversal attacks
 /// - Handles both btrfs subvolume backups and rsync directory backups
 pub fn delete_backup(backup_path: &str) -> Result<()> {
     let path = Path::new(backup_path);
 
-    // Security check: ensure path is within a waypoint-backups directory
-    let path_str = path.to_string_lossy();
-    if !path_str.contains("/waypoint-backups/") {
-        bail!("Security: Backup path must be within a waypoint-backups directory");
-    }
-
-    // Check if path exists
-    if !path.exists() {
-        bail!("Backup does not exist: {}", backup_path);
-    }
+    // Security check: validate path is within waypoint-backups on a trusted destination
+    // This uses canonicalization and checks against scanned backup destinations
+    let validated_path = validate_backup_path(path)
+        .context("Failed to validate backup path for deletion")?;
 
     // Check if it's a directory
-    if !path.is_dir() {
-        bail!("Backup path is not a directory: {}", backup_path);
+    if !validated_path.is_dir() {
+        bail!("Backup path is not a directory: {}", validated_path.display());
     }
 
-    log::info!("Deleting backup: {}", backup_path);
+    log::info!("Deleting backup: {}", validated_path.display());
 
     // Check if the backup contains btrfs subvolumes
-    let has_btrfs_subvolumes = if let Ok(entries) = fs::read_dir(path) {
+    let has_btrfs_subvolumes = if let Ok(entries) = fs::read_dir(&validated_path) {
         entries
             .filter_map(|e| e.ok())
             .filter(|e| e.path().is_dir())
@@ -914,7 +909,7 @@ pub fn delete_backup(backup_path: &str) -> Result<()> {
         // Delete btrfs subvolumes first
         log::info!("Backup contains btrfs subvolumes, deleting each subvolume");
 
-        for entry in fs::read_dir(path)? {
+        for entry in fs::read_dir(&validated_path)? {
             let entry = entry?;
             let subvol_path = entry.path();
 
@@ -949,11 +944,11 @@ pub fn delete_backup(backup_path: &str) -> Result<()> {
     }
 
     // Delete the parent directory
-    log::info!("Removing backup directory: {}", backup_path);
-    fs::remove_dir_all(path)
-        .with_context(|| format!("Failed to remove backup directory: {}", backup_path))?;
+    log::info!("Removing backup directory: {}", validated_path.display());
+    fs::remove_dir_all(&validated_path)
+        .with_context(|| format!("Failed to remove backup directory: {}", validated_path.display()))?;
 
-    log::info!("Successfully deleted backup: {}", backup_path);
+    log::info!("Successfully deleted backup: {}", validated_path.display());
     Ok(())
 }
 

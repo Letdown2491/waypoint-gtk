@@ -36,6 +36,8 @@ SNAPSHOT OPERATIONS:
     restore <name>      Restore a snapshot (rollback system)
     cleanup [--schedule-based] [--dry-run]
                         Apply retention policy to delete old snapshots
+    cleanup-writable-snapshots
+                        Remove orphaned writable snapshot copies
     verify <name> [--json]
                         Verify snapshot integrity
     preview-restore <name> [--json]
@@ -741,6 +743,25 @@ cmd_cleanup() {
     fi
 }
 
+cmd_cleanup_writable_snapshots() {
+    echo "Cleaning up orphaned writable snapshots..."
+    echo
+
+    local result
+    result=$(busctl call --system \
+        "$DBUS_SERVICE" \
+        "$DBUS_PATH" \
+        "$DBUS_INTERFACE" \
+        CleanupWritableSnapshots 2>&1)
+
+    if echo "$result" | grep -q "true"; then
+        echo "✓ $(echo "$result" | sed 's/^bs true s "//' | sed 's/"$//' | sed 's/\\n/\n/g')"
+    else
+        echo "✗ Failed: $(echo "$result" | sed 's/^bs false s "//' | sed 's/"$//')" >&2
+        exit 1
+    fi
+}
+
 # HIGH PRIORITY: Backup Operations
 
 cmd_backup() {
@@ -1391,6 +1412,10 @@ case "$COMMAND" in
     cleanup)
         check_dbus_service
         cmd_cleanup "$@"
+        ;;
+    cleanup-writable-snapshots)
+        check_dbus_service
+        cmd_cleanup_writable_snapshots
         ;;
     verify)
         check_dbus_service

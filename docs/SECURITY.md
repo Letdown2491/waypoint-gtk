@@ -204,15 +204,17 @@ Example log entry:
 
 ### Viewing Logs
 
+**Note:** waypoint-helper is D-Bus activated on-demand and does not run as a persistent service. Logs are primarily available from the scheduler service.
+
 ```bash
-# View waypoint operations
-journalctl -u waypoint-helper
+# View scheduler logs (runit/svlogd)
+sudo tail -f /var/log/waypoint-scheduler/current
 
-# Monitor in real-time
-journalctl -u waypoint-helper -f
+# View recent scheduler activity
+sudo tail -100 /var/log/waypoint-scheduler/current
 
-# Filter for audit events
-journalctl -u waypoint-helper -t audit
+# Check scheduler service status
+sudo sv status waypoint-scheduler
 ```
 
 ### Logged Events
@@ -220,6 +222,7 @@ journalctl -u waypoint-helper -t audit
 - Authorization checks (success/failure with reason)
 - Snapshot creation/deletion (with user and timestamp)
 - Restore operations (with snapshot name)
+- Writable snapshot cleanup (orphaned copies deleted during restore)
 - Configuration changes (schedules, quotas, exclusions, snapshot metadata)
 - Backup operations (creation, deletion, retention cleanup)
 - Unsafe symlink rejections (with paths)

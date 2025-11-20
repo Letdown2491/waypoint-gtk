@@ -144,7 +144,19 @@ sudo btrfs qgroup show /
 
 **Problem:** Trying to restore a snapshot fails.
 
-**Solution:**
+**Common Errors:**
+
+**Error: "fstab validation failed"**
+- The snapshot's /etc/fstab is malformed or references missing subvolumes
+- Solution: Verify the snapshot with `waypoint-cli verify <snapshot-name>`
+- If corrupted, use a different snapshot or restore from backup
+
+**Error: "Cannot restore multi-subvolume snapshot: /etc/fstab not found"**
+- Multi-subvolume snapshots require /etc/fstab to configure mount points
+- This snapshot may be corrupted or from an older Waypoint version
+- Solution: Create a new snapshot, or try restoring only the root subvolume
+
+**Error: "Snapshot not found"**
 ```sh
 # Verify the snapshot exists
 sudo btrfs subvolume list /.snapshots
@@ -154,6 +166,12 @@ waypoint-cli verify <snapshot-name>
 
 # If corrupted, you may need to delete and use another snapshot
 ```
+
+**Error: "Failed to create writable snapshot"**
+- Usually indicates disk space issues
+- Check free space: `df -h /`
+- Clean up old snapshots: `waypoint-cli cleanup`
+- Clean up orphaned writable copies: `waypoint-cli cleanup-writable-snapshots`
 
 ### Snapshots are unexpectedly large
 
@@ -307,7 +325,7 @@ sudo mount /dev/sdX1 /run/media/$USER/BackupDrive
 2. Find the destination with failed backups
 3. Click the destination to view details
 4. Use the "Retry Failed" button to retry all failed backups
-5. Check logs if failures persist: `journalctl -u waypoint-helper | grep backup`
+5. Check logs if failures persist: `sudo tail -100 /var/log/waypoint-scheduler/current | grep backup`
 
 ## Polkit Authentication Issues
 
@@ -480,8 +498,14 @@ sudo sv reload dbus
 # Try to activate the service manually
 busctl call --system tech.geektoshi.waypoint /tech/geektoshi/waypoint tech.geektoshi.waypoint.Helper ListSnapshots
 
-# Check for errors
-journalctl -xe | grep waypoint
+# Check waypoint-helper status (D-Bus activated service)
+busctl status tech.geektoshi.waypoint
+
+# Check scheduler logs
+sudo tail -100 /var/log/waypoint-scheduler/current
+
+# Verify D-Bus service file exists
+ls -la /usr/share/dbus-1/system-services/tech.geektoshi.waypoint.service
 ```
 
 ### D-Bus signals not working (UI not updating)

@@ -70,12 +70,6 @@ impl RateLimiter {
     }
 }
 
-/// Get the configured scheduler config path
-fn scheduler_config_path() -> String {
-    let config = WaypointConfig::new();
-    config.scheduler_config.to_string_lossy().to_string()
-}
-
 /// Get the configured scheduler service path
 fn scheduler_service_path() -> String {
     let config = WaypointConfig::new();
@@ -377,38 +371,6 @@ impl WaypointHelper {
         }
     }
 
-    /// Update scheduler configuration (DEPRECATED - use save_schedules_config instead)
-    async fn update_scheduler_config(
-        &self,
-        #[zbus(header)] hdr: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &Connection,
-        config_content: String,
-    ) -> (bool, String) {
-        // Check authorization
-        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_CONFIGURE).await {
-            return (false, format!("Authorization failed: {e}"));
-        }
-
-        log::warn!("update_scheduler_config is deprecated, use save_schedules_config instead");
-
-        // Basic validation: check for obvious injection attempts
-        // This is legacy key=value format, not TOML
-        if config_content.contains('\0') {
-            return (false, "Configuration contains invalid null bytes".to_string());
-        }
-
-        // Check reasonable size limit (10KB should be more than enough for a simple config)
-        if config_content.len() > 10240 {
-            return (false, "Configuration file too large".to_string());
-        }
-
-        // Write configuration file
-        match std::fs::write(scheduler_config_path(), config_content) {
-            Ok(_) => (true, "Scheduler configuration updated".to_string()),
-            Err(e) => (false, format!("Failed to update configuration: {e}")),
-        }
-    }
-
     /// Save schedules TOML configuration file
     async fn save_schedules_config(
         &self,
@@ -521,6 +483,58 @@ impl WaypointHelper {
             Self::cleanup_snapshots_impl(schedule_based),
             "Cleanup failed"
         )
+    }
+
+    /// Clean up orphaned writable snapshot copies
+    ///
+    /// Scans for root-writable subvolumes created during multi-subvolume restores
+    /// and deletes those that are no longer needed (not currently booted, not default).
+    /// This is safe to run at any time and will never delete active subvolumes.
+    ///
+    /// Returns a success message listing the deleted subvolumes.
+    async fn cleanup_writable_snapshots(
+        &self,
+        #[zbus(header)] hdr: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> (bool, String) {
+        // Get caller info for audit logging
+        let (uid, pid) = Self::get_caller_info(&hdr, connection).await;
+
+        // Check authorization - use delete permission since we're deleting subvolumes
+        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_DELETE).await {
+            audit::log_auth_failure(uid, pid, POLKIT_ACTION_DELETE, &e.to_string());
+            return (false, format!("Authorization failed: {e}"));
+        }
+
+        // Perform cleanup
+        match btrfs::cleanup_writable_snapshots() {
+            Ok(deleted) => {
+                let count = deleted.len();
+
+                // Log each deleted writable snapshot
+                for path in &deleted {
+                    audit::log_snapshot_delete(uid.clone(), pid, path, true, None);
+                }
+
+                if count == 0 {
+                    (true, "No orphaned writable snapshots found".to_string())
+                } else {
+                    (
+                        true,
+                        format!(
+                            "Successfully cleaned up {} orphaned writable snapshot(s):\n{}",
+                            count,
+                            deleted.join("\n")
+                        ),
+                    )
+                }
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                audit::log_auth_failure(uid, pid, "cleanup_writable_snapshots", &error_msg);
+                (false, format!("Failed to cleanup writable snapshots: {e}"))
+            }
+        }
     }
 
     /// Restore files from a snapshot to the filesystem
@@ -1144,6 +1158,14 @@ impl WaypointHelper {
 
         // Perform the rollback
         btrfs::restore_snapshot(name).context("Failed to restore snapshot")?;
+
+        // Best-effort cleanup of orphaned writable snapshots
+        // Don't fail the restore if cleanup fails
+        if let Err(e) = btrfs::cleanup_writable_snapshots() {
+            log::warn!("Failed to cleanup writable snapshots after restore: {}", e);
+        } else {
+            log::info!("Successfully cleaned up orphaned writable snapshots after restore");
+        }
 
         Ok(format!(
             "Snapshot '{name}' will be active after reboot. Backup created: '{backup_name}'"

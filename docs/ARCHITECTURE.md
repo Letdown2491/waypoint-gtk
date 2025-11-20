@@ -45,9 +45,9 @@ Waypoint keeps data in a few standard locations; all paths are configurable thro
 | Path | Contents |
 | --- | --- |
 | `/.snapshots/<name>/root` (and siblings) | Actual Btrfs snapshots for each configured mount point. Subvolume names map `"/"` → `root`, `"/home"` → `home`, `"/var/log"` → `var_log`, etc. |
+| `/.snapshots/<name>/root-writable` | Temporary writable copy created during multi-subvolume restores to modify fstab. Automatically cleaned up after restore completes. |
 | `/var/lib/waypoint/snapshots.json` | Array of snapshot metadata as defined by `waypoint-helper::btrfs::Snapshot`. This drives the UI list, favorites, package diffs, etc. |
 | `/etc/waypoint/schedules.toml` | Structured definition of runit schedules, prefixes, retention knobs (`waypoint-common::schedules`). |
-| `/etc/waypoint/scheduler.conf` | Legacy key/value scheduler config still supported for older Nebula versions. |
 | `/etc/waypoint/quota.toml` | Serialized `QuotaConfig`, consumed by D-Bus `GetQuotaUsage`, `SaveQuotaConfig`, etc. |
 | `/etc/waypoint/exclude.toml` | Snapshot exclusion patterns. Defines which files/directories to exclude from snapshots (e.g., caches, temporary files). |
 | `~/.config/waypoint/backup-config.toml` | Per-user backup destinations, filters, pending backups, and backup history. Managed by `BackupManager` in the GUI. |

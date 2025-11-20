@@ -21,7 +21,7 @@ Most write operations require one of four Polkit actions exposed in `data/tech.g
 | `tech.geektoshi.waypoint.create-snapshot` | Create/backup snapshot data | `CreateSnapshot`, `BackupSnapshot`, `ListBackups`, `DeleteBackup`, `ApplyBackupRetention` |
 | `tech.geektoshi.waypoint.delete-snapshot` | Delete snapshots | `DeleteSnapshot`, `CleanupSnapshots` |
 | `tech.geektoshi.waypoint.restore-snapshot` | Roll back or read snapshot contents | `RestoreSnapshot`, `RestoreFiles`, `CompareSnapshots`, `GetQuotaUsage`, `RestoreFromBackup` |
-| `tech.geektoshi.waypoint.configure-system` | Scheduler/quota/exclusion configuration | `UpdateSchedulerConfig`, `SaveSchedulesConfig`, `RestartScheduler`, `EnableQuotas`, `DisableQuotas`, `SetQuotaLimit`, `SaveQuotaConfig`, `SaveExcludeConfig`, `UpdateSnapshotMetadata` |
+| `tech.geektoshi.waypoint.configure-system` | Scheduler/quota/exclusion configuration | `SaveSchedulesConfig`, `RestartScheduler`, `EnableQuotas`, `DisableQuotas`, `SetQuotaLimit`, `SaveQuotaConfig`, `SaveExcludeConfig`, `UpdateSnapshotMetadata` |
 
 Read-only helpers such as `ListSnapshots`, `VerifySnapshot`, `GetSchedulerStatus`, and `ScanBackupDestinations` do not require authentication. For write calls, Polkit may display a password prompt depending on local policy. The helper identifies callers via `org.freedesktop.DBus.GetConnectionUnixProcessID` plus `/proc/$PID/stat` start times (see `check_authorization` in `waypoint-helper/src/main.rs`).
 
@@ -69,15 +69,15 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
 - **PreviewRestore** `(s name) → (b success, s json)`  
   Produces a `RestorePreview` JSON document describing package, kernel, and subvolume changes that a rollback would introduce. Requires `restore-snapshot`.
 
-- **CleanupSnapshots** `(b schedule_based) → (b, s)`  
+- **CleanupSnapshots** `(b schedule_based) → (b, s)`
   Applies retention based on either per-schedule policies (`true`) or global legacy settings (`false`). Requires `delete-snapshot`.
+
+- **CleanupWritableSnapshots** `() → (b, s)`
+  Removes orphaned writable snapshot copies created during multi-subvolume restores. Only deletes subvolumes that are not currently booted or set as default. This is automatically called after successful restores but can also be invoked manually. Requires `delete-snapshot`.
 
 ### Scheduler configuration (runit)
 
-- **UpdateSchedulerConfig** `(s legacy_conf) → (b, s)`  
-  Writes the legacy `/etc/waypoint/scheduler.conf`. The modern GUI uses `SaveSchedulesConfig`, but the method remains for compatibility. Requires `configure-system`.
-
-- **SaveSchedulesConfig** `(s schedules_toml) → (b, s)`  
+- **SaveSchedulesConfig** `(s schedules_toml) → (b, s)`
   Persists the structured `schedules.toml` file (see `WaypointConfig::schedules_config`). Requires `configure-system`.
 
 - **RestartScheduler** `() → (b, s)`  
@@ -152,7 +152,7 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
 
 ### Miscellaneous
 
-- **UpdateSchedulerConfig**, **SaveSchedulesConfig**, **SaveQuotaConfig**, and **SaveExcludeConfig** all create parent directories if missing, so callers just supply the full serialized file contents.
+- **SaveSchedulesConfig**, **SaveQuotaConfig**, and **SaveExcludeConfig** all create parent directories if missing, so callers just supply the full serialized file contents.
 - Most `(b, s)` calls keep `success=false` paired with a human-readable error message; callers should treat a returned `Err` as transport failure and inspect `success` otherwise.
 
 ## JSON Payloads

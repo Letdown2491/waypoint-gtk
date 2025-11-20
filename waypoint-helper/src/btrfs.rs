@@ -465,9 +465,23 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
         if fstab_path.exists() {
             update_fstab_for_snapshot(&fstab_path, name, &snapshot_meta.subvolumes)
                 .context("Failed to update fstab")?;
+
+            // Validate the updated fstab before proceeding
+            validate_fstab(&fstab_path, name, &snapshot_meta.subvolumes)
+                .context("Fstab validation failed after update")?;
         } else {
-            log::warn!(
-                "/etc/fstab not found in snapshot, multi-subvolume restore may not work correctly"
+            // Multi-subvolume restores require fstab to configure mount points
+            bail!(
+                "Cannot restore multi-subvolume snapshot '{}': /etc/fstab not found in snapshot.\n\
+                 Multi-subvolume restores require fstab to configure mount points for: {}\n\
+                 This snapshot may be corrupted or was created with an older version of Waypoint.\n\
+                 \n\
+                 Suggestion: Create a new snapshot that includes /etc/fstab, or restore only the root subvolume.",
+                name,
+                snapshot_meta.subvolumes.iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
 
@@ -495,6 +509,96 @@ pub fn restore_snapshot(name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Clean up orphaned writable snapshot copies
+///
+/// Scans for root-writable subvolumes created during multi-subvolume restores
+/// and deletes those that are no longer needed (not currently booted, not default).
+///
+/// Returns a list of deleted subvolume paths for logging.
+pub fn cleanup_writable_snapshots() -> Result<Vec<String>> {
+    let mut deleted = Vec::new();
+
+    // Get the current default subvolume ID
+    let default_id = get_default_subvolume_id()?;
+
+    // Get the currently booted subvolume ID
+    let booted_id = get_current_subvolume_id()?;
+
+    // Find all writable snapshots
+    let snapshots_dir = snapshot_dir();
+    let entries = fs::read_dir(snapshots_dir)
+        .context("Failed to read snapshots directory")?;
+
+    for entry in entries {
+        let entry = entry.context("Failed to read directory entry")?;
+        let snapshot_dir = entry.path();
+
+        if !snapshot_dir.is_dir() {
+            continue;
+        }
+
+        // Look for root-writable subvolumes
+        let writable_path = snapshot_dir.join("root-writable");
+        if !writable_path.exists() {
+            continue;
+        }
+
+        // Get the subvolume ID of this writable snapshot
+        let writable_id = match get_subvolume_id(&writable_path) {
+            Ok(id) => id,
+            Err(e) => {
+                log::warn!(
+                    "Failed to get subvolume ID for {}: {}",
+                    writable_path.display(),
+                    e
+                );
+                continue;
+            }
+        };
+
+        // Safety check: Never delete if it's the default or currently booted
+        if writable_id == default_id {
+            log::info!(
+                "Keeping {} (current default subvolume)",
+                writable_path.display()
+            );
+            continue;
+        }
+
+        if writable_id == booted_id {
+            log::info!(
+                "Keeping {} (currently booted subvolume)",
+                writable_path.display()
+            );
+            continue;
+        }
+
+        // Safe to delete - it's orphaned
+        log::info!("Cleaning up orphaned writable snapshot: {}", writable_path.display());
+
+        let output = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("delete")
+            .arg(&writable_path)
+            .output()
+            .context("Failed to execute btrfs subvolume delete")?;
+
+        if output.status.success() {
+            deleted.push(writable_path.display().to_string());
+            log::info!("Successfully deleted {}", writable_path.display());
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!(
+                "Failed to delete {}: {}",
+                writable_path.display(),
+                stderr
+            );
+        }
+    }
+
+    Ok(deleted)
 }
 
 /// List all snapshots
@@ -939,6 +1043,41 @@ fn get_subvolume_id(path: &Path) -> Result<u64> {
     bail!("Could not parse subvolume ID from output");
 }
 
+/// Get the default boot subvolume ID
+fn get_default_subvolume_id() -> Result<u64> {
+    let output = Command::new("btrfs")
+        .arg("subvolume")
+        .arg("get-default")
+        .arg("/")
+        .output()
+        .context("Failed to execute btrfs subvolume get-default")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Failed to get default subvolume: {stderr}");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Output format: "ID 256 gen 12345 top level 5 path @snapshots/snapshot-name/root-writable"
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 && parts[0] == "ID" {
+            if let Ok(id) = parts[1].parse() {
+                return Ok(id);
+            }
+        }
+    }
+
+    bail!("Could not parse default subvolume ID from btrfs output")
+}
+
+/// Get the currently mounted root subvolume ID
+fn get_current_subvolume_id() -> Result<u64> {
+    // Get the subvolume ID of the current root filesystem
+    get_subvolume_id(Path::new("/"))
+}
+
 /// Get current kernel version
 fn get_kernel_version() -> Option<String> {
     fs::read_to_string("/proc/version")
@@ -1228,6 +1367,207 @@ fn update_fstab_for_snapshot(
         // Write updated fstab
         let new_content = updated_lines.join("\n") + "\n";
         fs::write(fstab_path, new_content).context("Failed to write updated fstab")?;
+    }
+
+    Ok(())
+}
+
+/// Validate fstab after modification
+///
+/// Ensures:
+/// - Fstab is syntactically valid (parseable)
+/// - All referenced snapshot subvolumes exist
+/// - Critical mount options are preserved
+/// - Btrfs entries have valid subvol options
+fn validate_fstab(
+    fstab_path: &Path,
+    snapshot_name: &str,
+    subvolumes: &[PathBuf],
+) -> Result<()> {
+    // Read the updated fstab
+    let fstab_content = fs::read_to_string(fstab_path)
+        .context("Failed to read fstab for validation")?;
+
+    let snapshot_base = snapshot_dir().join(snapshot_name);
+    let mut validated_entries = 0;
+    let mut errors = Vec::new();
+
+    for (line_num, line) in fstab_content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        // Skip comments and empty lines
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // Parse fstab entry: device mountpoint fstype options dump pass
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+        // Validate basic structure
+        if parts.len() < 4 {
+            errors.push(format!(
+                "Line {}: Invalid fstab entry (expected at least 4 fields, got {}): {}",
+                line_num + 1,
+                parts.len(),
+                line
+            ));
+            continue;
+        }
+
+        if parts.len() > 6 {
+            errors.push(format!(
+                "Line {}: Invalid fstab entry (expected at most 6 fields, got {}): {}",
+                line_num + 1,
+                parts.len(),
+                line
+            ));
+            continue;
+        }
+
+        let mount_point = parts[1];
+        let fs_type = parts[2];
+        let options = parts[3];
+
+        // Only validate btrfs entries for our snapshotted subvolumes
+        if fs_type != "btrfs" {
+            continue;
+        }
+
+        let mount_path = PathBuf::from(mount_point);
+        if !subvolumes.contains(&mount_path) {
+            continue;
+        }
+
+        // This is one of our snapshot entries - validate it
+        validated_entries += 1;
+
+        // Check that mount point is absolute
+        if !mount_point.starts_with('/') {
+            errors.push(format!(
+                "Line {}: Mount point must be absolute path: {}",
+                line_num + 1,
+                mount_point
+            ));
+        }
+
+        // Validate mount options
+        if let Err(e) = validate_mount_options(options, &mount_path, line_num + 1) {
+            errors.push(e.to_string());
+        }
+
+        // Verify the snapshot subvolume exists
+        if let Err(e) = verify_snapshot_subvolume_exists(&snapshot_base, &mount_path) {
+            errors.push(format!(
+                "Line {}: Snapshot subvolume for {} does not exist: {}",
+                line_num + 1,
+                mount_point,
+                e
+            ));
+        }
+
+        // Verify the subvol option points to the snapshot
+        if !options.contains(&format!("@snapshots/{}", snapshot_name)) {
+            errors.push(format!(
+                "Line {}: Mount options don't reference snapshot '{}': {}",
+                line_num + 1,
+                snapshot_name,
+                options
+            ));
+        }
+    }
+
+    // Check that we validated at least as many entries as we have subvolumes
+    if validated_entries < subvolumes.len() {
+        errors.push(format!(
+            "Expected {} btrfs entries for snapshot subvolumes, but only found {}",
+            subvolumes.len(),
+            validated_entries
+        ));
+    }
+
+    if !errors.is_empty() {
+        bail!(
+            "Fstab validation failed:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    log::info!("Fstab validation passed: {} entries validated", validated_entries);
+    Ok(())
+}
+
+/// Validate mount options for a btrfs entry
+fn validate_mount_options(options: &str, mount_point: &Path, line_num: usize) -> Result<()> {
+    let opts: Vec<&str> = options.split(',').collect();
+
+    // Check for subvol or subvolid option (required for btrfs)
+    let has_subvol = opts.iter().any(|o| o.starts_with("subvol=") || o.starts_with("subvolid="));
+    if !has_subvol {
+        bail!(
+            "Line {}: Btrfs entry for {} missing subvol/subvolid option",
+            line_num,
+            mount_point.display()
+        );
+    }
+
+    // For root filesystem, ensure 'rw' is present (can't boot read-only root)
+    if mount_point == Path::new("/") {
+        let has_rw = opts.iter().any(|o| *o == "rw");
+        let has_ro = opts.iter().any(|o| *o == "ro");
+
+        if has_ro {
+            bail!(
+                "Line {}: Root filesystem must be mounted read-write (has 'ro' option)",
+                line_num
+            );
+        }
+
+        if !has_rw {
+            log::warn!(
+                "Line {}: Root filesystem missing 'rw' option (may default to read-only)",
+                line_num
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Verify that a snapshot subvolume exists
+fn verify_snapshot_subvolume_exists(snapshot_base: &Path, mount_point: &Path) -> Result<()> {
+    // Convert mount point to subvolume name
+    let subvol_name = if mount_point == PathBuf::from("/") {
+        "root".to_string()
+    } else {
+        mount_point
+            .to_string_lossy()
+            .trim_start_matches('/')
+            .replace('/', "_")
+    };
+
+    let subvol_path = snapshot_base.join(&subvol_name);
+
+    // Check if path exists
+    if !subvol_path.exists() {
+        bail!(
+            "Snapshot subvolume does not exist: {}",
+            subvol_path.display()
+        );
+    }
+
+    // Verify it's actually a btrfs subvolume
+    let output = Command::new("btrfs")
+        .arg("subvolume")
+        .arg("show")
+        .arg(&subvol_path)
+        .output()
+        .context("Failed to execute btrfs subvolume show")?;
+
+    if !output.status.success() {
+        bail!(
+            "Path exists but is not a valid btrfs subvolume: {}",
+            subvol_path.display()
+        );
     }
 
     Ok(())

@@ -158,6 +158,8 @@ Click the **🔍 Search** button to:
 
 **Safety feature:** Waypoint automatically creates a safety backup before rollback, allowing you to undo if needed.
 
+**Safety validations:** During multi-subvolume restores, Waypoint validates /etc/fstab to ensure all mount points are correct. If validation fails, the restore is cancelled before any changes are made. Temporary writable copies are automatically cleaned up after restore.
+
 ### Restoring Individual Files
 
 Restore specific files without full system rollback:

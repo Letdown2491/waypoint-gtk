@@ -208,6 +208,15 @@ Snapshots to delete: 5
 ...
 ```
 
+Remove orphaned writable snapshot copies (created during multi-subvolume restores):
+
+```sh
+# Clean up orphaned writable snapshots
+waypoint-cli cleanup-writable-snapshots
+```
+
+This command is safe to run at any time - it will never delete active subvolumes. Cleanup happens automatically after restores, but you can run this manually if needed.
+
 ## Backup Operations
 
 ### Scan for Backup Destinations
