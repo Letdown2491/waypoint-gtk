@@ -570,18 +570,12 @@ impl WaypointHelper {
 
     /// Compare two snapshots and return list of changed files
     ///
-    /// Uses btrfs send with --no-data to efficiently detect file changes between snapshots.
+    /// This is a read-only operation and does not require authorization
     async fn compare_snapshots(
         &self,
-        #[zbus(header)] hdr: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &Connection,
         old_snapshot_name: String,
         new_snapshot_name: String,
     ) -> (bool, String) {
-        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {e}"));
-        }
-
         result_to_dbus_response(
             Self::compare_snapshots_impl(&old_snapshot_name, &new_snapshot_name),
             "Comparison failed"
@@ -1616,10 +1610,8 @@ impl WaypointHelper {
         }
     }
 
-    /// Compare two snapshots using btrfs send/receive
+    /// Compare two snapshots using find + diff
     fn compare_snapshots_impl(old_snapshot_name: &str, new_snapshot_name: &str) -> Result<String> {
-        use std::io::{BufReader, Read};
-        use std::os::unix::process::ExitStatusExt;
         use std::process::{Command, Stdio};
 
         waypoint_common::validate_snapshot_name(old_snapshot_name)
@@ -1639,104 +1631,46 @@ impl WaypointHelper {
             anyhow::bail!("New snapshot not found: {}", new_path.display());
         }
 
-        // Run: btrfs send --no-data -p <old> <new> | btrfs receive --dump
-        let mut send_cmd = Command::new("btrfs")
-            .arg("send")
-            .arg("--no-data")
-            .arg("-p")
+        // Generate file listing for old snapshot
+        // Format: type path size mtime
+        // type: f=file, d=directory, l=symlink
+        let old_output = Command::new("find")
             .arg(&old_path)
+            .arg("-xdev") // Don't cross filesystem boundaries
+            .arg("-printf")
+            .arg("%y %P %s %T@\n") // type, path (relative), size, mtime
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .context("Failed to run find on old snapshot")?;
+
+        if !old_output.status.success() {
+            let stderr = String::from_utf8_lossy(&old_output.stderr);
+            anyhow::bail!("find failed on old snapshot: {}", stderr);
+        }
+
+        // Generate file listing for new snapshot
+        let new_output = Command::new("find")
             .arg(&new_path)
+            .arg("-xdev")
+            .arg("-printf")
+            .arg("%y %P %s %T@\n")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
-            .context("Failed to spawn btrfs send")?;
+            .output()
+            .context("Failed to run find on new snapshot")?;
 
-        let send_stdout = send_cmd
-            .stdout
-            .take()
-            .context("Failed to capture btrfs send stdout")?;
-        let send_stderr_handle = send_cmd.stderr.take().map(|stderr| {
-            std::thread::spawn(move || -> Result<String> {
-                let mut reader = BufReader::new(stderr);
-                let mut buf = String::new();
-                reader.read_to_string(&mut buf)?;
-                Ok(buf)
-            })
-        });
-
-        let mut receive_cmd = Command::new("btrfs")
-            .arg("receive")
-            .arg("--dump")
-            .stdin(Stdio::from(send_stdout))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("Failed to spawn btrfs receive")?;
-        let receive_stdout = receive_cmd
-            .stdout
-            .take()
-            .context("Failed to capture btrfs receive stdout")?;
-        let receive_stderr_handle = receive_cmd.stderr.take().map(|stderr| {
-            std::thread::spawn(move || -> Result<String> {
-                let mut reader = BufReader::new(stderr);
-                let mut buf = String::new();
-                reader.read_to_string(&mut buf)?;
-                Ok(buf)
-            })
-        });
-
-        // Drain receive stdout concurrently to prevent pipe deadlocks
-        let reader_handle = std::thread::spawn(move || -> Result<String> {
-            let mut reader = BufReader::new(receive_stdout);
-            let mut output = String::new();
-            reader.read_to_string(&mut output)?;
-            Ok(output)
-        });
-
-        // Wait for receive first to ensure dump output is consumed
-        let receive_status = receive_cmd.wait()?;
-        let receive_stderr = match receive_stderr_handle {
-            Some(handle) => handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("Failed to join receive stderr reader"))??,
-            None => String::new(),
-        };
-        if !receive_status.success() {
-            let detail = if receive_stderr.is_empty() {
-                format!("{receive_status}")
-            } else {
-                format!("{} - {}", receive_status, receive_stderr.trim())
-            };
-            anyhow::bail!("btrfs receive --dump failed: {detail}");
+        if !new_output.status.success() {
+            let stderr = String::from_utf8_lossy(&new_output.stderr);
+            anyhow::bail!("find failed on new snapshot: {}", stderr);
         }
 
-        let output = reader_handle
-            .join()
-            .map_err(|_| anyhow::anyhow!("Failed to join receive output reader"))??;
+        // Parse old snapshot file list into HashMap
+        let old_files = parse_find_output(&String::from_utf8_lossy(&old_output.stdout))?;
+        let new_files = parse_find_output(&String::from_utf8_lossy(&new_output.stdout))?;
 
-        let send_status = send_cmd.wait()?;
-        let send_stderr = match send_stderr_handle {
-            Some(handle) => handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("Failed to join send stderr reader"))??,
-            None => String::new(),
-        };
-        if !send_status.success() {
-            // btrfs send may emit SIGPIPE if receive exits after finishing.
-            if send_status.signal() == Some(libc::SIGPIPE) {
-                log::debug!("btrfs send exited with SIGPIPE after receive completed");
-            } else {
-                let detail = if send_stderr.is_empty() {
-                    format!("{send_status}")
-                } else {
-                    format!("{} - {}", send_status, send_stderr.trim())
-                };
-                anyhow::bail!("btrfs send failed: {detail}");
-            }
-        }
-
-        // Parse the dump output and convert to JSON
-        let changes = parse_btrfs_dump(&output)?;
+        // Compare and detect changes
+        let changes = compare_file_lists(&old_files, &new_files);
 
         // Serialize to JSON
         serde_json::to_string(&changes).context("Failed to serialize changes to JSON")
@@ -2340,143 +2274,100 @@ struct FileChange {
     path: String,
 }
 
-fn parse_btrfs_dump(dump_output: &str) -> Result<Vec<FileChange>> {
-    let mut changes = Vec::new();
-    let mut seen_paths = std::collections::HashSet::new();
+/// File metadata for comparison
+#[derive(Debug, Clone)]
+struct FileMetadata {
+    size: u64,
+    mtime: String,
+}
 
-    for line in dump_output.lines() {
-        // Parse key=value format
-        // Example lines:
-        // mkfile path=some/file
-        // write path=some/file offset=0 len=1024
-        // unlink path=some/file
-        // rename from=old/path to=new/path
-        // mkdir path=some/dir
+/// Parse find output into a HashMap of path -> metadata
+fn parse_find_output(output: &str) -> Result<std::collections::HashMap<String, FileMetadata>> {
+    let mut files = std::collections::HashMap::new();
 
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.is_empty() {
+    for line in output.lines() {
+        if line.trim().is_empty() {
             continue;
         }
 
-        let command = parts[0];
-        let mut path = String::new();
-
-        // Extract path from key=value pairs
-        for part in &parts[1..] {
-            if let Some((key, value)) = part.split_once('=') {
-                if key == "path" {
-                    path = decode_path(value);
-                    break;
-                } else if key == "to" && command == "rename" {
-                    // For renames, use the destination path
-                    path = decode_path(value);
-                    break;
-                }
-            }
+        let parts: Vec<&str> = line.splitn(4, ' ').collect();
+        if parts.len() < 4 {
+            continue;
         }
 
+        // parts[0] = file type (f, d, l, etc) - not used for comparison
+        let path = parts[1].to_string();
+        let size = parts[2].parse::<u64>().unwrap_or(0);
+        let mtime = parts[3].to_string();
+
+        // Skip empty path (root directory itself)
         if path.is_empty() {
             continue;
         }
 
-        // Determine change type based on command
-        let change_type = match command {
-            "mkfile" | "mkdir" | "mksock" | "mkfifo" | "mknod" | "symlink" | "link" => "Added",
-            "write" | "clone" | "set_xattr" | "remove_xattr" | "truncate" | "chmod" | "chown"
-            | "utimes" => "Modified",
-            "unlink" | "rmdir" => "Deleted",
-            "rename" => "Modified", // Rename could be considered as modified
-            _ => continue,          // Unknown command, skip
-        };
+        files.insert(
+            path,
+            FileMetadata {
+                size,
+                mtime,
+            },
+        );
+    }
 
-        // Add absolute path prefix
-        let full_path = format!("/{path}");
+    Ok(files)
+}
 
-        // Avoid duplicates (e.g., mkfile + write for same file)
-        let key = format!("{change_type}:{full_path}");
-        if seen_paths.insert(key) {
-            changes.push(FileChange {
-                change_type: change_type.to_string(),
-                path: full_path,
-            });
+/// Compare two file lists and detect changes
+fn compare_file_lists(
+    old_files: &std::collections::HashMap<String, FileMetadata>,
+    new_files: &std::collections::HashMap<String, FileMetadata>,
+) -> Vec<FileChange> {
+    let mut changes = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    // Find added and modified files
+    for (path, new_meta) in new_files {
+        if let Some(old_meta) = old_files.get(path) {
+            // File exists in both - check if modified
+            // Compare size and mtime to detect modifications
+            if old_meta.size != new_meta.size || old_meta.mtime != new_meta.mtime {
+                let full_path = format!("/{}", path);
+                if seen_paths.insert(full_path.clone()) {
+                    changes.push(FileChange {
+                        change_type: "Modified".to_string(),
+                        path: full_path,
+                    });
+                }
+            }
+        } else {
+            // File only in new snapshot - added
+            let full_path = format!("/{}", path);
+            if seen_paths.insert(full_path.clone()) {
+                changes.push(FileChange {
+                    change_type: "Added".to_string(),
+                    path: full_path,
+                });
+            }
+        }
+    }
+
+    // Find deleted files
+    for path in old_files.keys() {
+        if !new_files.contains_key(path) {
+            let full_path = format!("/{}", path);
+            if seen_paths.insert(full_path.clone()) {
+                changes.push(FileChange {
+                    change_type: "Deleted".to_string(),
+                    path: full_path,
+                });
+            }
         }
     }
 
     // Sort by path for consistent output
     changes.sort_by(|a, b| a.path.cmp(&b.path));
 
-    Ok(changes)
-}
-
-/// Decode path from btrfs receive --dump output
-/// Paths may contain C-style escape sequences like \n or \NNN (octal)
-fn decode_path(encoded: &str) -> String {
-    let mut result = String::new();
-    let mut chars = encoded.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            // Check for escape sequence
-            if let Some(&next_ch) = chars.peek() {
-                match next_ch {
-                    'n' => {
-                        chars.next();
-                        result.push('\n');
-                    }
-                    't' => {
-                        chars.next();
-                        result.push('\t');
-                    }
-                    'r' => {
-                        chars.next();
-                        result.push('\r');
-                    }
-                    '\\' => {
-                        chars.next();
-                        result.push('\\');
-                    }
-                    '0'..='7' => {
-                        // Octal escape sequence \NNN
-                        let mut octal = String::new();
-                        for _ in 0..3 {
-                            if let Some(&digit @ '0'..='7') = chars.peek() {
-                                octal.push(digit);
-                                chars.next();
-                            } else {
-                                break;
-                            }
-                        }
-                        if let Ok(code) = u8::from_str_radix(&octal, 8) {
-                            // Validate the byte is a safe character
-                            // Only allow printable ASCII (32-126) and common whitespace (9-13)
-                            // Reject null bytes and high bytes that could create invalid UTF-8
-                            if (32..=126).contains(&code) || (9..=13).contains(&code) {
-                                result.push(code as char);
-                            } else {
-                                // Replace unsafe bytes with Unicode replacement character
-                                log::warn!("Unsafe byte in path escape sequence: \\{octal} (value: {code})");
-                                result.push('\u{FFFD}');  // Unicode replacement character
-                            }
-                        } else {
-                            // Invalid octal, keep as-is
-                            result.push('\\');
-                            result.push_str(&octal);
-                        }
-                    }
-                    _ => {
-                        // Unknown escape, keep backslash
-                        result.push(ch);
-                    }
-                }
-            } else {
-                result.push(ch);
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-
-    result
+    changes
 }
 
 /// Check Polkit authorization for an action

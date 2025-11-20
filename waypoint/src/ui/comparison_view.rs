@@ -167,6 +167,7 @@ impl ComparisonView {
         let diff_for_base = current_diff.clone();
         let mapping_for_compare = compare_mapping.clone();
 
+        let files_row_clone = files_row.clone();
         let update_comparison = move || {
             let base_idx = base_row_clone.selected() as usize;
             let compare_dropdown_idx = compare_row_clone.selected() as usize;
@@ -209,6 +210,48 @@ impl ComparisonView {
 
             // Store diff for later use
             *diff_for_base.borrow_mut() = Some(diff);
+
+            // Compute file diff in background
+            files_row_clone.set_subtitle("Computing...");
+            let snap1_name = snap1.name.clone();
+            let snap2_name = snap2.name.clone();
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = (|| -> anyhow::Result<usize> {
+                    let client = WaypointHelperClient::new()?;
+                    let json = client.compare_snapshots(snap1_name, snap2_name)?;
+                    let changes: Vec<FileChange> = serde_json::from_str(&json)?;
+                    Ok(changes.len())
+                })();
+                let _ = tx.send(result);
+            });
+
+            let files_row_for_update = files_row_clone.clone();
+            gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        match result {
+                            Ok(count) => {
+                                if count == 0 {
+                                    files_row_for_update.set_subtitle("No changes");
+                                } else {
+                                    files_row_for_update.set_subtitle(&format!("{} files changed", count));
+                                }
+                            }
+                            Err(_) => {
+                                files_row_for_update.set_subtitle("Failed to compute");
+                            }
+                        }
+                        gtk::glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+                    Err(_) => {
+                        files_row_for_update.set_subtitle("Failed to compute");
+                        gtk::glib::ControlFlow::Break
+                    }
+                }
+            });
 
             summary_group_clone.set_visible(true);
             view_packages_clone.set_visible(true);
@@ -628,83 +671,119 @@ impl ComparisonView {
             }
         }
 
-        // Display each category
+        // Display each category with directory grouping
         if !added.is_empty() {
-            let added_group = adw::PreferencesGroup::new();
-            added_group.set_title(&format!("Added Files ({})", added.len()));
-
-            let added_list = ListBox::new();
-            added_list.add_css_class("boxed-list");
-
-            for change in added.iter().take(100) {
-                let row = adw::ActionRow::new();
-                row.set_title(&change.path);
-                row.add_prefix(&gtk::Image::from_icon_name("list-add-symbolic"));
-                added_list.append(&row);
-            }
-
-            if added.len() > 100 {
-                let more_row = adw::ActionRow::new();
-                more_row.set_title(&format!("... and {} more", added.len() - 100));
-                more_row.add_css_class("dim-label");
-                added_list.append(&more_row);
-            }
-
-            added_group.add(&added_list);
-            content.append(&added_group);
+            Self::create_grouped_file_section(
+                &content,
+                "Added Files",
+                &added,
+                "list-add-symbolic",
+            );
         }
 
         if !modified.is_empty() {
-            let modified_group = adw::PreferencesGroup::new();
-            modified_group.set_title(&format!("Modified Files ({})", modified.len()));
-
-            let modified_list = ListBox::new();
-            modified_list.add_css_class("boxed-list");
-
-            for change in modified.iter().take(100) {
-                let row = adw::ActionRow::new();
-                row.set_title(&change.path);
-                row.add_prefix(&gtk::Image::from_icon_name("document-edit-symbolic"));
-                modified_list.append(&row);
-            }
-
-            if modified.len() > 100 {
-                let more_row = adw::ActionRow::new();
-                more_row.set_title(&format!("... and {} more", modified.len() - 100));
-                more_row.add_css_class("dim-label");
-                modified_list.append(&more_row);
-            }
-
-            modified_group.add(&modified_list);
-            content.append(&modified_group);
+            Self::create_grouped_file_section(
+                &content,
+                "Modified Files",
+                &modified,
+                "document-edit-symbolic",
+            );
         }
 
         if !deleted.is_empty() {
-            let deleted_group = adw::PreferencesGroup::new();
-            deleted_group.set_title(&format!("Deleted Files ({})", deleted.len()));
-
-            let deleted_list = ListBox::new();
-            deleted_list.add_css_class("boxed-list");
-
-            for change in deleted.iter().take(100) {
-                let row = adw::ActionRow::new();
-                row.set_title(&change.path);
-                row.add_prefix(&gtk::Image::from_icon_name("list-remove-symbolic"));
-                deleted_list.append(&row);
-            }
-
-            if deleted.len() > 100 {
-                let more_row = adw::ActionRow::new();
-                more_row.set_title(&format!("... and {} more", deleted.len() - 100));
-                more_row.add_css_class("dim-label");
-                deleted_list.append(&more_row);
-            }
-
-            deleted_group.add(&deleted_list);
-            content.append(&deleted_group);
+            Self::create_grouped_file_section(
+                &content,
+                "Deleted Files",
+                &deleted,
+                "list-remove-symbolic",
+            );
         }
 
         content
+    }
+
+    /// Create a grouped file section (Added/Modified/Deleted)
+    fn create_grouped_file_section(
+        parent: &Box,
+        title: &str,
+        files: &[&FileChange],
+        icon_name: &str,
+    ) {
+        use std::collections::HashMap;
+
+        // Group files by top-level directory
+        let mut groups: HashMap<String, Vec<&FileChange>> = HashMap::new();
+
+        for file in files {
+            let dir = Self::extract_top_level_dir(&file.path);
+            groups.entry(dir).or_default().push(*file);
+        }
+
+        // Convert to Vec and sort by file count (descending)
+        let mut sorted_groups: Vec<(String, Vec<&FileChange>)> = groups.into_iter().collect();
+        sorted_groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+        // Create section header
+        let section_group = adw::PreferencesGroup::new();
+        section_group.set_title(&format!("{} ({})", title, files.len()));
+        parent.append(&section_group);
+
+        // Display each directory group
+        for (dir, dir_files) in sorted_groups {
+            let expander = adw::ExpanderRow::new();
+            expander.set_title(&format!("{} ({} files)", dir, dir_files.len()));
+
+            // Show first 5 files
+            let display_count = std::cmp::min(5, dir_files.len());
+            for file in dir_files.iter().take(display_count) {
+                let row = adw::ActionRow::new();
+                // Strip directory prefix for cleaner display
+                let short_name = Self::strip_directory_prefix(&file.path, &dir);
+                row.set_title(&short_name);
+                row.add_prefix(&gtk::Image::from_icon_name(icon_name));
+                expander.add_row(&row);
+            }
+
+            // Add "... and X other files" row if there are more
+            if dir_files.len() > 5 {
+                let more_row = adw::ActionRow::new();
+                more_row.set_title(&format!("... and {} other files", dir_files.len() - 5));
+                more_row.add_css_class("dim-label");
+                expander.add_row(&more_row);
+            }
+
+            section_group.add(&expander);
+        }
+    }
+
+    /// Extract top-level directory from a path
+    /// Examples: "/etc/foo" -> "/etc", "/usr/lib/bar" -> "/usr/lib", "/home/user/doc" -> "/home/user"
+    fn extract_top_level_dir(path: &str) -> String {
+        let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+
+        if parts.is_empty() || parts[0].is_empty() {
+            return "/".to_string();
+        }
+
+        // Special handling for common multi-level directories
+        match parts[0] {
+            "usr" | "var" if parts.len() > 1 => {
+                format!("/{}/{}", parts[0], parts[1])
+            }
+            "home" if parts.len() > 1 => {
+                format!("/{}/{}", parts[0], parts[1])
+            }
+            _ => {
+                format!("/{}", parts[0])
+            }
+        }
+    }
+
+    /// Strip directory prefix from path for cleaner display
+    /// "/etc/foo/bar.conf" with dir="/etc" -> "foo/bar.conf"
+    fn strip_directory_prefix(path: &str, dir: &str) -> String {
+        let stripped = path.strip_prefix(dir).unwrap_or(path);
+        stripped.trim_start_matches('/').to_string()
     }
 
     /// Export file comparison to a text file
