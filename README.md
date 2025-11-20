@@ -4,9 +4,9 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Void%20Linux-478061?logo=linux)
 
-Waypoint is a GTK/libadwaita snapshot and rollback tool with a built in scheduling service for Btrfs filesystems on Void Linux. For a complete walkthrough, see the [User Guide →](docs/USER_GUIDE.md)
+Waypoint is a GTK/libadwaita snapshot and rollback tool with a built in scheduling service for Btrfs filesystems on Void Linux. For a complete walkthrough, see the [User Guide](docs/USER_GUIDE.md)
 
-For Void Linux users, Waypoint integration is available on [Nebula](https://github.com/Letdown2491/nebula-gtk) >= 1.3.0 to automatically create system snapshots when performing system upgrades.
+Waypoint integration is available on [Nebula](https://github.com/Letdown2491/nebula-gtk) >= 1.3.0 to automatically create system snapshots when performing system upgrades.
 
 ## Screenshots
 
@@ -35,7 +35,7 @@ For Void Linux users, Waypoint integration is available on [Nebula](https://gith
 - **Modern Interface** - GTK4 + libadwaita UI with theme switching, real-time monitoring, and comprehensive CLI tools
 - **Security First** - Privilege-separated architecture with D-Bus, Polkit, audit logging, and input validation
 
-[See full feature list →](docs/FEATURES.md)
+[See full feature list](docs/FEATURES.md)
 
 ## Integration
 
@@ -98,7 +98,7 @@ waypoint-cli quota enable --simple
 waypoint-cli quota set-limit 100G
 ```
 
-[See complete CLI reference →](docs/CLI.md)
+[See complete CLI reference](docs/CLI.md)
 
 ## Scheduler Service
 
