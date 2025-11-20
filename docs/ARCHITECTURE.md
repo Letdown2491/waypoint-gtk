@@ -60,7 +60,7 @@ Snapshot names must pass `validate_snapshot_name` to avoid traversal; scheduling
 
 ## Scheduler & Retention
 
-- `waypoint-scheduler` runs under runit via `services/waypoint-scheduler/run`. It loads `schedules.toml`, calculates the next due job, and when time arrives it shells out to `waypoint-cli create ...`.
+- `waypoint-scheduler` runs under runit via `services/waypoint-scheduler/run`. It loads `schedules.toml`, spawns one thread per enabled schedule, and each thread independently calculates its next run time and shells out to `waypoint-cli create ...` when due. Multiple schedules run concurrently without blocking each other.
 - After each run it executes `waypoint-cli cleanup --schedule-based`, which calls `CleanupSnapshots(true)` so each schedule’s retention policy is enforced server-side in the helper.
 - Users can edit schedules through the GTK dialog (which writes TOML over D-Bus) or by hand; once saved they restart the service via the helper (`RestartScheduler`) and the runit unit reloads automatically.
 

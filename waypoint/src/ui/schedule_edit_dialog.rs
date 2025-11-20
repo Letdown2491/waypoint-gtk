@@ -408,13 +408,22 @@ fn create_subvolume_selection(schedule: &Schedule) -> Vec<adw::ActionRow> {
 
         let row = adw::ActionRow::new();
         row.set_title(&subvol.display_name);
-        row.set_subtitle(&format!("Mount point: {} ({})", subvol.mount_point.display(), subvol.subvol_path));
 
         let checkbox = CheckButton::new();
         // Check if this subvolume is in the schedule's subvolumes list
         let is_selected = schedule.subvolumes.contains(&subvol.mount_point);
         checkbox.set_active(is_selected);
         checkbox.set_valign(gtk::Align::Center);
+
+        // Root filesystem should always be enabled and not changeable
+        if subvol.mount_point == PathBuf::from("/") {
+            checkbox.set_active(true);
+            checkbox.set_sensitive(false);
+            row.set_subtitle(&format!("{} (Required)", subvol.subvol_path));
+        } else {
+            row.set_subtitle(&format!("Mount point: {} ({})", subvol.mount_point.display(), subvol.subvol_path));
+        }
+
         row.add_suffix(&checkbox);
 
         // Store mount point in the row for later retrieval
@@ -543,6 +552,13 @@ pub fn extract_schedule_from_dialog(dialog: &adw::PreferencesWindow) -> Option<S
                     }
                 }
             }
+
+            // Ensure root is always included (safety check)
+            let root = PathBuf::from("/");
+            if !selected_subvolumes.contains(&root) {
+                selected_subvolumes.insert(0, root);
+            }
+
             schedule.subvolumes = selected_subvolumes;
         }
 

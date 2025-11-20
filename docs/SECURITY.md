@@ -6,18 +6,41 @@ This document provides guidance for securing Waypoint in production and security
 
 ### Polkit Configuration
 
-Waypoint uses Polkit for privilege escalation. The default policy (`tech.geektoshi.waypoint.policy`) uses `auth_admin_keep` which:
-- Requires administrator authentication
-- Caches credentials for convenience
-- Has a default timeout of 5 minutes (system-dependent)
+Waypoint uses Polkit for privilege escalation with two built-in rule files:
+
+#### Built-in Polkit Rules
+
+**50-waypoint-automated.rules** (Automation Policy)
+- Allows root user to run all waypoint operations without authentication
+- Enables the scheduler service to create snapshots automatically
+- Located in `/etc/polkit-1/rules.d/50-waypoint-automated.rules`
+
+**51-waypoint-desktop.rules** (Desktop-Friendly Policy)
+- Applies to users in the `wheel` group in local sessions only
+- Passwordless: Snapshot creation and system configuration
+- Ask once per session (~5 min cache): Snapshot deletion
+- Always ask (no cache): Restore operations
+- Located in `/etc/polkit-1/rules.d/51-waypoint-desktop.rules`
+
+The base policy (`tech.geektoshi.waypoint.policy`) defines four actions:
+- `tech.geektoshi.waypoint.create-snapshot` - Create snapshots and backups
+- `tech.geektoshi.waypoint.delete-snapshot` - Delete snapshots
+- `tech.geektoshi.waypoint.restore-snapshot` - Restore system from snapshot
+- `tech.geektoshi.waypoint.configure-system` - Modify schedules, quotas, and exclusions
+
+**Read-only operations** (no authentication required):
+- List snapshots (`list_snapshots`)
+- Scan backup destinations (`scan_backup_destinations`)
+- Get quota usage (`get_quota_usage`)
+- Verify snapshots (`verify_snapshot`)
 
 #### For Security-Sensitive Environments
 
-For environments requiring stricter authentication:
+For environments requiring stricter authentication, you can override the built-in rules by creating higher-priority rules (60-99 range). The built-in rules can also be removed if needed.
 
-**Option 1: Disable credential caching** (require auth each time)
+**Option 1: Override with stricter rules** (require auth each time)
 
-Create `/etc/polkit-1/rules.d/50-waypoint-no-cache.rules`:
+Create `/etc/polkit-1/rules.d/60-waypoint-strict.rules`:
 ```javascript
 polkit.addRule(function(action, subject) {
     if (action.id.indexOf("tech.geektoshi.waypoint") == 0) {
@@ -29,21 +52,16 @@ polkit.addRule(function(action, subject) {
 });
 ```
 
-**Option 2: Passwordless for specific users** (automated systems)
+**Option 2: Remove built-in desktop-friendly policy**
 
-Create `/etc/polkit-1/rules.d/50-waypoint-automation.rules`:
-```javascript
-polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("tech.geektoshi.waypoint") == 0) {
-        // Allow waypoint-scheduler to run without password
-        if (subject.user == "waypoint-scheduler") {
-            return polkit.Result.YES;
-        }
-    }
-});
+If you want to require authentication for all operations:
+```bash
+sudo rm /etc/polkit-1/rules.d/51-waypoint-desktop.rules
 ```
 
-**Option 3: Restrict to specific operations**
+This will fall back to the base policy which requires `auth_admin_keep` for all operations.
+
+**Option 3: Customize for specific users**
 
 ```javascript
 polkit.addRule(function(action, subject) {
@@ -194,7 +212,7 @@ Example log entry:
 {
   "timestamp": "2025-01-18T12:34:56Z",
   "user_id": 1000,
-  "username": "martin",
+  "username": "user",
   "pid": 12345,
   "operation": "snapshot_create",
   "resource": "pre-upgrade",
@@ -239,24 +257,16 @@ Waypoint implements per-user, per-operation rate limiting with a 5-second cooldo
 - **Purpose**: Detects potential bugs or malicious attacks causing mutex corruption
 - **Action**: Review logs if CRITICAL messages appear for mutex poisoning
 
-For additional production hardening with runit:
+For additional production hardening with runit, you can configure resource limits for the scheduler service in `/etc/sv/waypoint-scheduler/run`:
 
-1. **Use chpst for resource limits** in `/etc/sv/waypoint-helper/run`:
 ```bash
 #!/bin/sh
 exec 2>&1
 # Limit memory to 1GB and set nice priority
-exec chpst -m 1073741824 -n 5 waypoint-helper
+exec chpst -m 1073741824 -n 5 waypoint-scheduler
 ```
 
-2. **Monitor resource usage**:
-```bash
-# Check service status
-sv status waypoint-helper
-
-# View logs
-tail -f /var/log/waypoint-helper/current
-```
+**Note:** `waypoint-helper` is D-Bus activated on-demand and cannot be managed as a persistent runit service. Resource limits for D-Bus activated services are not configurable through runit on Void Linux.
 
 ## TOCTOU Mitigation
 
@@ -350,24 +360,25 @@ Waypoint does not make network connections. All communication is local via:
 ## Recommendations by Deployment Type
 
 ### Desktop/Workstation
-- Default configuration is appropriate
-- `auth_admin_keep` provides good UX balance
+- Default built-in rules (`51-waypoint-desktop.rules`) are appropriate
+- Passwordless snapshots and backups provide seamless automatic operation
+- Restore operations still require explicit confirmation for safety
 
 ### Server/Automated
-- Use Polkit rules for passwordless operation
-- Set up dedicated service account
+- Built-in `50-waypoint-automated.rules` enables passwordless operation for root/scheduler
 - Monitor logs for suspicious activity
 - Configure resource limits via chpst in runit service
+- Consider creating dedicated service user if needed (instead of root)
 
 ### Multi-User System
-- Disable credential caching
+- Remove `51-waypoint-desktop.rules` to require authentication for all operations
 - Enable detailed audit logging
-- Review Polkit rules carefully
+- Review and customize Polkit rules carefully
 - Consider per-user quotas
 
 ### Security-Critical
-- Require authentication for every operation
-- Disable `auth_admin_keep`
+- Remove both built-in rule files to require authentication for every operation
+- Create custom strict rules in `/etc/polkit-1/rules.d/60-waypoint-strict.rules`
 - Set short authentication timeouts
 - Enable comprehensive audit logging
 - Review all operations in logs

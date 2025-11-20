@@ -1,0 +1,47 @@
+/* Waypoint - Desktop User Polkit Authorization Rules
+ *
+ * This rule provides a desktop-friendly authentication policy for Waypoint.
+ * Designed for single-user workstations with automatic backups.
+ *
+ * Security model:
+ * - Snapshot creation: Passwordless (needed for automatic backups)
+ * - System configuration: Passwordless (preferences, schedules, quotas)
+ * - Snapshot deletion: Ask once per session (cached for ~5 min)
+ * - Snapshot restore: Always ask (highest security, no cache)
+ *
+ * Only applies to:
+ * - Users in the 'wheel' group (admins)
+ * - Local sessions (not remote SSH)
+ *
+ * Installed to: /etc/polkit-1/rules.d/51-waypoint-desktop.rules
+ */
+
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("tech.geektoshi.waypoint") == 0) {
+        // Only apply to admin users in local sessions
+        if (subject.isInGroup("wheel") && subject.local) {
+
+            // Passwordless: Snapshot creation (includes automatic backups)
+            if (action.id == "tech.geektoshi.waypoint.create-snapshot") {
+                return polkit.Result.YES;
+            }
+
+            // Passwordless: System configuration (preferences, schedules, quotas, exclusions)
+            if (action.id == "tech.geektoshi.waypoint.configure-system") {
+                return polkit.Result.YES;
+            }
+
+            // Ask once per session: Snapshot deletion (cached for ~5 min)
+            // Provides protection against accidental deletion while allowing auto-cleanup
+            if (action.id == "tech.geektoshi.waypoint.delete-snapshot") {
+                return polkit.Result.AUTH_ADMIN_KEEP;
+            }
+
+            // Always ask: Restore operations (no cache, highest security)
+            // Forces user confirmation before replacing system state
+            if (action.id == "tech.geektoshi.waypoint.restore-snapshot") {
+                return polkit.Result.AUTH_ADMIN;
+            }
+        }
+    }
+});

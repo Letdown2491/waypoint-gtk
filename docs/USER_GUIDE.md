@@ -226,6 +226,7 @@ Waypoint supports four schedule types:
    - **Prefix** - Snapshot name prefix (default: hourly, daily, etc.)
    - **Description** - Optional description for snapshots
    - **Subvolumes** - Which parts to snapshot (/, /home, /var)
+     - **Note:** Root filesystem (/) is always included and cannot be disabled
    - **Retention** - How many to keep (see [Retention Policies](#retention-policies))
 
 ### Quick Setup Example
@@ -282,9 +283,11 @@ Snapshots protect against software issues, but not:
 
 **Automatic backup workflow:**
 1. You create a snapshot (manual or scheduled)
-2. If drive is connected: Backup starts immediately
+2. If "Backup on snapshot creation" is enabled and drive is connected: Backup starts immediately
 3. If drive is disconnected: Backup added to pending queue
 4. When drive reconnects: Pending backups process automatically
+
+**Note:** Scheduled snapshots (hourly, daily, weekly, monthly) automatically trigger backups when created, making automated backup workflows seamless.
 
 ### Backup Types
 

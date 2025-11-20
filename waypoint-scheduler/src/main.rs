@@ -1,9 +1,10 @@
 // Waypoint Snapshot Scheduler - Rust Implementation
-// Manages multiple concurrent snapshot schedules
+// Manages multiple concurrent snapshot schedules using a thread-per-schedule model
 
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local, Timelike};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use waypoint_common::{Schedule, ScheduleType, SchedulesConfig, WaypointConfig};
@@ -20,18 +21,27 @@ fn main() {
     let config = WaypointConfig::new();
     log::info!("Schedules config: {}", config.schedules_config.display());
 
-    // Main service loop
+    // Shared mutex to ensure only one snapshot creation happens at a time
+    let snapshot_lock = Arc::new(Mutex::new(()));
+
+    // Main service loop - monitors config and spawns schedule threads
     loop {
-        if let Err(e) = run_scheduler_loop(&config) {
-            log::error!("Scheduler error: {e}");
-            log::info!("Will retry in 60 seconds...");
-            thread::sleep(Duration::from_secs(60));
+        match run_scheduler(&config, Arc::clone(&snapshot_lock)) {
+            Ok(_) => {
+                // Should never return normally, but if it does, restart
+                log::warn!("Scheduler thread manager exited unexpectedly, restarting...");
+            }
+            Err(e) => {
+                log::error!("Scheduler error: {e}");
+                log::info!("Will retry in 60 seconds...");
+            }
         }
+        thread::sleep(Duration::from_secs(60));
     }
 }
 
-/// Main scheduler loop
-fn run_scheduler_loop(config: &WaypointConfig) -> Result<()> {
+/// Main scheduler - spawns one thread per enabled schedule
+fn run_scheduler(config: &WaypointConfig, snapshot_lock: Arc<Mutex<()>>) -> Result<()> {
     // Load schedules
     let schedules = load_schedules(config)?;
 
@@ -44,52 +54,80 @@ fn run_scheduler_loop(config: &WaypointConfig) -> Result<()> {
         return Ok(());
     }
 
-    log::info!("Enabled schedules:");
+    log::info!("Starting scheduler threads for {} enabled schedule(s):", enabled.len());
     for schedule in &enabled {
         log::info!(
-            "  - {} ({})",
+            "  - {} ({}) - {}",
             schedule.prefix,
-            schedule.schedule_type.as_str()
+            schedule.schedule_type.as_str(),
+            schedule.description
         );
     }
 
-    // Calculate next run time for each schedule
-    let mut next_runs: Vec<(Duration, &Schedule)> = enabled
-        .iter()
-        .filter_map(|s| calculate_next_run(s).map(|duration| (duration, *s)).ok())
-        .collect();
+    // Spawn one thread per schedule
+    let mut handles = vec![];
 
-    if next_runs.is_empty() {
-        log::error!("Could not calculate next run time for any schedule");
-        return Err(anyhow::anyhow!("No valid schedules"));
+    for schedule in enabled {
+        let schedule_clone = schedule.clone();
+        let lock_clone = Arc::clone(&snapshot_lock);
+
+        let handle = thread::spawn(move || {
+            run_schedule_thread(schedule_clone, lock_clone);
+        });
+
+        handles.push(handle);
     }
 
-    // Sort by soonest first
-    next_runs.sort_by_key(|(duration, _)| *duration);
-
-    // Get the soonest schedule
-    let (sleep_duration, next_schedule) = next_runs[0];
-
-    log::info!(
-        "Next snapshot: {} in {} ({})",
-        next_schedule.prefix,
-        format_duration(sleep_duration),
-        next_schedule.description
-    );
-
-    // Sleep until it's time
-    thread::sleep(sleep_duration);
-
-    // Create the snapshot
-    create_snapshot(next_schedule)?;
-
-    // Apply retention cleanup after snapshot creation
-    if let Err(e) = apply_retention_cleanup() {
-        log::warn!("Failed to apply retention cleanup: {e}");
-        // Don't fail the main loop if cleanup fails
+    // Wait for all schedule threads to complete
+    // (they should run indefinitely, but if any exits, we'll restart)
+    for handle in handles {
+        let _ = handle.join();
     }
 
     Ok(())
+}
+
+/// Run a single schedule thread - calculates next run, sleeps, creates snapshot, repeat
+fn run_schedule_thread(schedule: Schedule, snapshot_lock: Arc<Mutex<()>>) {
+    log::info!("[{}] Schedule thread started", schedule.prefix);
+
+    loop {
+        // Calculate when to run next
+        match calculate_next_run(&schedule) {
+            Ok(sleep_duration) => {
+                log::info!(
+                    "[{}] Next snapshot in {} ({})",
+                    schedule.prefix,
+                    format_duration(sleep_duration),
+                    schedule.description
+                );
+
+                // Sleep until it's time
+                thread::sleep(sleep_duration);
+
+                // Acquire lock to ensure only one snapshot creation at a time
+                let _lock = snapshot_lock.lock().unwrap();
+
+                // Create the snapshot
+                if let Err(e) = create_snapshot(&schedule) {
+                    log::error!("[{}] Failed to create snapshot: {}", schedule.prefix, e);
+                } else {
+                    // Apply retention cleanup after successful snapshot creation
+                    if let Err(e) = apply_retention_cleanup() {
+                        log::warn!("[{}] Failed to apply retention cleanup: {}", schedule.prefix, e);
+                        // Don't fail the schedule thread if cleanup fails
+                    }
+                }
+
+                // Release lock (happens automatically when _lock goes out of scope)
+            }
+            Err(e) => {
+                log::error!("[{}] Failed to calculate next run time: {}", schedule.prefix, e);
+                // Sleep for a bit before retrying
+                thread::sleep(Duration::from_secs(60));
+            }
+        }
+    }
 }
 
 /// Load schedules from configuration file
@@ -261,7 +299,7 @@ fn create_snapshot(schedule: &Schedule) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Invalid schedule prefix '{}': {}", schedule.prefix, e))?;
     let snapshot_name = format!("{}-{}", schedule.prefix, Local::now().format("%Y%m%d-%H%M"));
 
-    log::info!("Creating scheduled snapshot: {snapshot_name}");
+    log::info!("[{}] Creating scheduled snapshot: {}", schedule.prefix, snapshot_name);
 
     // Use schedule-specific subvolumes
     // If empty, default to root filesystem only
@@ -270,7 +308,7 @@ fn create_snapshot(schedule: &Schedule) -> Result<()> {
             .filter_map(|p| p.to_str().map(|s| s.to_string()))
             .collect()
     } else {
-        log::warn!("Schedule '{}' has no subvolumes configured, defaulting to [/]", schedule.prefix);
+        log::warn!("[{}] Schedule has no subvolumes configured, defaulting to [/]", schedule.prefix);
         vec!["/".to_string()]
     };
     let subvolumes_arg = subvolumes.join(",");
@@ -285,11 +323,11 @@ fn create_snapshot(schedule: &Schedule) -> Result<()> {
         .context("Failed to execute waypoint-cli")?;
 
     if output.status.success() {
-        log::info!("✓ Snapshot created successfully: {snapshot_name}");
-        log::info!("  Subvolumes: {subvolumes_arg}");
+        log::info!("[{}] ✓ Snapshot created successfully: {}", schedule.prefix, snapshot_name);
+        log::info!("[{}]   Subvolumes: {}", schedule.prefix, subvolumes_arg);
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        log::error!("✗ Failed to create snapshot: {stderr}");
+        log::error!("[{}] ✗ Failed to create snapshot: {}", schedule.prefix, stderr);
         return Err(anyhow::anyhow!("Snapshot creation failed: {stderr}"));
     }
 

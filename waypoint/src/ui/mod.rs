@@ -67,6 +67,7 @@ pub struct MainWindow {
 impl MainWindow {
     pub fn new(
         app: &Application,
+        snapshot_created_rx: std::sync::mpsc::Receiver<crate::signal_listener::SnapshotCreatedEvent>,
         backup_progress_rx: std::sync::mpsc::Receiver<crate::signal_listener::BackupProgressEvent>,
     ) -> adw::ApplicationWindow {
         let snapshot_manager = match SnapshotManager::new() {
@@ -783,6 +784,144 @@ impl MainWindow {
                     bm_clone.borrow().update_progress(event);
                     // Update footer status in real-time
                     main_window_helpers::update_backup_status_label(&backup_status_label_for_progress, &bm_clone);
+                }
+
+                // Sleep briefly to avoid busy waiting
+                gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
+            }
+        });
+
+        // Start listening for snapshot created events (for automatic backups)
+        let backup_manager_for_snapshots = backup_manager.clone();
+        let snapshot_manager_for_snapshots = snapshot_manager.clone();
+        let user_prefs_for_snapshots = user_prefs_manager.clone();
+        let app_for_snapshots = app.clone();
+        gtk::glib::spawn_future_local(async move {
+            loop {
+                if let Ok(event) = snapshot_created_rx.try_recv() {
+                    log::info!("Processing SnapshotCreated event for automatic backup: {} (created by: {})",
+                        event.snapshot_name, event.created_by);
+
+                    // Load all snapshots to support filters like LastN
+                    if let Ok(snapshots) = snapshot_manager_for_snapshots.borrow().load_snapshots() {
+                        // Find the snapshot that was just created
+                        if let Some(snapshot) = snapshots.iter().find(|s| s.name == event.snapshot_name) {
+                            let is_favorite = user_prefs_for_snapshots
+                                .borrow()
+                                .get(&event.snapshot_name)
+                                .map(|p| p.is_favorite)
+                                .unwrap_or(false);
+
+                            // Convert snapshots to SnapshotInfo for filtering
+                            let snapshot_info: waypoint_common::SnapshotInfo = snapshot.into();
+                            let all_snapshots: Vec<waypoint_common::SnapshotInfo> =
+                                snapshots.iter().map(|s| s.into()).collect();
+
+                            // Queue snapshot for automatic backup
+                            match backup_manager_for_snapshots.borrow().queue_snapshot_backup(
+                                &snapshot_info,
+                                is_favorite,
+                                &all_snapshots,
+                            ) {
+                                Ok(queued_destinations) => {
+                                    if queued_destinations.is_empty() {
+                                        log::info!("No destinations needed backup for snapshot {}", event.snapshot_name);
+                                    } else {
+                                        log::info!(
+                                            "Queued snapshot {} for {} destination(s)",
+                                            event.snapshot_name,
+                                            queued_destinations.len()
+                                        );
+
+                                        // Check if any queued destinations are currently mounted
+                                        // and trigger immediate backup processing
+                                        for dest_uuid in queued_destinations {
+                                            if let Some(mount_point) = backup_manager_for_snapshots.borrow().get_mounted_destination(&dest_uuid) {
+                                                log::info!(
+                                                    "Destination {} is already mounted at {}, triggering immediate backup processing",
+                                                    dest_uuid,
+                                                    mount_point
+                                                );
+
+                                                // Get destination label and pending count for notifications
+                                                let (dest_label, pending_count) = {
+                                                    let bm = backup_manager_for_snapshots.borrow();
+                                                    let label = bm
+                                                        .get_config()
+                                                        .ok()
+                                                        .and_then(|c| c.destinations.get(&dest_uuid).map(|d| d.label.clone()))
+                                                        .unwrap_or_else(|| mount_point.clone());
+                                                    let count = bm.get_pending_count(&dest_uuid);
+                                                    (label, count)
+                                                };
+
+                                                // Send start notification
+                                                notifications::notify_backup_started(&app_for_snapshots, &dest_label, pending_count);
+
+                                                // Spawn background thread to process this destination's pending backups
+                                                let backup_manager_bg = backup_manager_for_snapshots.borrow().clone();
+                                                let dest_uuid_clone = dest_uuid.clone();
+                                                let mount_point_clone = mount_point.clone();
+
+                                                // Get snapshot directory from config
+                                                let snapshot_dir = waypoint_common::WaypointConfig::new()
+                                                    .snapshot_dir
+                                                    .to_string_lossy()
+                                                    .to_string();
+
+                                                std::thread::spawn(move || {
+                                                    log::info!("Background thread: Processing pending backups for destination {}", dest_uuid_clone);
+
+                                                    match backup_manager_bg.process_pending_backups(
+                                                        &dest_uuid_clone,
+                                                        &mount_point_clone,
+                                                        &snapshot_dir,
+                                                    ) {
+                                                        Ok((success, failed, errors)) => {
+                                                            log::info!(
+                                                                "Automatic backup processing completed: {} succeeded, {} failed",
+                                                                success,
+                                                                failed
+                                                            );
+                                                            if !errors.is_empty() {
+                                                                log::error!("Backup errors: {:?}", errors);
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            log::error!(
+                                                                "Failed to process automatic backups for destination {}: {}",
+                                                                dest_uuid_clone,
+                                                                e
+                                                            );
+                                                        }
+                                                    }
+                                                });
+                                            } else {
+                                                log::info!(
+                                                    "Destination {} is not currently mounted, backup will process when drive is connected",
+                                                    dest_uuid
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "Failed to queue automatic backup for {}: {}",
+                                        event.snapshot_name,
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            log::warn!(
+                                "Could not find snapshot {} in snapshot list for automatic backup queueing",
+                                event.snapshot_name
+                            );
+                        }
+                    } else {
+                        log::error!("Failed to load snapshots for automatic backup processing");
+                    }
                 }
 
                 // Sleep briefly to avoid busy waiting

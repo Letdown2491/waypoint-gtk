@@ -155,12 +155,23 @@ install_polkit_rules() {
         return
     fi
 
+    if [[ ! -f "system/polkit/51-waypoint-desktop.rules" ]]; then
+        echo "Polkit rules file missing: system/polkit/51-waypoint-desktop.rules"
+        return
+    fi
+
     echo "Installing Polkit authorization rules..."
     sudo install -D -m644 -o polkitd -g polkitd \
         system/polkit/50-waypoint-automated.rules \
         /etc/polkit-1/rules.d/50-waypoint-automated.rules
 
-    echo " ℹ Polkit rule allows automated scheduler to create snapshots"
+    sudo install -D -m644 -o polkitd -g polkitd \
+        system/polkit/51-waypoint-desktop.rules \
+        /etc/polkit-1/rules.d/51-waypoint-desktop.rules
+
+    echo " ℹ Polkit rules installed:"
+    echo "   - 50-waypoint-automated.rules (allows root to run scheduler)"
+    echo "   - 51-waypoint-desktop.rules (desktop-friendly permissions for wheel users)"
 }
 
 install_dbus_service() {
@@ -379,12 +390,12 @@ uninstall_polkit_policy() {
 }
 
 uninstall_polkit_rules() {
-    local rules_file="/etc/polkit-1/rules.d/50-waypoint-automated.rules"
+    local automated_rules="/etc/polkit-1/rules.d/50-waypoint-automated.rules"
+    local desktop_rules="/etc/polkit-1/rules.d/51-waypoint-desktop.rules"
 
     echo "Removing Polkit authorization rules..."
-    if [[ -f "$rules_file" ]]; then
-        sudo rm -f "$rules_file"
-    fi
+    [[ -f "$automated_rules" ]] && sudo rm -f "$automated_rules"
+    [[ -f "$desktop_rules" ]] && sudo rm -f "$desktop_rules"
 }
 
 uninstall_dbus_service() {

@@ -22,14 +22,14 @@ Waypoint integration is available on [Nebula](https://github.com/Letdown2491/neb
 ## Features
 
 - **System Snapshots & Rollback** - Create, restore, compare, and verify snapshots with rollback preview showing package changes and affected subvolumes
-- **Smart Backups** - Automatic backups with filters (All, Favorites, Critical), incremental support for Btrfs, and queue management for disconnected drives
+- **Smart Backups** - Passwordless automatic backups for admin users with filters (All, Favorites, Critical), incremental support for Btrfs, and queue management for disconnected drives
 - **Exclusion Patterns** - Reduce snapshot sizes by excluding caches, temporary files, and build artifacts with customizable patterns
-- **Flexible Scheduling** - Multiple concurrent schedules (hourly, daily, weekly, monthly) with timeline-based retention policies
+- **Flexible Scheduling** - Multiple concurrent schedules (hourly, daily, weekly, monthly) with timeline-based retention and automatic backup integration
 - **Package Tracking** - Automatic XBPS package state tracking with version comparison and visual diff viewer
 - **Analytics Dashboard** - Snapshot statistics, space usage trends, and actionable insights
 - **Quota Management** - Configure Btrfs quotas with automatic cleanup triggers and disk space warnings
 - **Modern Interface** - GTK4 + libadwaita UI with theme switching, real-time monitoring, and comprehensive CLI tools
-- **Security First** - Privilege-separated architecture with D-Bus, Polkit, audit logging, and input validation
+- **Security First** - Privilege-separated architecture with D-Bus, Polkit, desktop-friendly authentication, audit logging, and input validation
 
 [See full feature list](docs/FEATURES.md)
 
@@ -112,6 +112,7 @@ sudo ln -s /etc/sv/waypoint-scheduler /var/service/
 - **[User Guide](docs/USER_GUIDE.md)** - Complete walkthrough for new users
 - **[CLI Reference](docs/CLI.md)** - Full command-line documentation
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Recovery Guide](docs/RECOVERY.md)** - Boot failure recovery procedures
 - **[Features](docs/FEATURES.md)** - Comprehensive feature list
 - **[API Reference](docs/API.md)** - D-Bus integration for external tools
 - **[Architecture](docs/ARCHITECTURE.md)** - System design and components

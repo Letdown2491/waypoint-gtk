@@ -629,16 +629,8 @@ impl WaypointHelper {
     /// Get quota usage for the snapshot filesystem
     ///
     /// Returns JSON string with quota usage information
-    async fn get_quota_usage(
-        &self,
-        #[zbus(header)] hdr: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &Connection,
-    ) -> (bool, String) {
-        // Check authorization
-        if let Err(e) = check_authorization(&hdr, connection, POLKIT_ACTION_RESTORE).await {
-            return (false, format!("Authorization failed: {e}"));
-        }
-
+    /// This is a read-only operation and does not require authorization
+    async fn get_quota_usage(&self) -> (bool, String) {
         result_to_dbus_response(
             Self::get_quota_usage_impl(),
             "Failed to get quota usage"

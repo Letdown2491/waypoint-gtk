@@ -135,3 +135,13 @@
 - USER_GUIDE.md enhanced with exclusion patterns usage guide, backup filter configuration, backup triggers setup, pending backup management, failed backup handling, and backup deletion instructions.
 - CLI.md providing complete reference for waypoint-cli with all commands, options, examples, and usage patterns.
 - Automated security scanning in CI/CD with cargo-audit for dependency vulnerabilities, cargo-deny for license and supply chain validation, security-focused clippy lints, and weekly scheduled runs.
+- Multi-threaded scheduler architecture with one thread per enabled schedule allowing concurrent execution of hourly, daily, weekly, and monthly snapshots without blocking.
+- Mutex-based snapshot creation serialization preventing race conditions when multiple schedules trigger simultaneously.
+- Automatic backup integration for scheduler-created snapshots with D-Bus signal listener triggering backups when "backup on snapshot creation" is enabled.
+- Backup queue processing for scheduler snapshots automatically queueing and processing backups when destinations are mounted and available.
+- Desktop-friendly Polkit policy (51-waypoint-desktop.rules) for wheel group users providing passwordless snapshot creation and system configuration, cached snapshot deletion (~5 min), and always-ask restore operations.
+- Automated service Polkit policy (50-waypoint-automated.rules) enabling passwordless operations for root user and scheduler service.
+- Read-only D-Bus operations (list_snapshots, scan_backup_destinations, get_quota_usage, verify_snapshot) no longer require authentication improving UX and fixing quota preferences dialog permission prompt.
+- Root filesystem (/) enforcement in snapshot schedules with checkbox always enabled and greyed out ensuring complete system restore capability.
+- Safety validation in schedule editor automatically including root filesystem even if unchecked matching manual snapshot behavior.
+- Default schedule configurations including root filesystem by default for all schedule types (hourly, daily, weekly, monthly).

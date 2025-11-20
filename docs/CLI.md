@@ -613,8 +613,10 @@ All `waypoint-cli` commands use standard exit codes:
 Common errors and solutions:
 
 **"Failed to connect to D-Bus service"**
-- Ensure `waypoint-helper` service is running
-- Check D-Bus configuration: `sudo sv status dbus`
+- The `waypoint-helper` D-Bus service may have failed to activate
+- Check D-Bus is running: `sudo sv status dbus`
+- Try reloading D-Bus: `sudo sv reload dbus`
+- Verify D-Bus service file exists: `ls /usr/share/dbus-1/system-services/tech.geektoshi.waypoint.service`
 
 **"Not authorized to perform operation"**
 - User may not be in `wheel` group

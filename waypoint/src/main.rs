@@ -85,8 +85,8 @@ fn build_ui(app: &Application) {
     btrfs::init_cache();
 
     // Start D-Bus signal listener for snapshot creation and backup progress events
-    let backup_progress_rx = signal_listener::start_signal_listener(app.clone());
+    let (snapshot_created_rx, backup_progress_rx) = signal_listener::start_signal_listener(app.clone());
 
-    let window = ui::MainWindow::new(app, backup_progress_rx);
+    let window = ui::MainWindow::new(app, snapshot_created_rx, backup_progress_rx);
     window.present();
 }

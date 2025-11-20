@@ -212,7 +212,7 @@ Include:
 5. **Expected behavior**
 6. **Actual behavior**
 7. **Error messages** (full output)
-8. **Relevant logs**: Check `/var/log/waypoint-scheduler/current` or `sv status waypoint-helper`
+8. **Relevant logs**: Check `/var/log/waypoint-scheduler/current`
 
 Example:
 

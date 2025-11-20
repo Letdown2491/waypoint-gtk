@@ -36,10 +36,18 @@ pub enum WaypointEvent {
 /// This function spawns an async task that listens for D-Bus signals and
 /// sends desktop notifications when snapshots are created by the scheduler.
 ///
-/// Returns a channel receiver for backup progress events
-pub fn start_signal_listener(app: Application) -> std::sync::mpsc::Receiver<BackupProgressEvent> {
+/// Returns:
+/// - Receiver for SnapshotCreated events
+/// - Receiver for BackupProgress events
+pub fn start_signal_listener(
+    app: Application,
+) -> (
+    std::sync::mpsc::Receiver<SnapshotCreatedEvent>,
+    std::sync::mpsc::Receiver<BackupProgressEvent>,
+) {
     // Create channels for thread-safe communication
     let (event_sender, event_receiver) = std::sync::mpsc::channel();
+    let (snapshot_sender, snapshot_receiver) = std::sync::mpsc::channel();
     let (progress_sender, progress_receiver) = std::sync::mpsc::channel();
 
     // Spawn a separate thread for async D-Bus signal listening
@@ -55,6 +63,7 @@ pub fn start_signal_listener(app: Application) -> std::sync::mpsc::Receiver<Back
 
     // Set up receiver on main GTK thread
     let progress_sender_clone = progress_sender.clone();
+    let snapshot_sender_clone = snapshot_sender.clone();
     glib::spawn_future_local(async move {
         loop {
             if let Ok(event) = event_receiver.try_recv() {
@@ -65,6 +74,11 @@ pub fn start_signal_listener(app: Application) -> std::sync::mpsc::Receiver<Back
                         // Only send notification if created by scheduler
                         if evt.created_by == "scheduler" {
                             notifications::notify_scheduled_snapshot(&app, &evt.snapshot_name);
+                        }
+
+                        // Forward to snapshot channel for backup processing
+                        if let Err(e) = snapshot_sender_clone.send(evt) {
+                            log::error!("Failed to forward snapshot created event: {e}");
                         }
                     }
                     WaypointEvent::BackupProgress(evt) => {
@@ -83,7 +97,7 @@ pub fn start_signal_listener(app: Application) -> std::sync::mpsc::Receiver<Back
         }
     });
 
-    progress_receiver
+    (snapshot_receiver, progress_receiver)
 }
 
 /// Async function to listen for waypoint-helper signals

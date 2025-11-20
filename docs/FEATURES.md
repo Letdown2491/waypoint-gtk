@@ -27,6 +27,7 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Automatic backup destination discovery and mount monitoring
 - Per-destination backup filters (All, Favorites, LastN days, Critical snapshots)
 - Flexible backup triggers (on snapshot creation, on drive mount, manual)
+- Scheduled snapshot backups triggered automatically when backup destinations are available
 - Backup verification with file count and size comparison
 - Automatic integrity verification for restored snapshots
 - Pending backup queue with automatic retry when destinations become available
@@ -49,9 +50,11 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Multiple concurrent snapshot schedules (hourly, daily, weekly, monthly)
 - Per-schedule configuration with custom prefixes, descriptions, and subvolume selection
 - Schedule-specific retention policies
+- Root filesystem (/) always included in snapshots for complete system restore capability
 - Runit service integration with live status monitoring
 - Quick presets and live schedule preview
 - Desktop notifications for scheduled snapshot creation
+- Automatic backup integration for scheduled snapshots
 
 ## Retention & Cleanup
 
@@ -96,6 +99,8 @@ Complete feature list for Waypoint snapshot and rollback tool.
 ## Security & Performance
 
 - Privilege-separated architecture with D-Bus and Polkit integration
+- Desktop-friendly Polkit policy for passwordless snapshots and backups (wheel group users)
+- Automated service Polkit policy for passwordless scheduler operations (root)
 - Audit logging for security-critical operations
 - Rate limiting with mutex poisoning detection to prevent DoS attacks
 - TOCTOU mitigation via inode verification
