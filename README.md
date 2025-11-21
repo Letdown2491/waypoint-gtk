@@ -31,7 +31,7 @@ Waypoint integration is available on [Nebula](https://github.com/Letdown2491/neb
 - **Modern Interface** - GTK4 + libadwaita UI with theme switching, real-time monitoring, and comprehensive CLI tools
 - **Security First** - Privilege-separated architecture with D-Bus, Polkit, desktop-friendly authentication, audit logging, and input validation
 
-[See full feature list](docs/FEATURES.md)
+[See full feature list here](docs/FEATURES.md). **GRUB integration is planned** but not currently implemented since I use efistub on my Void machine. This should be implemented in the next major release.
 
 ## Integration
 
