@@ -20,10 +20,10 @@ Most write operations require one of four Polkit actions exposed in `data/tech.g
 | --- | --- | --- |
 | `tech.geektoshi.waypoint.create-snapshot` | Create/backup snapshot data | `CreateSnapshot`, `BackupSnapshot`, `ListBackups`, `DeleteBackup`, `ApplyBackupRetention` |
 | `tech.geektoshi.waypoint.delete-snapshot` | Delete snapshots | `DeleteSnapshot`, `CleanupSnapshots` |
-| `tech.geektoshi.waypoint.restore-snapshot` | Roll back or read snapshot contents | `RestoreSnapshot`, `RestoreFiles`, `CompareSnapshots`, `GetQuotaUsage`, `RestoreFromBackup` |
+| `tech.geektoshi.waypoint.restore-snapshot` | Roll back or read snapshot contents | `RestoreSnapshot`, `RestoreFiles`, `RestoreFromBackup` |
 | `tech.geektoshi.waypoint.configure-system` | Scheduler/quota/exclusion configuration | `SaveSchedulesConfig`, `RestartScheduler`, `EnableQuotas`, `DisableQuotas`, `SetQuotaLimit`, `SaveQuotaConfig`, `SaveExcludeConfig`, `UpdateSnapshotMetadata` |
 
-Read-only helpers such as `ListSnapshots`, `VerifySnapshot`, `GetSchedulerStatus`, and `ScanBackupDestinations` do not require authentication. For write calls, Polkit may display a password prompt depending on local policy. The helper identifies callers via `org.freedesktop.DBus.GetConnectionUnixProcessID` plus `/proc/$PID/stat` start times (see `check_authorization` in `waypoint-helper/src/main.rs`).
+Read-only helpers such as `ListSnapshots`, `VerifySnapshot`, `GetSchedulerStatus`, `ScanBackupDestinations`, `CompareSnapshots`, and `GetQuotaUsage` do not require authentication. For write calls, Polkit may display a password prompt depending on local policy. The helper identifies callers via `org.freedesktop.DBus.GetConnectionUnixProcessID` plus `/proc/$PID/stat` start times (see `check_authorization` in `waypoint-helper/src/main.rs`).
 
 ## Signals
 
@@ -92,7 +92,7 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
   Restores individual files or directories from a snapshot to their original paths (empty `target_directory`) or a custom directory. Requires `restore-snapshot`.
 
 - **CompareSnapshots** `(s old_snapshot, s new_snapshot) → (b, s json)`  
-  Runs `btrfs send --no-data` internally and returns a JSON list of changed files. Large comparisons may exceed the 25 s D-Bus timeout in zbus 4.x. Requires `restore-snapshot`.
+  Uses `find` to scan both snapshots and compares file metadata (size, mtime) to detect changes. Returns a JSON list of `FileChange` objects with change types (Added/Modified/Deleted). Large comparisons may take several seconds depending on snapshot size. No authentication required.
 
 ### Quotas
 
@@ -102,8 +102,8 @@ All method names here are camel-cased in code but appear Capitalized on the bus 
 - **DisableQuotas** `() → (b, s)`  
   Disables quotas entirely. Requires `configure-system`.
 
-- **GetQuotaUsage** `() → (b, s json)`  
-  Returns serialized `QuotaUsage` metrics. Requires `restore-snapshot`.
+- **GetQuotaUsage** `() → (b, s json)`
+  Returns serialized `QuotaUsage` metrics. No authentication required.
 
 - **SetQuotaLimit** `(t limit_bytes) → (b, s)`  
   Updates the total snapshot space limit. Requires `configure-system`.

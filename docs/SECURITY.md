@@ -30,9 +30,11 @@ The base policy (`tech.geektoshi.waypoint.policy`) defines four actions:
 
 **Read-only operations** (no authentication required):
 - List snapshots (`list_snapshots`)
+- Compare snapshots (`compare_snapshots`)
 - Scan backup destinations (`scan_backup_destinations`)
 - Get quota usage (`get_quota_usage`)
 - Verify snapshots (`verify_snapshot`)
+- Get scheduler status (`get_scheduler_status`)
 
 #### For Security-Sensitive Environments
 

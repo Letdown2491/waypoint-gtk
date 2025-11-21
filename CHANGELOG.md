@@ -145,3 +145,9 @@
 - Root filesystem (/) enforcement in snapshot schedules with checkbox always enabled and greyed out ensuring complete system restore capability.
 - Safety validation in schedule editor automatically including root filesystem even if unchecked matching manual snapshot behavior.
 - Default schedule configurations including root filesystem by default for all schedule types (hourly, daily, weekly, monthly).
+- File comparison rewritten to use `find` command with metadata comparison instead of `btrfs send/receive` for improved reliability and compatibility across btrfs-progs versions.
+- CompareSnapshots D-Bus method changed to read-only operation (no authentication required) improving UX and performance.
+- File comparison UI enhanced with directory-grouped view showing changes organized by top-level directory with smart multi-level detection for paths like /usr/lib and /home/user.
+- File comparison results sorted by change count (largest directories first) with expandable groups showing up to 5 files per directory and overflow count.
+- Comparison summary dialog now displays actual file change count instead of "Not available" with real-time background calculation.
+- GetQuotaUsage D-Bus method changed to read-only operation (no authentication required) consistent with other read-only operations.

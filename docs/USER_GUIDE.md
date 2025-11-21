@@ -509,16 +509,20 @@ Waypoint automatically tracks installed packages (XBPS) when creating snapshots.
 
 Compare two snapshots to see what changed:
 
-1. Click **"Compare"** button
-2. Select two snapshots from dropdowns
-3. View tabs:
-   - **Overview** - Summary of changes
-   - **Files** - File-level differences
-   - **Packages** - Package changes
-   - **System** - Kernel, subvolumes
+1. Click **"Compare"** button in main window
+2. Select **base snapshot** and **compare to** snapshot from dropdowns
+3. View **Summary** section showing:
+   - **Package Changes** - Count of added/removed/changed packages
+   - **File Changes** - Total number of modified files
+4. Click **"View Packages"** to see detailed package differences (added, removed, upgraded, downgraded)
+5. Click **"View Files"** to see file-level changes organized by directory:
+   - Changes grouped by top-level directory (e.g., /etc, /usr/lib, /home/user)
+   - Sorted by number of changes (largest first)
+   - Shows up to 5 files per directory with expandable groups
+   - Color-coded by change type (Added, Modified, Deleted)
 
 **Export comparison:**
-Click **"Export"** to save comparison report as text file.
+Click **"Export"** button in package or file view to save comparison report as text file.
 
 ### Analytics Dashboard
 

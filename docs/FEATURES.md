@@ -12,7 +12,7 @@ Complete feature list for Waypoint snapshot and rollback tool.
 - Safety checks for writable snapshot copies with automatic cleanup
 - Clear error messages for missing or invalid restore requirements
 - Individual file/directory restoration without full system rollback
-- Snapshot comparison with file-level diff visualization
+- Snapshot comparison with file-level diff visualization organized by directory, showing change counts and grouped file lists
 - Per-user snapshot notes and pinned favorites
 - Search and filter with real-time text search and date ranges
 - Browse snapshots in file manager via xdg-open
